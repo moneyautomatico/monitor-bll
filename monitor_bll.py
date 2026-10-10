@@ -125,7 +125,7 @@ def alarme(titulo, texto):
         return False
     try:
         r = requests.post(f"https://ntfy.sh/{topico}", data=texto[:3000].encode("utf-8"), timeout=20,
-                          headers={"Title": titulo.encode("utf-8"), "Priority": "5", "Tags": "rotating_light"})
+                          params={"title": titulo, "priority": "5", "tags": "rotating_light"})
         log(f"Alarme ntfy: HTTP {r.status_code}")
         return r.ok
     except requests.RequestException as e:
