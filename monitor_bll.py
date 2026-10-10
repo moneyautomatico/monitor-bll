@@ -106,7 +106,11 @@ def ligar(texto):
         r = requests.get("http://api.callmebot.com/start.php", timeout=90, params={
             "user": usuario, "text": texto[:250], "lang": CFG.get("CHAMADA_IDIOMA", "pt-BR-Standard-A"),
             "rpt": "2", "cc": "no"})
-        log(f"Ligação para {usuario}: HTTP {r.status_code} {r.text[:120].strip()}")
+        import re as _re
+        corpo = _re.sub(r"(?is)<(script|style|head).*?</\\1>", " ", r.text)
+        corpo = _re.sub(r"<[^>]+>", " ", corpo)
+        corpo = " ".join(html.unescape(corpo).split())
+        log(f"Ligação para {usuario}: HTTP {r.status_code} - {corpo[:300]}")
         return r.ok
     except requests.RequestException as e:
         log(f"Falha na ligação: {e}")
