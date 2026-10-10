@@ -445,12 +445,12 @@ JS_FECHAR_MODAL = """
 
 
 def abrir_menu_chat(page, carregar_tudo=True):
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(300)
-    if not page.evaluate(JS_ABRIR_CHAT):
-        return None
-    page.wait_for_timeout(700)
     info = page.evaluate(JS_ITENS_CHAT)
+    if not info:  # só clica no botão 💬 se o menu ainda não estiver aberto (clicar de novo o fecharia)
+        if not page.evaluate(JS_ABRIR_CHAT):
+            return None
+        page.wait_for_timeout(900)
+        info = page.evaluate(JS_ITENS_CHAT)
     tentativas = 0
     while carregar_tudo and info and info["mais"] and tentativas < 20:
         antes = len(info["itens"])
@@ -468,9 +468,15 @@ def ler_chat_item(page, rotulo):
     if not info or not any(i["rotulo"] == rotulo for i in info["itens"]):
         return None
     page.evaluate(JS_CLICAR_ITEM, rotulo)
-    try:
-        page.wait_for_selector(".modal table", state="visible", timeout=10000)
-    except PWTimeout:
+    aberta = False
+    for _ in range(24):  # espera até 12 s a janela de mensagens abrir
+        page.wait_for_timeout(500)
+        if page.evaluate("""() => [...document.querySelectorAll('.modal')].some(m =>
+              m.getClientRects().length > 0 && /mensage/i.test(m.innerText) && m.querySelector('table'))"""):
+            aberta = True
+            break
+    if not aberta:
+        log(f"Janela de mensagens de {rotulo} não abriu.")
         return None
     page.wait_for_timeout(1200)
     dados = page.evaluate(JS_LER_MODAL)
