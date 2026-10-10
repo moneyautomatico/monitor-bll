@@ -212,6 +212,31 @@ JS_CAPTCHA_VISIVEL = """
 """
 
 
+JS_FECHAR_AVISO = """
+() => {
+  const abertas = [...document.querySelectorAll('.modal')].filter(m => m.getClientRects().length > 0);
+  for (const m of abertas) {
+    if (/escolha de perfil/i.test(m.innerText)) continue;   // essa é tratada depois do login
+    const b = m.querySelector('#btnClose, .close, [data-dismiss="modal"], [data-bs-dismiss="modal"]')
+           || [...m.querySelectorAll('button')].find(x => /fechar|ok|entendi|continuar/i.test(x.innerText));
+    const texto = m.innerText.replace(/\\s+/g, ' ').trim().slice(0, 300);
+    if (b) { b.click(); return texto || '(aviso sem texto)'; }
+  }
+  return null;
+}
+"""
+
+
+def fechar_avisos(page):
+    """Fecha avisos (janelas com botão 'Fechar') que a BLL mostra na tela de login."""
+    for _ in range(6):
+        texto = page.evaluate(JS_FECHAR_AVISO)
+        if not texto:
+            return
+        log(f"Aviso da BLL fechado: {texto}")
+        page.wait_for_timeout(1200)
+
+
 def login_automatico(page):
     """Entra com e-mail e senha do config.env. Retorna 'ok', 'captcha' ou 'falhou'.
     Não tenta resolver captcha: se aparecer um desafio, desiste e avisa."""
@@ -223,6 +248,7 @@ def login_automatico(page):
         return "falhou"
     page.goto(f"{BASE}/Home/Login", wait_until="networkidle")
     page.wait_for_timeout(2500)  # dá tempo do reCAPTCHA invisível carregar
+    fechar_avisos(page)
     campo = page.locator("#Email")
     campo.click()
     campo.type(email, delay=random.randint(60, 140))
@@ -236,6 +262,7 @@ def login_automatico(page):
     if caixa.count() and not caixa.is_checked():
         caixa.check()
     page.wait_for_timeout(400)
+    fechar_avisos(page)
     page.get_by_role("button", name="Entrar").first.click()
     # o site valida o reCAPTCHA invisível e redireciona sozinho se der certo
     escolheu = False
