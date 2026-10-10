@@ -53,6 +53,8 @@ def carregar_config():
         "BLL_SENHA": "",
         "BLL_PERFIL": "OPERADOR MULTIFORNECE",
         "NAVEGADOR_VISIVEL": "0",
+        "CHAMADA_USUARIO": "",        # @seu_usuario do Telegram para receber LIGAÇÃO (CallMeBot)
+        "CHAMADA_IDIOMA": "pt-BR-Standard-A",
     }
     arq = PASTA / "config.env"
     if arq.exists():
@@ -92,6 +94,22 @@ def telegram(texto):
         return r.ok
     except requests.RequestException as e:
         log(f"Falha ao enviar Telegram: {e}")
+        return False
+
+
+def ligar(texto):
+    """Faz o Telegram TOCAR como ligação (serviço CallMeBot), falando o texto."""
+    usuario = CFG.get("CHAMADA_USUARIO", "").strip()
+    if not usuario:
+        return False
+    try:
+        r = requests.get("http://api.callmebot.com/start.php", timeout=90, params={
+            "user": usuario, "text": texto[:250], "lang": CFG.get("CHAMADA_IDIOMA", "pt-BR-Standard-A"),
+            "rpt": "2", "cc": "no"})
+        log(f"Ligação para {usuario}: HTTP {r.status_code} {r.text[:120].strip()}")
+        return r.ok
+    except requests.RequestException as e:
+        log(f"Falha na ligação: {e}")
         return False
 
 
@@ -614,6 +632,9 @@ def processar(db, page, primeira_vez, diag=False):
                           "texto": n.get("MENSAGEM", ""), "id": mid})
     db.commit()
 
+    if novas:  # uma ligação por ciclo, não uma por mensagem
+        procs_novos = sorted({m["processo"] for m in novas if m["processo"]})
+        ligar(f"Atenção. Nova mensagem na BLL. Processo {', '.join(procs_novos)}. Veja no Telegram.")
     for m in novas:
         e = html.escape
         txt = (f"🔔 <b>BLL – Processo {e(m['processo'])}</b>\n"
@@ -778,11 +799,14 @@ if __name__ == "__main__":
     ap.add_argument("--telegram", action="store_true")
     ap.add_argument("--teste", action="store_true")
     ap.add_argument("--diagnostico", action="store_true")
+    ap.add_argument("--ligar", action="store_true", help="testa a ligação pelo Telegram")
     a = ap.parse_args()
     if a.login:
         modo_login()
     elif a.telegram:
         descobrir_chat_id()
+    elif a.ligar:
+        print("OK" if ligar("Teste do monitor BLL. A ligação está funcionando.") else "Falhou - veja a mensagem acima.")
     elif a.diagnostico:
         rodar(uma_vez=True, visivel=True, diag=True)
     elif a.teste:
