@@ -1,0 +1,49 @@
+MONITOR BLL NA NUVEM (Oracle Cloud – gratuito) – tudo pelo navegador
+=====================================================================
+
+A) CRIAR A CONTA
+1. Acesse oracle.com/cloud/free e clique em "Start for free".
+2. Em "Home Region", escolha  Brazil East (São Paulo)  (não dá para trocar depois).
+3. Use cartão de crédito (ou débito com função crédito). Não há cobrança no plano Always Free.
+
+B) ABRIR O CLOUD SHELL (terminal dentro do site da Oracle)
+4. No painel da Oracle, clique no ícone  >_  no topo ("Cloud Shell").
+5. Cole este comando e tecle ENTER (cria a sua chave de acesso):
+     ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 && cat ~/.ssh/id_ed25519.pub
+6. Copie a linha inteira que começa com  ssh-ed25519 ...
+
+C) CRIAR O SERVIDOR
+7. Menu ☰ > Compute > Instances > Create instance.
+8. Image: clique em "Change image" > Ubuntu > Canonical Ubuntu 22.04.
+9. Shape: "Change shape" > Ampere > VM.Standard.A1.Flex, 1 OCPU e 6 GB de memória.
+   (Se der "Out of capacity", tente mais tarde, ou use VM.Standard.E2.1.Micro.)
+10. SSH keys: "Paste public keys" e cole a linha do passo 6.
+11. Clique em Create. Quando ficar verde (RUNNING), copie o "Public IP address".
+
+D) LIBERAR O PAINEL NA INTERNET
+12. Na página do servidor, clique na "Subnet" > "Security Lists" > "Default Security List"
+    > "Add Ingress Rules":  Source CIDR 0.0.0.0/0 · IP Protocol TCP · Destination Port 8080 > Add.
+
+E) INSTALAR O MONITOR
+13. No Cloud Shell, menu ⚙ (canto do terminal) > Upload > escolha MonitorBLL-Nuvem.zip.
+14. Cole (trocando IP pelo número do passo 11):
+      scp -o StrictHostKeyChecking=no MonitorBLL-Nuvem.zip ubuntu@IP:~ && ssh ubuntu@IP
+15. Já dentro do servidor, cole:
+      sudo apt-get install -y unzip && unzip -o MonitorBLL-Nuvem.zip && cd MonitorBLL-Nuvem && bash instalar_servidor.sh
+16. Responda às perguntas: token do bot, mandar "oi" ao bot, e-mail e senha da BLL,
+    e uma senha nova para o painel.
+
+PRONTO
+- Em alguns minutos chega no Telegram: "Monitor BLL ativo".
+- Painel: http://IP:8080  (usuário: bll + a senha que você criou). Funciona no celular.
+- O servidor fica ligado 24h; você pode fechar tudo.
+
+COMANDOS ÚTEIS (no servidor: Cloud Shell > ssh ubuntu@IP)
+  Ver o que está acontecendo:  sudo journalctl -u monitor-bll -f    (sair: Ctrl+C)
+  Reiniciar o monitor:         sudo systemctl restart monitor-bll
+  Trocar configurações:        nano ~/MonitorBLL-Nuvem/config.env  (depois reinicie)
+  Diagnóstico (se algo não for lido certo):
+     cd ~/MonitorBLL-Nuvem && sudo systemctl stop monitor-bll && xvfb-run -a venv/bin/python monitor_bll.py --diagnostico ; sudo systemctl start monitor-bll
+
+Segurança: config.env guarda sua senha da BLL e o token do Telegram. Fica só no servidor,
+com acesso restrito. O painel usa senha, mas sem https: não use a mesma senha da BLL nele.
