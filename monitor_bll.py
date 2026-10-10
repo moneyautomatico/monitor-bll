@@ -663,7 +663,7 @@ def dentro_do_horario():
 
 def rodar(uma_vez=False, visivel=False, diag=False):
     db = abrir_banco()
-    intervalo = max(5, int(CFG["INTERVALO_MINUTOS"]))
+    intervalo = max(1.0, float(CFG["INTERVALO_MINUTOS"].replace(",", ".")))  # mínimo 1 minuto
     avisou_logout = False
     falhas_login = 0
     gerar_painel(db, "Iniciando")
@@ -706,8 +706,9 @@ def rodar(uma_vez=False, visivel=False, diag=False):
                 gerar_painel(db, "Fora do horário de monitoramento")
             if uma_vez:
                 break
-            espera = intervalo * 60 + random.randint(-45, 45)
-            log(f"Próxima verificação em {espera // 60} min.")
+            base = intervalo * 60
+            espera = int(base + random.uniform(-0.15, 0.15) * base)  # variação de ±15% para não parecer robô
+            log(f"Próxima verificação em {espera} s.")
             time.sleep(espera)
         ctx.close()
 
