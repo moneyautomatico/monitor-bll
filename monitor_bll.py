@@ -107,7 +107,7 @@ def ligar(texto):
             "user": usuario, "text": texto[:250], "lang": CFG.get("CHAMADA_IDIOMA", "pt-BR-Standard-A"),
             "rpt": "2", "cc": "no"})
         import re as _re
-        corpo = _re.sub(r"(?is)<(script|style|head).*?</\\1>", " ", r.text)
+        corpo = _re.sub(r"(?is)<(script|style|head).*?</\1>", " ", r.text)
         corpo = _re.sub(r"<[^>]+>", " ", corpo)
         corpo = " ".join(html.unescape(corpo).split())
         log(f"Ligação para {usuario}: HTTP {r.status_code} - {corpo[:300]}")
