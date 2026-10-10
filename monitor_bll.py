@@ -197,8 +197,9 @@ JS_ESCOLHER_PERFIL = """
       (m.getClientRects().length > 0) && /escolha de perfil/i.test(m.innerText));
   if (!modal) return false;
   const alvo = perfil.toUpperCase();
-  const linha = [...modal.querySelectorAll('tbody tr, tr')].find(tr =>
-      tr.querySelector('td') && tr.innerText.toUpperCase().includes(alvo));
+  // pega a linha mais interna (a janela pode ter tabelas dentro de tabelas)
+  const linha = [...modal.querySelectorAll('tr')].find(tr =>
+      !tr.querySelector('tr') && tr.querySelector('td') && tr.innerText.toUpperCase().includes(alvo));
   const botao = linha && linha.querySelector('button, a, input[type=button]');
   if (!botao) return false;
   botao.click(); return true;
@@ -293,9 +294,31 @@ def salvar_diag(page, nome):
     log(f"Diagnóstico salvo: {nome}")
 
 
+def trocar_perfil(page):
+    """Abre 'Perfis' (como no menu do usuário) e escolhe o perfil configurado."""
+    perfil = CFG.get("BLL_PERFIL", "OPERADOR")
+    page.goto(URL_INICIO, wait_until="networkidle")
+    page.wait_for_timeout(1000)
+    if not page.evaluate("() => typeof showProfiles === 'function' && (showProfiles(), true)"):
+        log("Não achei a opção 'Perfis' para trocar de perfil.")
+        return False
+    for _ in range(10):
+        page.wait_for_timeout(800)
+        if page.evaluate(JS_ESCOLHER_PERFIL, perfil):
+            page.wait_for_timeout(5000)
+            log(f"Perfil trocado para {perfil}. URL: {page.url}")
+            return True
+    log("A janela de perfis não apareceu.")
+    return False
+
+
 def ler_processos(page, diag=False):
     """Lista em Processos > Propostas, com o link da Disputa de cada um."""
     page.goto(URL_PROPOSTAS, wait_until="networkidle")
+    if "errorview" in page.url.lower():  # perfil errado (ex.: Representante Legal)
+        log("BLL recusou a página de processos para este perfil; trocando de perfil...")
+        if trocar_perfil(page):
+            page.goto(URL_PROPOSTAS, wait_until="networkidle")
     if not logado(page):
         return None
     page.wait_for_timeout(1500)
