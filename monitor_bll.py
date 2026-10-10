@@ -124,8 +124,8 @@ def abrir_banco():
     db.execute("""CREATE TABLE IF NOT EXISTS contadores(
         processo TEXT, escopo TEXT, qtd INTEGER, PRIMARY KEY(processo, escopo))""")
     db.execute("""CREATE TABLE IF NOT EXISTS processos(
-        processo TEXT PRIMARY KEY, promotor TEXT, situacao TEXT, disputa TEXT,
-        atualizada TEXT, url TEXT, visto_em TEXT)""")
+        processo TEXT, promotor TEXT, situacao TEXT, disputa TEXT,
+        atualizada TEXT, url TEXT, visto_em TEXT, PRIMARY KEY(processo, promotor))""")
     db.execute("""CREATE TABLE IF NOT EXISTS estado(chave TEXT PRIMARY KEY, valor TEXT)""")
     return db
 
@@ -314,6 +314,29 @@ def trocar_perfil(page):
     return False
 
 
+JS_LINHAS_PROCESSOS = """
+() => {
+  const out = [];
+  for (const t of document.querySelectorAll('table')) {
+    const cabRow = [...t.querySelectorAll('thead tr')].pop();
+    if (!cabRow) continue;
+    const cab = [...cabRow.children].map(x => x.innerText.trim().toUpperCase());
+    if (!cab.includes('PROCESSO') || !cab.includes('SITUAÇÃO')) continue;
+    for (const tr of t.querySelectorAll('tbody tr')) {
+      if (tr.querySelector('input:not([type=button]), select')) continue;   // linha de filtro
+      const link = [...tr.querySelectorAll('a[href]')].find(a => a.href.includes('BatchList'));
+      if (!link) continue;                                                  // só processos de verdade
+      const tds = [...tr.children];
+      const cel = {};
+      cab.forEach((nome, i) => { if (nome && tds[i]) cel[nome] = tds[i].innerText.trim(); });
+      out.push({cel, url: link.href});
+    }
+  }
+  return out;
+}
+"""
+
+
 def ler_processos(page, diag=False):
     """Lista em Processos > Propostas, com o link da Disputa de cada um."""
     page.goto(URL_PROPOSTAS, wait_until="networkidle")
@@ -331,27 +354,24 @@ def ler_processos(page, diag=False):
     if diag:
         salvar_diag(page, "01_propostas")
     procs = []
-    for t in page.evaluate(JS_TABELAS):
-        cab = [c.upper() for c in t["cab"]]
-        if "PROCESSO" not in cab or "SITUAÇÃO" not in cab:
+    vistos = set()
+    for r in page.evaluate(JS_LINHAS_PROCESSOS):
+        cel = r["cel"]
+        proc = cel.get("PROCESSO", "").strip()
+        if not proc or not r["url"]:
             continue
-        for l in t["linhas"]:
-            cel = dict(zip(cab, l["cel"])) if len(l["cel"]) == len(cab) else None
-            if cel is None:  # há colunas de botões sem título; alinha pela direita do texto
-                textos = [c for c in l["cel"]]
-                cel = {}
-                for i, nome in enumerate(cab):
-                    if nome and i < len(textos):
-                        cel[nome] = textos[i]
-            disputa = next((a["href"] for a in l["links"] if "BatchList" in a["href"]), None)
-            procs.append({
-                "processo": cel.get("PROCESSO", ""),
-                "promotor": cel.get("PROMOTOR", ""),
-                "situacao": cel.get("SITUAÇÃO", ""),
-                "disputa": cel.get("DISPUTA", ""),
-                "atualizada": cel.get("ATUALIZADA EM", ""),
-                "url": disputa,
-            })
+        chave = (proc, cel.get("PROMOTOR", "").strip())
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        procs.append({
+            "processo": proc,
+            "promotor": chave[1],
+            "situacao": cel.get("SITUAÇÃO", "").strip(),
+            "disputa": cel.get("DISPUTA", "").strip(),
+            "atualizada": cel.get("ATUALIZADA EM", "").strip(),
+            "url": r["url"],
+        })
     return procs
 
 
@@ -519,8 +539,11 @@ def processar(db, page, primeira_vez, diag=False):
     novas = []
 
     for p in procs:
-        antiga = db.execute("SELECT situacao FROM processos WHERE processo=?", (p["processo"],)).fetchone()
-        if antiga and antiga[0] != p["situacao"] and not primeira_vez:
+        antiga = db.execute("SELECT situacao FROM processos WHERE processo=? AND promotor=?",
+                            (p["processo"], p["promotor"])).fetchone()
+        valida = lambda x: bool(x) and not any(ch.isdigit() for ch in x)   # nome de fase, sem números
+        if (antiga and antiga[0] != p["situacao"] and valida(antiga[0]) and valida(p["situacao"])
+                and not primeira_vez):
             novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": "Mudança de situação",
                           "horario": p["atualizada"], "autor": "BLL",
                           "texto": f"{antiga[0]} → {p['situacao']}", "id": None})
@@ -548,8 +571,9 @@ def processar(db, page, primeira_vez, diag=False):
             continue
         for item in info["itens"]:
             rot, qtd = item["rotulo"], item["qtd"]
+            chave = f'{p["processo"]}|{p["promotor"]}'
             ant = db.execute("SELECT qtd FROM contadores WHERE processo=? AND escopo=?",
-                             (p["processo"], rot)).fetchone()
+                             (chave, rot)).fetchone()
             # abre o lote se o contador mudou, se nunca foi lido, ou no 1º lote com msgs (traz os eventos do processo)
             if ant is not None and ant[0] == qtd and not primeira_vez:
                 continue
@@ -563,7 +587,7 @@ def processar(db, page, primeira_vez, diag=False):
                 (DIAG / f"03_modal_{p['processo'].replace('/', '-')}_{rot}.json").write_text(
                     json.dumps(dados, ensure_ascii=False, indent=1), encoding="utf-8")
             for m in extrair_mensagens(dados, rot):
-                mid = hash_msg(p["processo"], m["escopo"], m["horario"], m["autor"], m["texto"])
+                mid = hash_msg(p["processo"], p["promotor"], m["escopo"], m["horario"], m["autor"], m["texto"])
                 if db.execute("SELECT 1 FROM mensagens WHERE id=?", (mid,)).fetchone():
                     continue
                 db.execute("INSERT INTO mensagens VALUES(?,?,?,?,?,?,?,?,?)",
@@ -571,7 +595,7 @@ def processar(db, page, primeira_vez, diag=False):
                             m["autor"], m["texto"], agora, 0 if not primeira_vez else 1))
                 if not primeira_vez:
                     novas.append({**m, "processo": p["processo"], "promotor": p["promotor"], "id": mid})
-            db.execute("INSERT OR REPLACE INTO contadores VALUES(?,?,?)", (p["processo"], rot, qtd))
+            db.execute("INSERT OR REPLACE INTO contadores VALUES(?,?,?)", (chave, rot, qtd))
             db.commit()
             time.sleep(random.uniform(1.0, 2.5))  # ritmo humano
 
