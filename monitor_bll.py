@@ -194,7 +194,7 @@ JS_DIGITO = """
 JS_ESCOLHER_PERFIL = """
 (perfil) => {
   const modal = [...document.querySelectorAll('.modal')].find(m =>
-      (m.getClientRects().length > 0) && /escolha de perfil/i.test(m.innerText));
+      (m.getClientRects().length > 0) && /perfi/i.test(m.innerText));
   if (!modal) return false;
   const alvo = perfil.toUpperCase();
   // pega a linha mais interna (a janela pode ter tabelas dentro de tabelas)
@@ -308,7 +308,9 @@ def trocar_perfil(page):
             page.wait_for_timeout(5000)
             log(f"Perfil trocado para {perfil}. URL: {page.url}")
             return True
-    log("A janela de perfis não apareceu.")
+    abertas = page.evaluate("""() => [...document.querySelectorAll('.modal')]
+        .filter(m => m.getClientRects().length > 0).map(m => m.innerText.replace(/\\s+/g,' ').slice(0,200)).join(' | ')""")
+    log(f"A janela de perfis não apareceu. Janelas na tela: {abertas or 'nenhuma'}")
     return False
 
 
@@ -317,8 +319,12 @@ def ler_processos(page, diag=False):
     page.goto(URL_PROPOSTAS, wait_until="networkidle")
     if "errorview" in page.url.lower():  # perfil errado (ex.: Representante Legal)
         log("BLL recusou a página de processos para este perfil; trocando de perfil...")
-        if trocar_perfil(page):
-            page.goto(URL_PROPOSTAS, wait_until="networkidle")
+        if not trocar_perfil(page):
+            # plano B: sai da sessão e entra de novo, escolhendo o perfil certo no login
+            log("Refazendo o login para escolher o perfil certo...")
+            page.context.clear_cookies()
+            log(f"Login automático: {login_automatico(page)}")
+        page.goto(URL_PROPOSTAS, wait_until="networkidle")
     if not logado(page):
         return None
     page.wait_for_timeout(1500)
