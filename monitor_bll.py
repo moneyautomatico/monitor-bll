@@ -146,7 +146,7 @@ def hash_msg(*partes):
 JS_TABELAS = """
 (raiz) => {
   const r = raiz || document;
-  return [...r.querySelectorAll('table')].filter(t => t.offsetParent !== null).map(t => {
+  return [...r.querySelectorAll('table')].filter(t => (t.getClientRects().length > 0)).map(t => {
     const cab = [...t.querySelectorAll('thead th, tr:first-child th')].map(x => x.innerText.trim());
     const linhas = [...t.querySelectorAll('tbody tr')].map(tr => {
       const tds = [...tr.querySelectorAll('td')];
@@ -160,13 +160,28 @@ JS_TABELAS = """
 """
 
 
+JS_LOGADO = """
+() => {
+  if (document.querySelector('#Email')) return false;           // tela de login
+  const h = document.body ? document.body.innerHTML : '';
+  return /Desconectar|logout|LogOff/i.test(h);                   // menu do usuário logado
+}
+"""
+
+
 def logado(page):
-    return "login" not in page.url.lower()
+    u = page.url.lower()
+    if "login" in u or "dataresult" in u:
+        return False
+    try:
+        return bool(page.evaluate(JS_LOGADO))
+    except Exception:
+        return False
 
 
 JS_DIGITO = """
 (d) => {
-  const bs = [...document.querySelectorAll('button, input[type=button], a.btn')].filter(b => b.offsetParent !== null);
+  const bs = [...document.querySelectorAll('button, input[type=button], a.btn')].filter(b => (b.getClientRects().length > 0));
   const b = bs.find(x => {
     const t = (x.innerText || x.value || '').trim();
     return /^\\d\\s*ou\\s*\\d$/i.test(t) && t.replace(/\\D/g, '').includes(d);
@@ -179,7 +194,7 @@ JS_DIGITO = """
 JS_ESCOLHER_PERFIL = """
 (perfil) => {
   const modal = [...document.querySelectorAll('.modal')].find(m =>
-      m.offsetParent !== null && /escolha de perfil/i.test(m.innerText));
+      (m.getClientRects().length > 0) && /escolha de perfil/i.test(m.innerText));
   if (!modal) return false;
   const alvo = perfil.toUpperCase();
   const linha = [...modal.querySelectorAll('tbody tr, tr')].find(tr =>
@@ -192,7 +207,7 @@ JS_ESCOLHER_PERFIL = """
 
 JS_CAPTCHA_VISIVEL = """
 () => [...document.querySelectorAll('iframe')].some(f =>
-   /recaptcha\\/.*bframe|hcaptcha/i.test(f.src || '') && f.offsetParent !== null &&
+   /recaptcha\\/.*bframe|hcaptcha/i.test(f.src || '') && (f.getClientRects().length > 0) &&
    f.getBoundingClientRect().height > 100)
 """
 
@@ -235,8 +250,10 @@ def login_automatico(page):
             escolheu = True
             log("Perfil escolhido.")
     if "login" in page.url.lower():
-        erro = page.locator("#errorContentModal").inner_text(timeout=1000) if page.locator("#errorContentModal").count() else ""
-        log(f"Login não concluído. {erro.strip()[:200]}")
+        erro = page.evaluate("""() => [...document.querySelectorAll('.modal')]
+              .filter(m => m.getClientRects().length > 0).map(m => m.innerText).join(' | ')""")
+        log(f"Login não concluído. Janela na tela: {erro.strip()[:300]}")
+        salvar_diag(page, "login_falhou")
         return "falhou"
     page.goto(URL_INICIO, wait_until="networkidle")
     return "ok" if logado(page) else "falhou"
@@ -302,7 +319,7 @@ def ler_notificacoes(page):
 JS_ABRIR_CHAT = """
 () => {
   const cands = [...document.querySelectorAll('button, a')].filter(b =>
-      b.offsetParent !== null && b.querySelector('[class*="comment"]') &&
+      (b.getClientRects().length > 0) && b.querySelector('[class*="comment"]') &&
       (b.className.includes('dropdown-toggle') || b.getAttribute('data-toggle') === 'dropdown'));
   if (!cands.length) return false;
   cands[0].click();
@@ -312,7 +329,7 @@ JS_ABRIR_CHAT = """
 
 JS_ITENS_CHAT = """
 () => {
-  const menu = [...document.querySelectorAll('.dropdown-menu')].find(m => m.offsetParent !== null);
+  const menu = [...document.querySelectorAll('.dropdown-menu')].find(m => (m.getClientRects().length > 0));
   if (!menu) return null;
   const itens = [];
   menu.querySelectorAll('button, a').forEach((b, i) => {
@@ -328,7 +345,7 @@ JS_ITENS_CHAT = """
 
 JS_CLICAR_MAIS = """
 () => {
-  const menu = [...document.querySelectorAll('.dropdown-menu')].find(m => m.offsetParent !== null);
+  const menu = [...document.querySelectorAll('.dropdown-menu')].find(m => (m.getClientRects().length > 0));
   const b = menu && [...menu.querySelectorAll('button, a')].find(x => /carregar mais/i.test(x.innerText));
   if (b) { b.click(); return true; } return false;
 }
@@ -336,7 +353,7 @@ JS_CLICAR_MAIS = """
 
 JS_CLICAR_ITEM = """
 (rotulo) => {
-  const menu = [...document.querySelectorAll('.dropdown-menu')].find(m => m.offsetParent !== null);
+  const menu = [...document.querySelectorAll('.dropdown-menu')].find(m => (m.getClientRects().length > 0));
   if (!menu) return false;
   for (const b of menu.querySelectorAll('button, a')) {
     if (!b.querySelector('[class*="comment"]')) continue;
@@ -350,7 +367,7 @@ JS_CLICAR_ITEM = """
 
 JS_LER_MODAL = """
 () => {
-  const modal = [...document.querySelectorAll('.modal')].find(m => m.offsetParent !== null || m.classList.contains('in') || m.classList.contains('show'));
+  const modal = [...document.querySelectorAll('.modal')].find(m => (m.getClientRects().length > 0) || m.classList.contains('in') || m.classList.contains('show'));
   if (!modal) return null;
   const titulo = (modal.querySelector('.modal-title, .modal-header') || {}).innerText || '';
   const tabelas = [...modal.querySelectorAll('table')].map(t => {
@@ -364,7 +381,7 @@ JS_LER_MODAL = """
 
 JS_FECHAR_MODAL = """
 () => {
-  const modal = [...document.querySelectorAll('.modal')].find(m => m.offsetParent !== null);
+  const modal = [...document.querySelectorAll('.modal')].find(m => (m.getClientRects().length > 0));
   const x = modal && modal.querySelector('.close, [data-dismiss="modal"], [data-bs-dismiss="modal"]');
   if (x) { x.click(); return true; } return false;
 }
@@ -450,6 +467,9 @@ def processar(db, page, primeira_vez, diag=False):
                     p["atualizada"], p["url"], agora))
     db.commit()
 
+    if not procs:
+        log(f"Lista de processos vazia. URL: {page.url} | título: {page.title()}")
+        salvar_diag(page, "lista_vazia")
     ativos = [p for p in procs if p["situacao"].upper() not in ignorar and p["url"]]
     log(f"{len(procs)} processos na lista, {len(ativos)} em andamento.")
 
