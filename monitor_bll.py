@@ -55,6 +55,7 @@ def carregar_config():
         "NAVEGADOR_VISIVEL": "0",
         "CHAMADA_USUARIO": "",        # @seu_usuario do Telegram para receber LIGAÇÃO (CallMeBot)
         "CHAMADA_IDIOMA": "pt-BR-Standard-A",
+        "NTFY_TOPICO": "",            # alarme no celular pelo app ntfy (prioridade máxima)
     }
     arq = PASTA / "config.env"
     if arq.exists():
@@ -114,6 +115,21 @@ def ligar(texto):
         return r.ok
     except requests.RequestException as e:
         log(f"Falha na ligação: {e}")
+        return False
+
+
+def alarme(titulo, texto):
+    """Notificação de prioridade máxima no app ntfy (toca alto e pode repetir até você ver)."""
+    topico = CFG.get("NTFY_TOPICO", "").strip()
+    if not topico:
+        return False
+    try:
+        r = requests.post(f"https://ntfy.sh/{topico}", data=texto[:3000].encode("utf-8"), timeout=20,
+                          headers={"Title": titulo.encode("utf-8"), "Priority": "5", "Tags": "rotating_light"})
+        log(f"Alarme ntfy: HTTP {r.status_code}")
+        return r.ok
+    except requests.RequestException as e:
+        log(f"Falha no alarme ntfy: {e}")
         return False
 
 
@@ -639,6 +655,8 @@ def processar(db, page, primeira_vez, diag=False):
     if novas:  # uma ligação por ciclo, não uma por mensagem
         procs_novos = sorted({m["processo"] for m in novas if m["processo"]})
         ligar(f"Atenção. Nova mensagem na BLL. Processo {', '.join(procs_novos)}. Veja no Telegram.")
+        resumo = "\n\n".join(f"{m['processo']} · {m['escopo']} · {m['autor']}\n{m['texto'][:300]}" for m in novas[:5])
+        alarme(f"BLL: {len(novas)} nova(s) – {', '.join(procs_novos)}", resumo)
     for m in novas:
         e = html.escape
         txt = (f"🔔 <b>BLL – Processo {e(m['processo'])}</b>\n"
@@ -804,13 +822,16 @@ if __name__ == "__main__":
     ap.add_argument("--teste", action="store_true")
     ap.add_argument("--diagnostico", action="store_true")
     ap.add_argument("--ligar", action="store_true", help="testa a ligação pelo Telegram")
+    ap.add_argument("--alarme", action="store_true", help="testa o alarme do app ntfy")
     a = ap.parse_args()
     if a.login:
         modo_login()
     elif a.telegram:
         descobrir_chat_id()
     elif a.ligar:
-        print("OK" if ligar("Teste do monitor BLL. A ligação está funcionando.") else "Falhou - veja a mensagem acima.")
+        print("OK" if ligar("Teste do monitor BLL. A ligação está funcionando.") else "Ligação não configurada/falhou.")
+    elif a.alarme:
+        print("OK" if alarme("Teste BLL", "Alarme do monitor BLL funcionando.") else "Falhou - veja a mensagem acima.")
     elif a.diagnostico:
         rodar(uma_vez=True, visivel=True, diag=True)
     elif a.teste:
