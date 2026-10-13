@@ -746,6 +746,11 @@ def processar(db, page, primeira_vez, diag=False):
 # ----------------------------------------------------------------- painel
 def gerar_painel(db, status):
     e = html.escape
+    try:  # o painel web central lê estes dados
+        estado(db, "status", status)
+        estado(db, "ultima_verificacao", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+    except Exception:
+        pass
     procs = db.execute("SELECT processo, promotor, situacao, disputa, atualizada FROM processos "
                        "ORDER BY processo DESC").fetchall()
     msgs = db.execute("SELECT processo, escopo, horario, autor, texto, visto_em FROM mensagens "
@@ -868,6 +873,7 @@ def rodar(uma_vez=False, visivel=False, diag=False):
         time.sleep(random.uniform(0, 20))  # espalha as empresas para não verificarem todas juntas
     while True:
       with VagaNavegador(), sync_playwright() as pw:
+        inicio_ciclo = time.time()
         ctx = contexto(pw, visivel)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         if True:
@@ -905,6 +911,7 @@ def rodar(uma_vez=False, visivel=False, diag=False):
             else:
                 gerar_painel(db, "Fora do horário de monitoramento")
         ctx.close()
+        estado(db, "duracao_ciclo", str(int(time.time() - inicio_ciclo)))
       if uma_vez:
           break
       base = intervalo * 60
