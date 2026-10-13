@@ -1211,15 +1211,16 @@ def rodar(uma_vez=False, visivel=False, diag=False):
                             r = fn_processar(db, page, primeira, diag)
                         elif res == "captcha":
                             falhas_login = 99  # não insiste com captcha
-                            telegram("🧩 <b>Monitor BLL</b>: a BLL pediu captcha no login. "
+                            telegram(f"🧩 <b>Monitor {plataforma_nome()}</b>: a {plataforma_nome()} pediu captcha no login. "
                                      "Faça o login manualmente para o monitor voltar a funcionar.")
                         else:
                             falhas_login += 1
                     if r == "deslogado":
-                        log("Sessão da BLL expirou.")
+                        log(f"Sessão da {plataforma_nome()} expirou ou não foi possível entrar.")
                         if not avisou_logout:
-                            telegram("⚠️ <b>Monitor BLL</b>: a sessão expirou e o login automático não funcionou. "
-                                     "Confira e-mail/senha da empresa no servidor (empresas/<id>.env).")
+                            telegram(f"⚠️ <b>Monitor {plataforma_nome()}</b>: não consegui entrar na plataforma "
+                                     "(sessão expirada e login automático sem sucesso). "
+                                     "Confira usuário e senha da empresa no painel (aba Empresas).")
                             avisou_logout = True
                         gerar_painel(db, "⚠️ Sessão expirada – faça login de novo")
                     else:
