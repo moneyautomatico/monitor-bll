@@ -918,11 +918,32 @@ def login_licitanet(page):
     return "ok"
 
 
+JS_LN_ESTADO_HOME = """
+() => {
+  if (document.querySelector('input[type=password]')) return 'login';
+  const t = document.body ? document.body.innerText : '';
+  const tabela = [...document.querySelectorAll('table')].some(tb => /PROCESSO/i.test(tb.innerText) && /STATUS/i.test(tb.innerText));
+  if (tabela || /Acompanhe e participe dos processos/i.test(t)) return 'ok';
+  if (/sess[aã]o expirada|fa[cç]a login|n[aã]o autenticado|unauthorized/i.test(t)) return 'login';
+  return 'carregando';
+}
+"""
+
+
 def ln_ler_processos(page, diag=False):
     page.goto(CFG.get("_LN_HOME") or f"{LN_PORTAL}/home-avulso", wait_until="networkidle")
-    page.wait_for_timeout(2500)
-    if not ln_logado(page):
-        return None
+    est = "carregando"
+    for _ in range(15):
+        page.wait_for_timeout(1000)
+        if not ln_logado(page):
+            return None
+        est = page.evaluate(JS_LN_ESTADO_HOME)
+        if est != "carregando":
+            break
+    if est != "ok":
+        log(f"Licitanet: lista de processos não apareceu ({est}). URL: {page.url} | título: {page.title()}")
+        salvar_diag(page, "ln_sem_lista")
+        return None  # trata como sessão caída: faz login de novo
     if diag:
         salvar_diag(page, "ln_01_processos")
     linhas = page.evaluate(JS_LN_PROCESSOS)
@@ -1033,6 +1054,9 @@ def processar_licitanet(db, page, primeira_vez, diag=False):
         db.execute("INSERT OR REPLACE INTO processos VALUES(?,?,?,?,?,?,?)",
                    (p["processo"], p["promotor"], p["situacao"], p["disputa"], p["atualizada"], p["url"], agora))
     db.commit()
+    if primeira_vez and not procs:
+        log("Licitanet: nenhum processo lido ainda; aguardando para registrar o histórico.")
+        return "ok"
     return notificar(db, novas, primeira_vez, len(ativos), agora)
 
 
