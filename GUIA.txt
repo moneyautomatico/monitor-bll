@@ -59,5 +59,7 @@ VÁRIAS EMPRESAS (no Web console, dentro de ~/monitor-bll)
   Destinos: 1) Telegram geral  2) Telegram próprio da empresa  3) os dois.
   Painel: http://IP:8080 lista as empresas; clique para ver cada uma.
   Memória: cada verificação abre o navegador só durante a leitura; no máximo
-  MAX_NAVEGADORES (config.env, padrão 3) ao mesmo tempo. Um servidor de 4 GB
-  aguenta dezenas de empresas com intervalo de 2 minutos; se muitas, aumente o intervalo.
+  MAX_NAVEGADORES (config.env, padrão 3) ao mesmo tempo. Com 3 vagas e intervalo de
+  2 min, cabem ~6 empresas no ritmo certo; com mais, cada uma é verificada um pouco
+  mais espaçada. Para crescer: aumente MAX_NAVEGADORES (≈ 1 por GB de RAM livre)
+  ou contrate um plano com mais memória.
