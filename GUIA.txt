@@ -47,3 +47,17 @@ COMANDOS ÚTEIS (no servidor: Cloud Shell > ssh ubuntu@IP)
 
 Segurança: config.env guarda sua senha da BLL e o token do Telegram. Fica só no servidor,
 com acesso restrito. O painel usa senha, mas sem https: não use a mesma senha da BLL nele.
+
+VÁRIAS EMPRESAS (no Web console, dentro de ~/monitor-bll)
+  1ª vez (converte a empresa atual):   bash empresas.sh migrar
+  Cadastrar empresa:                   bash empresas.sh adicionar
+  Ver empresas:                        bash empresas.sh listar
+  Mudar destino dos alertas:           bash empresas.sh destino <id>
+  Trocar e-mail/senha da BLL:          bash empresas.sh senha <id>
+  Ver o que está acontecendo:          bash empresas.sh log <id>
+  Remover:                             bash empresas.sh remover <id>
+  Destinos: 1) Telegram geral  2) Telegram próprio da empresa  3) os dois.
+  Painel: http://IP:8080 lista as empresas; clique para ver cada uma.
+  Memória: cada verificação abre o navegador só durante a leitura; no máximo
+  MAX_NAVEGADORES (config.env, padrão 3) ao mesmo tempo. Um servidor de 4 GB
+  aguenta dezenas de empresas com intervalo de 2 minutos; se muitas, aumente o intervalo.

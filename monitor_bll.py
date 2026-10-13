@@ -41,7 +41,16 @@ DIAG = PASTA / "diagnostico"
 
 
 # ----------------------------------------------------------------- configuração
-def carregar_config():
+def _ler_env(arq, cfg):
+    if arq.exists():
+        for linha in arq.read_text(encoding="utf-8").splitlines():
+            linha = linha.strip()
+            if linha and not linha.startswith("#") and "=" in linha:
+                k, v = linha.split("=", 1)
+                cfg[k.strip()] = v.strip().strip('"').strip("'")
+
+
+def carregar_config(empresa=None):
     cfg = {
         "TELEGRAM_TOKEN": "",
         "TELEGRAM_CHAT_ID": "",
@@ -56,14 +65,23 @@ def carregar_config():
         "CHAMADA_USUARIO": "",        # @seu_usuario do Telegram para receber LIGAÇÃO (CallMeBot)
         "CHAMADA_IDIOMA": "pt-BR-Standard-A",
         "NTFY_TOPICO": "",            # alarme no celular pelo app ntfy (prioridade máxima)
+        # ---- várias empresas (arquivo empresas/<id>.env sobrepõe o config.env)
+        "EMPRESA_ID": "",
+        "EMPRESA_NOME": "",
+        "ENVIAR_PARA": "geral",       # geral | proprio | ambos
+        "EMPRESA_TELEGRAM_TOKEN": "",
+        "EMPRESA_TELEGRAM_CHAT_ID": "",
+        "EMPRESA_NTFY_TOPICO": "",
+        "MAX_NAVEGADORES": "3",       # quantas empresas podem usar o navegador ao mesmo tempo
     }
-    arq = PASTA / "config.env"
-    if arq.exists():
-        for linha in arq.read_text(encoding="utf-8").splitlines():
-            linha = linha.strip()
-            if linha and not linha.startswith("#") and "=" in linha:
-                k, v = linha.split("=", 1)
-                cfg[k.strip()] = v.strip().strip('"').strip("'")
+    _ler_env(PASTA / "config.env", cfg)
+    if empresa:
+        arq = PASTA / "empresas" / f"{empresa}.env"
+        if not arq.exists():
+            raise SystemExit(f"Empresa '{empresa}' não encontrada em {arq}")
+        _ler_env(arq, cfg)
+        cfg["EMPRESA_ID"] = empresa
+        cfg["EMPRESA_NOME"] = cfg["EMPRESA_NOME"] or empresa
     for k in cfg:
         if os.environ.get(k):
             cfg[k] = os.environ[k]
@@ -73,16 +91,55 @@ def carregar_config():
 CFG = carregar_config()
 
 
+def usar_empresa(empresa):
+    """Aponta configuração e arquivos (banco, login, painel) para a pasta da empresa."""
+    global CFG, PERFIL, BANCO, PAINEL, DIAG
+    CFG = carregar_config(empresa)
+    dados = PASTA / "empresas" / empresa
+    dados.mkdir(parents=True, exist_ok=True)
+    PERFIL, BANCO, PAINEL, DIAG = (dados / "perfil_navegador", dados / "bll_monitor.db",
+                                   dados / "painel.html", dados / "diagnostico")
+
+
+def nome_empresa():
+    n = CFG.get("EMPRESA_NOME", "")
+    return f"🏢 <b>{html.escape(n)}</b>\n" if n else ""
+
+
 def log(msg):
     print(f"[{datetime.now():%d/%m %H:%M:%S}] {msg}", flush=True)
 
 
 # ----------------------------------------------------------------- telegram
+def destinos_telegram():
+    geral = (CFG["TELEGRAM_TOKEN"], CFG["TELEGRAM_CHAT_ID"])
+    proprio = (CFG.get("EMPRESA_TELEGRAM_TOKEN") or CFG["TELEGRAM_TOKEN"], CFG.get("EMPRESA_TELEGRAM_CHAT_ID", ""))
+    modo = (CFG.get("ENVIAR_PARA") or "geral").lower() if CFG.get("EMPRESA_ID") else "geral"
+    lista = []
+    if modo in ("geral", "ambos"):
+        lista.append(geral)
+    if modo in ("proprio", "próprio", "ambos"):
+        lista.append(proprio)
+    vistos, out = set(), []
+    for t, c in lista:
+        if t and c and (t, c) not in vistos:
+            vistos.add((t, c)); out.append((t, c))
+    return out
+
+
 def telegram(texto):
-    tok, chat = CFG["TELEGRAM_TOKEN"], CFG["TELEGRAM_CHAT_ID"]
-    if not tok or not chat:
+    texto = nome_empresa() + texto
+    destinos = destinos_telegram()
+    if not destinos:
         log("Telegram não configurado; alerta só no painel.")
         return False
+    ok = False
+    for tok, chat in destinos:
+        ok = _telegram_um(tok, chat, texto) or ok
+    return ok
+
+
+def _telegram_um(tok, chat, texto):
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{tok}/sendMessage",
@@ -120,17 +177,25 @@ def ligar(texto):
 
 def alarme(titulo, texto):
     """Notificação de prioridade máxima no app ntfy (toca alto e pode repetir até você ver)."""
-    topico = CFG.get("NTFY_TOPICO", "").strip()
-    if not topico:
-        return False
-    try:
-        r = requests.post(f"https://ntfy.sh/{topico}", data=texto[:3000].encode("utf-8"), timeout=20,
-                          params={"title": titulo, "priority": "5", "tags": "rotating_light"})
-        log(f"Alarme ntfy: HTTP {r.status_code}")
-        return r.ok
-    except requests.RequestException as e:
-        log(f"Falha no alarme ntfy: {e}")
-        return False
+    modo = (CFG.get("ENVIAR_PARA") or "geral").lower() if CFG.get("EMPRESA_ID") else "geral"
+    topicos = []
+    if modo in ("geral", "ambos"):
+        topicos.append(CFG.get("NTFY_TOPICO", "").strip())
+    if modo in ("proprio", "próprio", "ambos"):
+        topicos.append(CFG.get("EMPRESA_NTFY_TOPICO", "").strip())
+    topicos = [t for i, t in enumerate(topicos) if t and t not in topicos[:i]]
+    if CFG.get("EMPRESA_NOME"):
+        titulo = f"{CFG['EMPRESA_NOME']} – {titulo}"
+    ok = False
+    for topico in topicos:
+        try:
+            r = requests.post(f"https://ntfy.sh/{topico}", data=texto[:3000].encode("utf-8"), timeout=20,
+                              params={"title": titulo, "priority": "5", "tags": "rotating_light"})
+            log(f"Alarme ntfy ({topico}): HTTP {r.status_code}")
+            ok = r.ok or ok
+        except requests.RequestException as e:
+            log(f"Falha no alarme ntfy: {e}")
+    return ok
 
 
 def descobrir_chat_id():
@@ -654,7 +719,7 @@ def processar(db, page, primeira_vez, diag=False):
 
     if novas:  # uma ligação por ciclo, não uma por mensagem
         procs_novos = sorted({m["processo"] for m in novas if m["processo"]})
-        ligar(f"Atenção. Nova mensagem na BLL. Processo {', '.join(procs_novos)}. Veja no Telegram.")
+        ligar(f"Atenção. {CFG.get('EMPRESA_NOME','')}. Nova mensagem na BLL. Processo {', '.join(procs_novos)}. Veja no Telegram.")
         resumo = "\n\n".join(f"{m['processo']} · {m['escopo']} · {m['autor']}\n{m['texto'][:300]}" for m in novas[:5])
         alarme(f"BLL: {len(novas)} nova(s) – {', '.join(procs_novos)}", resumo)
     for m in novas:
@@ -706,7 +771,7 @@ def gerar_painel(db, status):
     opcoes = "".join(f'<option>{e(p[0])}</option>' for p in procs)
     PAINEL.write_text(f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
 <meta http-equiv="refresh" content="60"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Painel BLL</title><style>
+<title>Painel BLL {e(CFG.get("EMPRESA_NOME",""))}</title><style>
 :root{{--bg:#f4f6f4;--card:#fff;--txt:#1d2a22;--sub:#5d6b62;--verde:#1f5c3f;--nova:#fff6d6;--borda:#dde3de}}
 @media (prefers-color-scheme:dark){{:root{{--bg:#121714;--card:#1b221e;--txt:#e7ece9;--sub:#9aa8a0;--verde:#5fb88a;--nova:#3a3418;--borda:#2b342f}}}}
 body{{margin:0;font-family:system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--txt)}}
@@ -722,7 +787,7 @@ table{{width:100%;border-collapse:collapse;background:var(--card);border-radius:
 th{{background:var(--verde);color:#fff;text-align:left;padding:8px}}td{{padding:8px;border-top:1px solid var(--borda);vertical-align:top}}
 tr.nova td{{background:var(--nova)}}.txt{{white-space:pre-wrap}}
 @media (max-width:700px){{td:nth-child(2),th:nth-child(2){{display:none}}}}
-</style></head><body><header><h1>Painel de alertas – BLL Compras</h1>
+</style></head><body><header><h1>Painel de alertas – BLL Compras{(" – " + e(CFG.get("EMPRESA_NOME",""))) if CFG.get("EMPRESA_NOME") else ""}</h1>
 <div class="st">{e(status)} · atualizado em {datetime.now():%d/%m/%Y %H:%M:%S} · esta página se recarrega a cada minuto</div></header>
 <main><div class="cards">{cards or "<p>Nenhum processo lido ainda.</p>"}</div>
 <div class="filtros"><select id="fp"><option value="">Todos os processos</option>{opcoes}</select>
@@ -763,16 +828,49 @@ def dentro_do_horario():
     return int(CFG["HORARIO_INICIO"]) <= h < int(CFG["HORARIO_FIM"])
 
 
+class VagaNavegador:
+    """Limita quantas empresas abrem o navegador ao mesmo tempo (economiza memória do servidor)."""
+    def __init__(self):
+        import fcntl
+        self.fcntl, self.f = fcntl, None
+        self.max = max(1, int(CFG.get("MAX_NAVEGADORES", "3") or 3))
+        (PASTA / "locks").mkdir(exist_ok=True)
+
+    def __enter__(self):
+        avisou = False
+        while True:
+            for i in range(self.max):
+                f = open(PASTA / "locks" / f"vaga{i}.lock", "w")
+                try:
+                    self.fcntl.flock(f, self.fcntl.LOCK_EX | self.fcntl.LOCK_NB)
+                    self.f = f
+                    return self
+                except OSError:
+                    f.close()
+            if not avisou:
+                log("Aguardando vaga de navegador (outras empresas verificando)...")
+                avisou = True
+            time.sleep(3)
+
+    def __exit__(self, *a):
+        if self.f:
+            self.fcntl.flock(self.f, self.fcntl.LOCK_UN)
+            self.f.close()
+
+
 def rodar(uma_vez=False, visivel=False, diag=False):
     db = abrir_banco()
     intervalo = max(1.0, float(CFG["INTERVALO_MINUTOS"].replace(",", ".")))  # mínimo 1 minuto
     avisou_logout = False
     falhas_login = 0
     gerar_painel(db, "Iniciando")
-    with sync_playwright() as pw:
+    if CFG.get("EMPRESA_ID"):
+        time.sleep(random.uniform(0, 20))  # espalha as empresas para não verificarem todas juntas
+    while True:
+      with VagaNavegador(), sync_playwright() as pw:
         ctx = contexto(pw, visivel)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        while True:
+        if True:
             if dentro_do_horario():
                 try:
                     primeira = estado(db, "inicializado") is None
@@ -794,7 +892,7 @@ def rodar(uma_vez=False, visivel=False, diag=False):
                         log("Sessão da BLL expirou.")
                         if not avisou_logout:
                             telegram("⚠️ <b>Monitor BLL</b>: a sessão expirou e o login automático não funcionou. "
-                                     "Confira e-mail/senha no config.env do servidor ou me peça ajuda.")
+                                     "Confira e-mail/senha da empresa no servidor (empresas/<id>.env).")
                             avisou_logout = True
                         gerar_painel(db, "⚠️ Sessão expirada – faça login de novo")
                     else:
@@ -806,13 +904,13 @@ def rodar(uma_vez=False, visivel=False, diag=False):
                     gerar_painel(db, f"Erro no último ciclo: {e}")
             else:
                 gerar_painel(db, "Fora do horário de monitoramento")
-            if uma_vez:
-                break
-            base = intervalo * 60
-            espera = int(base + random.uniform(-0.15, 0.15) * base)  # variação de ±15% para não parecer robô
-            log(f"Próxima verificação em {espera} s.")
-            time.sleep(espera)
         ctx.close()
+      if uma_vez:
+          break
+      base = intervalo * 60
+      espera = int(base + random.uniform(-0.15, 0.15) * base)  # variação de ±15% para não parecer robô
+      log(f"Próxima verificação em {espera} s.")
+      time.sleep(espera)
 
 
 if __name__ == "__main__":
@@ -823,7 +921,10 @@ if __name__ == "__main__":
     ap.add_argument("--diagnostico", action="store_true")
     ap.add_argument("--ligar", action="store_true", help="testa a ligação pelo Telegram")
     ap.add_argument("--alarme", action="store_true", help="testa o alarme do app ntfy")
+    ap.add_argument("--empresa", help="id da empresa (arquivo empresas/<id>.env)")
     a = ap.parse_args()
+    if a.empresa:
+        usar_empresa(a.empresa)
     if a.login:
         modo_login()
     elif a.telegram:
@@ -831,6 +932,7 @@ if __name__ == "__main__":
     elif a.ligar:
         print("OK" if ligar("Teste do monitor BLL. A ligação está funcionando.") else "Ligação não configurada/falhou.")
     elif a.alarme:
+        telegram("🔔 Teste de alerta do monitor BLL.")
         print("OK" if alarme("Teste BLL", "Alarme do monitor BLL funcionando.") else "Falhou - veja a mensagem acima.")
     elif a.diagnostico:
         rodar(uma_vez=True, visivel=True, diag=True)
