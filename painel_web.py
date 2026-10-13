@@ -142,6 +142,7 @@ def empresas():
         eid = arq.stem
         cfg = ler_env(arq)
         d = {"id": eid, "nome": cfg.get("EMPRESA_NOME", eid), "cfg": cfg, "ativo": ativo(eid),
+             "plat": {"licitanet": "Licitanet"}.get(cfg.get("PLATAFORMA", "bll").lower(), "BLL"),
              "status": "Aguardando primeira verificação", "ultima": "", "duracao": 0,
              "procs": [], "andamento": 0, "msgs": 0, "novas_hoje": 0}
         db = EMPRESAS / eid / "bll_monitor.db"
@@ -182,7 +183,7 @@ def mensagens(filtro_emp="", busca="", limite=300):
                              "ORDER BY rowid DESC LIMIT ?", (limite,)):
             if busca and busca.lower() not in " ".join(str(x) for x in r).lower():
                 continue
-            out.append({"emp": emp["nome"], "eid": emp["id"], "processo": r[0], "promotor": r[1], "escopo": r[2],
+            out.append({"emp": f'{emp["nome"]} · {emp["plat"]}', "eid": emp["id"], "processo": r[0], "promotor": r[1], "escopo": r[2],
                         "horario": r[3], "autor": r[4], "texto": r[5], "visto": r[6], "nova": r[6] != prim})
         con.close()
     out.sort(key=lambda m: (para_data(m["visto"]), para_data(m["horario"])), reverse=True)
@@ -290,7 +291,7 @@ O histórico e o login atuais são mantidos.</p>
     cards = ""
     for x in emps:
         cls, txt = tag_status(x)
-        cards += f"""<div class="card {cls}"><div class="nome">{e(x['nome'])}</div>
+        cards += f"""<div class="card {cls}"><div class="nome">{e(x['nome'])} <span class="tag parado">{e(x['plat'])}</span></div>
 <div style="margin:6px 0"><span class="tag {cls}">{e(txt)}</span></div>
 <div class="sub">{x['andamento']} processo(s) em andamento · {x['novas_hoje']} nova(s) hoje</div>
 <div class="sub">Última verificação: {e(x['ultima'] or '—')}{f" · ciclo {x['duracao']} s" if x['duracao'] else ""}</div>
@@ -369,7 +370,7 @@ def pg_empresas(aviso="", erro=False):
         cls, txt = tag_status(x)
         pausar = (botao(f"/empresas/{x['id']}/pausar", "Pausar", "sec") if x["ativo"]
                   else botao(f"/empresas/{x['id']}/retomar", "Retomar"))
-        linhas += f"""<tr><td><b>{e(x['nome'])}</b><div class="sub">{e(x['cfg'].get('BLL_EMAIL', ''))}</div></td>
+        linhas += f"""<tr><td><b>{e(x['nome'])}</b> <span class="tag parado">{e(x['plat'])}</span><div class="sub">{e(x['cfg'].get('BLL_EMAIL', ''))}</div></td>
 <td><span class="tag {cls}">{e(txt)}</span></td><td class="ocultar">{e(x['cfg'].get('ENVIAR_PARA', 'geral'))}</td>
 <td><div class="acoes" style="margin:0"><a class="btn sec" href="/empresas/{e(x['id'])}">Editar</a>{pausar}
 {botao(f"/empresas/{x['id']}/testar", "Testar alerta", "sec")}<a class="btn sec" href="/empresas/{e(x['id'])}/log">Log</a></div></td></tr>"""
@@ -383,6 +384,7 @@ def form_empresa(eid=None):
     cfg = ler_env(EMPRESAS / f"{eid}.env") if eid else {}
     g = lambda k, d="": e(cfg.get(k, d))  # noqa: E731
     modo = cfg.get("ENVIAR_PARA", "geral")
+    plat = cfg.get("PLATAFORMA", "bll").lower()
     sel = lambda v: "selected" if modo == v else ""  # noqa: E731
     acao = f"/empresas/{eid}" if eid else "/empresas/nova"
     remover = (f'<h3>Zona de perigo</h3>' +
@@ -391,11 +393,18 @@ def form_empresa(eid=None):
     corpo = f"""<h2>{"Editar empresa" if eid else "Cadastrar empresa"}</h2><div class="form">
 <form method="post" action="{acao}"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Nome da empresa <small>(aparece nos alertas)</small></label><input class="campo" name="nome" value="{g('EMPRESA_NOME')}" required>
-<label>E-mail de login da BLL</label><input class="campo" type="email" name="email" value="{g('BLL_EMAIL')}" required>
-<label>Senha da BLL <small>{"(deixe em branco para manter)" if eid else "(6 números)"}</small></label>
-<input class="campo" type="password" name="senha" inputmode="numeric" pattern="[0-9]{{6}}" {"" if eid else "required"} autocomplete="new-password">
-<label>Perfil a escolher após o login <small>(parte do nome, ex.: OPERADOR EMPRESA X)</small></label>
-<input class="campo" name="perfil" value="{g('BLL_PERFIL', 'OPERADOR')}">
+<label>Plataforma</label><select class="campo" name="plataforma" id="plat" onchange="trocaPlat()">
+<option value="bll" {"selected" if plat == "bll" else ""}>BLL Compras</option>
+<option value="licitanet" {"selected" if plat == "licitanet" else ""}>Licitanet</option></select>
+<label>Usuário / e-mail de login</label><input class="campo" name="email" value="{g('BLL_EMAIL')}" required>
+<label>Senha <small>{"(deixe em branco para manter)" if eid else ""}<span class="so-bll"> BLL: 6 números</span></small></label>
+<input class="campo" type="password" name="senha" {"" if eid else "required"} autocomplete="new-password">
+<div class="so-bll"><label>Perfil a escolher após o login <small>(parte do nome, ex.: OPERADOR EMPRESA X)</small></label>
+<input class="campo" name="perfil" value="{g('BLL_PERFIL', 'OPERADOR')}"></div>
+<div class="so-ln"><label>CNPJ da empresa <small>(o mesmo login pode ter várias empresas; escolhemos esta)</small></label>
+<input class="campo" name="cnpj" value="{g('EMPRESA_CNPJ')}" placeholder="00.000.000/0000-00">
+<label>Tipo de funcionário <small>(opcional; vazio = primeira opção, ex.: Representante Legal)</small></label>
+<input class="campo" name="funcao" value="{g('LICITANET_FUNCAO')}"></div>
 <h3>Alertas</h3>
 <label>Para onde vão os alertas</label><select class="campo" name="enviar_para">
 <option value="geral" {sel('geral')}>Telegram geral (o mesmo de todas)</option>
@@ -407,7 +416,10 @@ def form_empresa(eid=None):
 <input class="campo" type="password" name="tg_token" autocomplete="off">
 <label>Tópico ntfy próprio <small>(opcional, alarme no celular)</small></label>
 <input class="campo" name="ntfy" value="{g('EMPRESA_NTFY_TOPICO')}">
-<div class="acoes"><button>Salvar</button><a class="btn sec" href="/empresas">Cancelar</a></div></form>{remover}</div>"""
+<div class="acoes"><button>Salvar</button><a class="btn sec" href="/empresas">Cancelar</a></div></form>{remover}</div>
+<script>function trocaPlat(){{const ln=document.getElementById('plat').value==='licitanet';
+document.querySelectorAll('.so-bll').forEach(x=>x.style.display=ln?'none':'');
+document.querySelectorAll('.so-ln').forEach(x=>x.style.display=ln?'':'none');}}trocaPlat();</script>"""
     return pagina("Empresa", corpo, "/empresas")
 
 
@@ -454,8 +466,13 @@ def salvar_empresa(f, eid=None):
             eid = f"{gerar_id(nome)[:27]}-{n}"
             n += 1
     senha = f.get("senha", "").strip()
-    if senha and not re.fullmatch(r"\d{6}", senha):
+    plat = f.get("plataforma", "bll")
+    if plat not in ("bll", "licitanet"):
+        plat = "bll"
+    if plat == "bll" and senha and not re.fullmatch(r"\d{6}", senha):
         return "A senha da BLL deve ter 6 números."
+    if plat == "licitanet" and not re.sub(r"\D", "", f.get("cnpj", "")):
+        return "Informe o CNPJ da empresa na Licitanet."
     if novo and not senha:
         return "Informe a senha da BLL."
     modo = f.get("enviar_para", "geral")
@@ -467,13 +484,15 @@ def salvar_empresa(f, eid=None):
     antigo = ler_env(arq)
     v = {"EMPRESA_NOME": nome, "BLL_EMAIL": f.get("email", "").strip(),
          "BLL_PERFIL": f.get("perfil", "").strip() or "OPERADOR", "ENVIAR_PARA": modo,
-         "EMPRESA_TELEGRAM_CHAT_ID": f.get("tg_chat", "").strip(), "EMPRESA_NTFY_TOPICO": f.get("ntfy", "").strip()}
+         "EMPRESA_TELEGRAM_CHAT_ID": f.get("tg_chat", "").strip(), "EMPRESA_NTFY_TOPICO": f.get("ntfy", "").strip(),
+         "PLATAFORMA": plat, "EMPRESA_CNPJ": f.get("cnpj", "").strip(), "LICITANET_FUNCAO": f.get("funcao", "").strip()}
     if senha:
         v["BLL_SENHA"] = senha
     if f.get("tg_token", "").strip():
         v["EMPRESA_TELEGRAM_TOKEN"] = f["tg_token"].strip()
     gravar_env(arq, v)
-    login_mudou = senha or antigo.get("BLL_EMAIL") != v["BLL_EMAIL"] or antigo.get("BLL_PERFIL") != v["BLL_PERFIL"]
+    login_mudou = (senha or antigo.get("BLL_EMAIL") != v["BLL_EMAIL"] or antigo.get("BLL_PERFIL") != v["BLL_PERFIL"]
+                   or antigo.get("PLATAFORMA", "bll") != plat or antigo.get("EMPRESA_CNPJ", "") != v["EMPRESA_CNPJ"])
     if login_mudou and not novo:
         shutil.rmtree(EMPRESAS / eid / "perfil_navegador", ignore_errors=True)
     garantir_servico()

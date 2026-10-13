@@ -21,6 +21,7 @@ import html
 import json
 import os
 import random
+import re
 import sqlite3
 import sys
 import time
@@ -73,6 +74,10 @@ def carregar_config(empresa=None):
         "EMPRESA_TELEGRAM_CHAT_ID": "",
         "EMPRESA_NTFY_TOPICO": "",
         "MAX_NAVEGADORES": "3",       # quantas empresas podem usar o navegador ao mesmo tempo
+        "PLATAFORMA": "bll",          # bll | licitanet
+        "EMPRESA_CNPJ": "",           # Licitanet: empresa a escolher após o login
+        "LICITANET_FUNCAO": "",       # Licitanet: tipo de funcionário (vazio = primeira opção)
+        "LICITANET_MAX_LOTES": "80",
     }
     _ler_env(PASTA / "config.env", cfg)
     if empresa:
@@ -717,30 +722,318 @@ def processar(db, page, primeira_vez, diag=False):
                           "texto": n.get("MENSAGEM", ""), "id": mid})
     db.commit()
 
+    return notificar(db, novas, primeira_vez, len(ativos), agora)
+
+
+def plataforma_nome():
+    return {"licitanet": "Licitanet"}.get(CFG.get("PLATAFORMA", "bll").lower(), "BLL")
+
+
+def notificar(db, novas, primeira_vez, n_ativos, agora):
+    """Envia os alertas das mensagens novas (Telegram, ntfy, ligação) e o aviso de início."""
+    plat = plataforma_nome()
+    e = html.escape
     if novas:  # uma ligação por ciclo, não uma por mensagem
         procs_novos = sorted({m["processo"] for m in novas if m["processo"]})
-        ligar(f"Atenção. {CFG.get('EMPRESA_NOME','')}. Nova mensagem na BLL. Processo {', '.join(procs_novos)}. Veja no Telegram.")
+        ligar(f"Atenção. {CFG.get('EMPRESA_NOME','')}. Nova mensagem na {plat}. "
+              f"Processo {', '.join(procs_novos)}. Veja no Telegram.")
         resumo = "\n\n".join(f"{m['processo']} · {m['escopo']} · {m['autor']}\n{m['texto'][:300]}" for m in novas[:5])
-        alarme(f"BLL: {len(novas)} nova(s) – {', '.join(procs_novos)}", resumo)
+        alarme(f"{plat}: {len(novas)} nova(s) – {', '.join(procs_novos)}", resumo)
     for m in novas:
-        e = html.escape
-        txt = (f"🔔 <b>BLL – Processo {e(m['processo'])}</b>\n"
+        txt = (f"🔔 <b>{plat} – Processo {e(m['processo'])}</b>\n"
                f"{e(m['promotor'])}\n"
                f"📌 {e(m['escopo'])} · {e(m['autor'])} · {e(m['horario'])}\n\n"
                f"{e(m['texto'])}")
-        if telegram(txt) and m["id"]:
+        if telegram(txt) and m.get("id"):
             db.execute("UPDATE mensagens SET alertado=1 WHERE id=?", (m["id"],))
         time.sleep(0.5)
     db.commit()
-
     if primeira_vez:
         total = db.execute("SELECT COUNT(*) FROM mensagens").fetchone()[0]
-        telegram(f"✅ <b>Monitor BLL ativo</b>\n{len(ativos)} processo(s) em andamento vigiados, "
+        telegram(f"✅ <b>Monitor {plat} ativo</b>\n{n_ativos} processo(s) em andamento vigiados, "
                  f"{total} mensagens já existentes registradas.\n"
                  f"A partir de agora você recebe aqui só as novas.")
         estado(db, "inicializado", agora)
     log(f"{len(novas)} mensagem(ns) nova(s).")
     return "ok"
+
+
+# ================================================================= LICITANET
+LN_LOGIN = "https://licita-sso.licitanet.com.br/login"
+LN_PORTAL = "https://portal.licitanet.com.br"
+
+JS_LN_PROCESSOS = """
+() => {
+  const out = [];
+  for (const t of document.querySelectorAll('table')) {
+    const cab = [...(t.querySelector('thead tr') || t.querySelector('tr') || {children: []}).children]
+                  .map(x => x.innerText.trim().toUpperCase());
+    if (!cab.includes('PROCESSO') || !cab.includes('STATUS')) continue;
+    t.querySelectorAll('tbody tr').forEach((tr, idx) => {
+      const tds = [...tr.children];
+      if (tds.length < 3) return;
+      const cel = {};
+      cab.forEach((n, i) => { if (n && tds[i]) cel[n] = tds[i].innerText.replace(/\\s+/g, ' ').trim(); });
+      const a = [...tr.querySelectorAll('a[href]')].find(x => /sala-disputa\\/\\d+/.test(x.href));
+      out.push({cel, url: a ? a.href : '', idx});
+    });
+  }
+  return out;
+}
+"""
+
+JS_LN_ABRIR_ACOES = """
+(idx) => {
+  const linhas = [...document.querySelectorAll('table tbody tr')].filter(tr => tr.children.length >= 3);
+  const tr = linhas[idx]; if (!tr) return false;
+  const b = [...tr.querySelectorAll('button, a, i, span')].filter(x => x.getClientRects().length > 0).pop();
+  if (!b) return false; b.click(); return true;
+}
+"""
+
+JS_LN_LINK_SALA = """
+() => {
+  const a = [...document.querySelectorAll('a, button, li')].find(x =>
+      x.getClientRects().length > 0 && /sala de disputa/i.test(x.innerText || ''));
+  if (!a) return null;
+  if (a.href && /sala-disputa/.test(a.href)) return {href: a.href};
+  a.click(); return {clicado: true};
+}
+"""
+
+JS_LN_LOTES = """
+() => [...document.querySelectorAll('input[name="item_lote"]')].map(r => ({
+  valor: r.value,
+  rotulo: ((r.closest('label') || r.parentElement).innerText || ('Lote ' + r.value)).trim()
+}))
+"""
+
+JS_LN_CLICAR_LOTE = """
+(v) => {
+  const r = [...document.querySelectorAll('input[name="item_lote"]')].find(x => x.value === v);
+  if (!r) return false;
+  (r.closest('label') || r).click();
+  return true;
+}
+"""
+
+JS_LN_MENSAGENS = """
+() => [...document.querySelectorAll('.chat-list .chat-content, [id^="notificationMensagem"]')]
+  .filter((el, i, arr) => arr.indexOf(el) === i)
+  .map(el => {
+    const cab = (el.querySelector('h5, h6, .text-muted') || {innerText: ''}).innerText.trim();
+    const msg = (el.querySelector('.message') || el).innerText.replace(/\\s+\\n/g, '\\n').trim();
+    const id = (el.id || '').replace('notificationMensagem', '');
+    return {id, cab, msg};
+  })
+  .filter(m => m.msg)
+"""
+
+JS_LN_TITULO_CHAT = "() => ((document.querySelector('#title-chat') || {}).innerText || '').trim()"
+
+
+def ln_logado(page):
+    u = page.url.lower()
+    return u.startswith(LN_PORTAL) and "login" not in u
+
+
+def login_licitanet(page):
+    """Usuário/senha no SSO → cartão 'PLATAFORMA LICITANET' → escolhe a empresa (CNPJ) → Logar."""
+    usuario, senha = CFG.get("BLL_EMAIL", ""), CFG.get("BLL_SENHA", "")
+    if not usuario or not senha:
+        return "sem_credenciais"
+    page.goto(LN_LOGIN, wait_until="networkidle")
+    page.wait_for_timeout(2000)
+    if "login" in page.url.lower():
+        campo = page.locator("input[type=text]:visible, input[type=email]:visible, input:not([type]):visible").first
+        campo.click()
+        campo.fill("")
+        campo.type(usuario, delay=random.randint(50, 120))
+        pw = page.locator("input[type=password]:visible").first
+        pw.click()
+        pw.type(senha, delay=random.randint(50, 120))
+        page.wait_for_timeout(400)
+        page.get_by_role("button", name=re.compile("entrar", re.I)).first.click()
+        page.wait_for_timeout(5000)
+        if page.evaluate(JS_CAPTCHA_VISIVEL):
+            return "captcha"
+        if "login" in page.url.lower():
+            log("Licitanet: login não concluído (usuário/senha?).")
+            salvar_diag(page, "ln_login_falhou")
+            return "falhou"
+    # cartão da plataforma de fornecedores
+    cartao = page.get_by_text(re.compile(r"PLATAFORMA LICITANET", re.I)).first
+    try:
+        cartao.click(timeout=10000)
+    except Exception:
+        log("Licitanet: cartão 'PLATAFORMA LICITANET' não encontrado.")
+        salvar_diag(page, "ln_modulos")
+        return "falhou"
+    page.wait_for_timeout(2500)
+    # janela 'Escolha uma opção': marca a empresa pelo CNPJ
+    cnpj = re.sub(r"\D", "", CFG.get("EMPRESA_CNPJ", ""))
+    ok = page.evaluate("""(cnpj) => {
+      const radios = [...document.querySelectorAll('input[type=radio]')].filter(r => r.getClientRects().length > 0 || r.offsetParent);
+      for (const r of radios) {
+        const bloco = r.closest('div, li, label, tr') ;
+        let el = r, txt = '';
+        for (let i = 0; i < 5 && el; i++) { txt = (el.innerText || ''); if (/\\d{2}\\.\\d{3}\\.\\d{3}/.test(txt)) break; el = el.parentElement; }
+        if (!cnpj || txt.replace(/\\D/g, '').includes(cnpj)) { r.click(); return true; }
+      }
+      return radios.length === 0 ? 'sem_radio' : false;
+    }""", cnpj)
+    if ok is False:
+        log(f"Licitanet: empresa com CNPJ {CFG.get('EMPRESA_CNPJ','')} não encontrada na janela de escolha.")
+        salvar_diag(page, "ln_escolha_empresa")
+        return "falhou"
+    page.wait_for_timeout(1200)
+    # tipo de funcionário: primeira opção válida (ou a que contém LICITANET_FUNCAO)
+    funcao = CFG.get("LICITANET_FUNCAO", "")
+    page.evaluate("""(funcao) => {
+      for (const s of document.querySelectorAll('select')) {
+        if (!(s.getClientRects().length > 0)) continue;
+        const ops = [...s.options].filter(o => o.value && !/selecione/i.test(o.text));
+        const alvo = ops.find(o => funcao && o.text.toUpperCase().includes(funcao.toUpperCase())) || ops[0];
+        if (alvo) { s.value = alvo.value; s.dispatchEvent(new Event('change', {bubbles: true})); }
+      }
+    }""", funcao)
+    page.wait_for_timeout(800)
+    try:
+        page.get_by_role("button", name=re.compile(r"^\s*logar\s*$", re.I)).first.click(timeout=8000)
+    except Exception:
+        log("Licitanet: botão 'Logar' não encontrado.")
+        salvar_diag(page, "ln_logar")
+        return "falhou"
+    for _ in range(40):
+        page.wait_for_timeout(1000)
+        if ln_logado(page) and "home" in page.url.lower():
+            break
+    if not ln_logado(page):
+        salvar_diag(page, "ln_portal")
+        return "falhou"
+    page.wait_for_timeout(2500)
+    estado_url = page.url
+    CFG["_LN_HOME"] = estado_url
+    log(f"Licitanet: login ok ({estado_url}).")
+    return "ok"
+
+
+def ln_ler_processos(page, diag=False):
+    page.goto(CFG.get("_LN_HOME") or f"{LN_PORTAL}/home-avulso", wait_until="networkidle")
+    page.wait_for_timeout(2500)
+    if not ln_logado(page):
+        return None
+    if diag:
+        salvar_diag(page, "ln_01_processos")
+    linhas = page.evaluate(JS_LN_PROCESSOS)
+    procs = []
+    for r in linhas:
+        c = r["cel"]
+        proc = re.sub(r"\s*-\s*Modo.*$", "", c.get("PROCESSO", "")).strip()
+        if not proc:
+            continue
+        info = c.get("INFORMAÇÕES", "")
+        m = re.search(r"Início:\s*([\d/]+\s*-\s*[\dh:]+)", info)
+        procs.append({"processo": proc, "promotor": c.get("ORGAO COMPRADOR") or c.get("ÓRGÃO COMPRADOR") or c.get("ORGÃO COMPRADOR", ""),
+                      "situacao": c.get("STATUS", ""), "disputa": m.group(1) if m else "",
+                      "atualizada": "", "url": r["url"], "idx": r["idx"]})
+    return procs
+
+
+def ln_url_sala(page, p):
+    """Descobre o endereço da sala de disputa abrindo o menu de ações (⋮) da linha."""
+    if p["url"]:
+        return p["url"]
+    if not page.evaluate(JS_LN_ABRIR_ACOES, p["idx"]):
+        return ""
+    page.wait_for_timeout(800)
+    r = page.evaluate(JS_LN_LINK_SALA)
+    if not r:
+        page.keyboard.press("Escape")
+        return ""
+    if r.get("href"):
+        page.keyboard.press("Escape")
+        return r["href"]
+    for _ in range(20):
+        page.wait_for_timeout(500)
+        if "sala-disputa" in page.url:
+            return page.url
+    return ""
+
+
+def processar_licitanet(db, page, primeira_vez, diag=False):
+    procs = ln_ler_processos(page, diag)
+    if procs is None:
+        return "deslogado"
+    ignorar = {s.strip().upper() for s in CFG["SITUACOES_IGNORADAS"].split(",") if s.strip()}
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    novas = []
+    valida = lambda x: bool(x) and not any(ch.isdigit() for ch in x)  # noqa: E731
+    for p in procs:
+        antiga = db.execute("SELECT situacao, url FROM processos WHERE processo=? AND promotor=?",
+                            (p["processo"], p["promotor"])).fetchone()
+        if antiga and not p["url"] and antiga[1]:
+            p["url"] = antiga[1]
+        if (antiga and antiga[0] != p["situacao"] and valida(antiga[0]) and valida(p["situacao"])
+                and not primeira_vez):
+            novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": "Mudança de situação",
+                          "horario": agora, "autor": "Licitanet", "texto": f"{antiga[0]} → {p['situacao']}", "id": None})
+    ativos = [p for p in procs if p["situacao"].upper() not in ignorar]
+    log(f"Licitanet: {len(procs)} processos na lista, {len(ativos)} em andamento.")
+    if not procs:
+        salvar_diag(page, "ln_lista_vazia")
+
+    for p in ativos:
+        if not p["url"]:
+            page.goto(CFG.get("_LN_HOME") or f"{LN_PORTAL}/home-avulso", wait_until="networkidle")
+            page.wait_for_timeout(2000)
+            p["url"] = ln_url_sala(page, p)
+        if not p["url"]:
+            log(f"{p['processo']}: não achei a sala de disputa (rode --diagnostico).")
+            continue
+        page.goto(p["url"], wait_until="networkidle")
+        page.wait_for_timeout(2500)
+        if not ln_logado(page):
+            return "deslogado"
+        if diag:
+            salvar_diag(page, f"ln_02_sala_{p['processo'].replace('/', '-').replace(' ', '')}")
+        vistas = {}
+        lotes = page.evaluate(JS_LN_LOTES) or [{"valor": "", "rotulo": ""}]
+        maxl = int(CFG.get("LICITANET_MAX_LOTES", "80") or 80)
+        for lote in lotes[:maxl]:
+            if lote["valor"]:
+                page.evaluate(JS_LN_CLICAR_LOTE, lote["valor"])
+                page.wait_for_timeout(1300)
+            escopo = page.evaluate(JS_LN_TITULO_CHAT) or lote["rotulo"] or "Chat"
+            for m in page.evaluate(JS_LN_MENSAGENS):
+                vistas.setdefault(m["id"] or hash_msg(m["cab"], m["msg"]), (escopo, m))
+        # mensagens gerais (caixa "Mensagem Geral")
+        if page.evaluate("() => { const c = document.querySelector('#checkBoxChatGeral'); if (!c) return false; if (!c.checked) c.click(); return true; }"):
+            page.wait_for_timeout(1500)
+            for m in page.evaluate(JS_LN_MENSAGENS):
+                vistas.setdefault(m["id"] or hash_msg(m["cab"], m["msg"]), ("Mensagem geral", m))
+        for chave, (escopo, m) in vistas.items():
+            autor, horario = m["cab"], ""
+            mm = re.match(r"(.*?)\s*-\s*(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}(?::\d{2})?)\s*$", m["cab"])
+            if mm:
+                autor, horario = mm.group(1).strip(), mm.group(2)
+            mid = hash_msg("licitanet", p["processo"], p["promotor"], str(chave))
+            if db.execute("SELECT 1 FROM mensagens WHERE id=?", (mid,)).fetchone():
+                continue
+            db.execute("INSERT INTO mensagens VALUES(?,?,?,?,?,?,?,?,?)",
+                       (mid, p["processo"], p["promotor"], escopo.title(), horario, autor or "—",
+                        m["msg"], agora, 0 if not primeira_vez else 1))
+            if not primeira_vez:
+                novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": escopo.title(),
+                              "horario": horario, "autor": autor or "—", "texto": m["msg"], "id": mid})
+        db.commit()
+        time.sleep(random.uniform(1.0, 2.5))
+
+    for p in procs:
+        db.execute("INSERT OR REPLACE INTO processos VALUES(?,?,?,?,?,?,?)",
+                   (p["processo"], p["promotor"], p["situacao"], p["disputa"], p["atualizada"], p["url"], agora))
+    db.commit()
+    return notificar(db, novas, primeira_vez, len(ativos), agora)
 
 
 # ----------------------------------------------------------------- painel
@@ -869,6 +1162,10 @@ def rodar(uma_vez=False, visivel=False, diag=False):
     avisou_logout = False
     falhas_login = 0
     gerar_painel(db, "Iniciando")
+    if CFG.get("PLATAFORMA", "bll").lower() == "licitanet":
+        fn_processar, fn_login = processar_licitanet, login_licitanet
+    else:
+        fn_processar, fn_login = processar, login_automatico
     if CFG.get("EMPRESA_ID"):
         time.sleep(random.uniform(0, 20))  # espalha as empresas para não verificarem todas juntas
     while True:
@@ -880,14 +1177,14 @@ def rodar(uma_vez=False, visivel=False, diag=False):
             if dentro_do_horario():
                 try:
                     primeira = estado(db, "inicializado") is None
-                    r = processar(db, page, primeira, diag)
+                    r = fn_processar(db, page, primeira, diag)
                     # sessão caiu: tenta entrar sozinho (no máximo 2 vezes seguidas, para não bloquear a conta)
                     if r == "deslogado" and falhas_login < 2 and CFG.get("BLL_EMAIL"):
-                        res = login_automatico(page)
+                        res = fn_login(page)
                         log(f"Login automático: {res}")
                         if res == "ok":
                             falhas_login = 0
-                            r = processar(db, page, primeira, diag)
+                            r = fn_processar(db, page, primeira, diag)
                         elif res == "captcha":
                             falhas_login = 99  # não insiste com captcha
                             telegram("🧩 <b>Monitor BLL</b>: a BLL pediu captcha no login. "
