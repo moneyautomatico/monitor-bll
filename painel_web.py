@@ -239,8 +239,8 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Monitor BLL</title>
-<style>{ESTILO}</style></head><body><header><b>Monitor BLL</b><nav>{nav}</nav></header><main>{msg}{corpo}</main></body></html>"""
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
+<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav></header><main>{msg}{corpo}</main></body></html>"""
 
 
 def tag_status(emp):
@@ -527,7 +527,7 @@ class Painel(BaseHTTPRequestHandler):
         if SENHA and hmac.compare_digest(self.headers.get("Authorization", ""), ESPERADO):
             return True
         self.send_response(401)
-        self.send_header("WWW-Authenticate", 'Basic realm="Painel BLL"')
+        self.send_header("WWW-Authenticate", 'Basic realm="Licitatudo"')
         self.end_headers()
         return False
 

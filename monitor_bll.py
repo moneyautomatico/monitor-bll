@@ -776,7 +776,7 @@ def gerar_painel(db, status):
     opcoes = "".join(f'<option>{e(p[0])}</option>' for p in procs)
     PAINEL.write_text(f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
 <meta http-equiv="refresh" content="60"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Painel BLL {e(CFG.get("EMPRESA_NOME",""))}</title><style>
+<title>Licitatudo {e(CFG.get("EMPRESA_NOME",""))}</title><style>
 :root{{--bg:#f4f6f4;--card:#fff;--txt:#1d2a22;--sub:#5d6b62;--verde:#1f5c3f;--nova:#fff6d6;--borda:#dde3de}}
 @media (prefers-color-scheme:dark){{:root{{--bg:#121714;--card:#1b221e;--txt:#e7ece9;--sub:#9aa8a0;--verde:#5fb88a;--nova:#3a3418;--borda:#2b342f}}}}
 body{{margin:0;font-family:system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--txt)}}
@@ -792,7 +792,7 @@ table{{width:100%;border-collapse:collapse;background:var(--card);border-radius:
 th{{background:var(--verde);color:#fff;text-align:left;padding:8px}}td{{padding:8px;border-top:1px solid var(--borda);vertical-align:top}}
 tr.nova td{{background:var(--nova)}}.txt{{white-space:pre-wrap}}
 @media (max-width:700px){{td:nth-child(2),th:nth-child(2){{display:none}}}}
-</style></head><body><header><h1>Painel de alertas – BLL Compras{(" – " + e(CFG.get("EMPRESA_NOME",""))) if CFG.get("EMPRESA_NOME") else ""}</h1>
+</style></head><body><header><h1>Licitatudo – Painel de alertas{(" – " + e(CFG.get("EMPRESA_NOME",""))) if CFG.get("EMPRESA_NOME") else ""}</h1>
 <div class="st">{e(status)} · atualizado em {datetime.now():%d/%m/%Y %H:%M:%S} · esta página se recarrega a cada minuto</div></header>
 <main><div class="cards">{cards or "<p>Nenhum processo lido ainda.</p>"}</div>
 <div class="filtros"><select id="fp"><option value="">Todos os processos</option>{opcoes}</select>
