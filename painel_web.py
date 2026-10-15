@@ -142,7 +142,7 @@ def empresas():
         eid = arq.stem
         cfg = ler_env(arq)
         d = {"id": eid, "nome": cfg.get("EMPRESA_NOME", eid), "cfg": cfg, "ativo": ativo(eid),
-             "plat": {"licitanet": "Licitanet"}.get(cfg.get("PLATAFORMA", "bll").lower(), "BLL"),
+             "plat": {"licitanet": "Licitanet", "pcp": "Portal de Compras"}.get(cfg.get("PLATAFORMA", "bll").lower(), "BLL"),
              "status": "Aguardando primeira verificação", "ultima": "", "duracao": 0,
              "procs": [], "andamento": 0, "msgs": 0, "novas_hoje": 0}
         db = EMPRESAS / eid / "bll_monitor.db"
@@ -395,7 +395,8 @@ def form_empresa(eid=None):
 <label>Nome da empresa <small>(aparece nos alertas)</small></label><input class="campo" name="nome" value="{g('EMPRESA_NOME')}" required>
 <label>Plataforma</label><select class="campo" name="plataforma" id="plat" onchange="trocaPlat()">
 <option value="bll" {"selected" if plat == "bll" else ""}>BLL Compras</option>
-<option value="licitanet" {"selected" if plat == "licitanet" else ""}>Licitanet</option></select>
+<option value="licitanet" {"selected" if plat == "licitanet" else ""}>Licitanet</option>
+<option value="pcp" {"selected" if plat == "pcp" else ""}>Portal de Compras Públicas</option></select>
 <label>Usuário / e-mail de login</label><input class="campo" name="email" value="{g('BLL_EMAIL')}" required>
 <label>Senha <small>{"(deixe em branco para manter)" if eid else ""}<span class="so-bll"> BLL: 6 números</span></small></label>
 <input class="campo" type="password" name="senha" {"" if eid else "required"} autocomplete="new-password">
@@ -417,8 +418,8 @@ def form_empresa(eid=None):
 <label>Tópico ntfy próprio <small>(opcional, alarme no celular)</small></label>
 <input class="campo" name="ntfy" value="{g('EMPRESA_NTFY_TOPICO')}">
 <div class="acoes"><button>Salvar</button><a class="btn sec" href="/empresas">Cancelar</a></div></form>{remover}</div>
-<script>function trocaPlat(){{const ln=document.getElementById('plat').value==='licitanet';
-document.querySelectorAll('.so-bll').forEach(x=>x.style.display=ln?'none':'');
+<script>function trocaPlat(){{const v=document.getElementById('plat').value,ln=v==='licitanet',bll=v==='bll';
+document.querySelectorAll('.so-bll').forEach(x=>x.style.display=bll?'':'none');
 document.querySelectorAll('.so-ln').forEach(x=>x.style.display=ln?'':'none');}}trocaPlat();</script>"""
     return pagina("Empresa", corpo, "/empresas")
 
@@ -467,7 +468,7 @@ def salvar_empresa(f, eid=None):
             n += 1
     senha = f.get("senha", "").strip()
     plat = f.get("plataforma", "bll")
-    if plat not in ("bll", "licitanet"):
+    if plat not in ("bll", "licitanet", "pcp"):
         plat = "bll"
     if plat == "bll" and senha and not re.fullmatch(r"\d{6}", senha):
         return "A senha da BLL deve ter 6 números."

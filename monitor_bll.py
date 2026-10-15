@@ -726,7 +726,7 @@ def processar(db, page, primeira_vez, diag=False):
 
 
 def plataforma_nome():
-    return {"licitanet": "Licitanet"}.get(CFG.get("PLATAFORMA", "bll").lower(), "BLL")
+    return {"licitanet": "Licitanet", "pcp": "Portal de Compras Públicas"}.get(CFG.get("PLATAFORMA", "bll").lower(), "BLL")
 
 
 def notificar(db, novas, primeira_vez, n_ativos, agora):
@@ -1060,6 +1060,187 @@ def processar_licitanet(db, page, primeira_vez, diag=False):
     return notificar(db, novas, primeira_vez, len(ativos), agora)
 
 
+# ================================================================= PORTAL DE COMPRAS PÚBLICAS
+PCP_BASE = "https://operacao.portaldecompraspublicas.com.br"
+PCP_LISTAS = ["/4/SuasPropostas/", "/4/SeusPregoes/"]
+
+JS_PCP_LOGADO = """
+() => {
+  if (/iam\\.secure/.test(location.host)) return 'login';
+  if (document.querySelector('input[type=password]')) return 'login';
+  const t = document.body ? document.body.innerText : '';
+  return /Voc[eê] est[aá] logado como/i.test(t) ? 'ok' : 'nao';
+}
+"""
+
+JS_PCP_LISTA = """
+() => {
+  const out = [];
+  for (const t of document.querySelectorAll('table')) {
+    const cabRow = t.querySelector('thead tr') || t.querySelector('tr');
+    if (!cabRow) continue;
+    const cab = [...cabRow.children].map(x => x.innerText.trim().toUpperCase());
+    if (!cab.includes('NÚMERO') && !cab.includes('NUMERO')) continue;
+    if (!cab.some(c => c.startsWith('SITUA'))) continue;
+    for (const tr of t.querySelectorAll('tbody tr')) {
+      const tds = [...tr.children]; if (tds.length < 4) continue;
+      const cel = {}; let sit = '';
+      cab.forEach((n, i) => {
+        if (!tds[i]) return;
+        cel[n] = tds[i].innerText.replace(/\\s+/g, ' ').trim();
+        if (n.startsWith('SITUA')) {
+          const el = tds[i].querySelector('[title], img[alt]');
+          sit = el ? (el.getAttribute('title') || el.getAttribute('alt') || '') : cel[n];
+        }
+      });
+      const links = [...tr.querySelectorAll('a[href]')].map(a => a.href);
+      const comChave = links.find(h => /ttCD_CHAVE=\\d+/.test(h)) || '';
+      const m = comChave.match(/ttCD_CHAVE=(\\d+)/);
+      const onclick = [...tr.querySelectorAll('[onclick]')].map(x => x.getAttribute('onclick')).join(' ');
+      const m2 = onclick.match(/(\\d{5,})/);
+      const titulos = [...tr.querySelectorAll('[title]')].map(x => x.getAttribute('title')).join(' | ');
+      out.push({cel, sit, chave: m ? m[1] : (m2 ? m2[1] : ''), titulos});
+    }
+  }
+  return out;
+}
+"""
+
+JS_PCP_DOCS = """
+() => [...document.querySelectorAll('#tabTableSorter tbody tr, table tbody tr')].map(tr => {
+  const tds = [...tr.children]; if (tds.length < 3) return null;
+  const a0 = tds[0].querySelector('a');
+  const nome = (a0 && a0.getAttribute('title')) || tds[0].innerText.trim();
+  const tipo = (tds[1].querySelector('a') && tds[1].querySelector('a').getAttribute('title')) || tds[1].innerText.trim();
+  const quando = tds[2].innerText.trim();
+  const dl = tr.querySelector('a[href*="Download"]');
+  const id = dl ? ((dl.href.match(/ttCD_CHAVE=(\\d+)/) || [])[1] || dl.href) : (nome + '|' + quando);
+  return {nome, tipo, quando, id, url: dl ? dl.href : ''};
+}).filter(x => x && x.nome && /\\d{2}\\/\\d{2}\\/\\d{4}/.test(x.quando))
+"""
+
+
+def pcp_estado(page):
+    try:
+        return page.evaluate(JS_PCP_LOGADO)
+    except Exception:
+        return "nao"
+
+
+def login_pcp(page):
+    usuario, senha = CFG.get("BLL_EMAIL", ""), CFG.get("BLL_SENHA", "")
+    if not usuario or not senha:
+        return "sem_credenciais"
+    page.goto(f"{PCP_BASE}/", wait_until="networkidle")
+    page.wait_for_timeout(2500)
+    if pcp_estado(page) == "ok":
+        return "ok"
+    if pcp_estado(page) != "login":
+        page.goto(f"{PCP_BASE}/4/NaoAssinante/DashBoard/", wait_until="networkidle")
+        page.wait_for_timeout(2000)
+    campo = page.locator("#username, input[name=username], input[type=text]:visible, input[type=email]:visible").first
+    try:
+        campo.click(timeout=10000)
+    except Exception:
+        salvar_diag(page, "pcp_login")
+        return "falhou"
+    campo.fill("")
+    campo.type(usuario, delay=random.randint(50, 120))
+    pw = page.locator("#password, input[type=password]:visible").first
+    pw.click()
+    pw.type(senha, delay=random.randint(50, 120))
+    page.wait_for_timeout(400)
+    btn = page.locator("#kc-login, button[type=submit], input[type=submit]").first
+    try:
+        btn.click(timeout=5000)
+    except Exception:
+        page.get_by_role("button", name=re.compile("entrar", re.I)).first.click()
+    for _ in range(30):
+        page.wait_for_timeout(1000)
+        if page.evaluate(JS_CAPTCHA_VISIVEL):
+            return "captcha"
+        if pcp_estado(page) == "ok":
+            log("Portal de Compras Públicas: login ok.")
+            return "ok"
+    erro = page.evaluate("() => ((document.querySelector('#input-error, .alert-error, .kc-feedback-text, .alert') || {}).innerText || '').trim()")
+    log(f"Portal de Compras Públicas: login não concluído. {erro[:200]}")
+    salvar_diag(page, "pcp_login_falhou")
+    return "falhou"
+
+
+def pcp_ler_processos(page, diag=False):
+    procs, vistos = [], set()
+    for caminho in PCP_LISTAS:
+        page.goto(PCP_BASE + caminho, wait_until="networkidle")
+        page.wait_for_timeout(1500)
+        if pcp_estado(page) != "ok":
+            return None
+        try:
+            page.get_by_role("button", name=re.compile(r"^(Rejeitar|Aceitar)$", re.I)).first.click(timeout=1500)
+        except Exception:
+            pass
+        if diag:
+            salvar_diag(page, "pcp_lista_" + caminho.strip("/").split("/")[-1])
+        for r in page.evaluate(JS_PCP_LISTA):
+            c = r["cel"]
+            num = c.get("NÚMERO") or c.get("NUMERO", "")
+            chave = r["chave"] or num
+            if not num or chave in vistos:
+                continue
+            vistos.add(chave)
+            procs.append({"processo": num, "promotor": c.get("UNIDADE COMPRADORA", ""),
+                          "situacao": (r["sit"] or "").strip(), "disputa": c.get("ABERTURA", ""),
+                          "atualizada": "", "url": f"{PCP_BASE}/Atas/?sIA=View&ttCD_CHAVE={r['chave']}&iframe=true" if r["chave"] else "",
+                          "chave": r["chave"], "objeto": c.get("OBJETO", "")})
+    return procs
+
+
+def processar_pcp(db, page, primeira_vez, diag=False):
+    procs = pcp_ler_processos(page, diag)
+    if procs is None:
+        return "deslogado"
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    novas = []
+    for p in procs:
+        antiga = db.execute("SELECT situacao FROM processos WHERE processo=? AND promotor=?",
+                            (p["processo"], p["promotor"])).fetchone()
+        if antiga and antiga[0] and p["situacao"] and antiga[0] != p["situacao"] and not primeira_vez:
+            novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": "Mudança de situação",
+                          "horario": agora, "autor": "Portal", "texto": f"{antiga[0]} → {p['situacao']}", "id": None})
+        db.execute("INSERT OR REPLACE INTO processos VALUES(?,?,?,?,?,?,?)",
+                   (p["processo"], p["promotor"], p["situacao"], p["disputa"], p["atualizada"], p["url"], agora))
+    db.commit()
+    log(f"Portal de Compras Públicas: {len(procs)} processo(s) acompanhados.")
+    if not procs:
+        salvar_diag(page, "pcp_lista_vazia")
+        if primeira_vez:
+            return "ok"
+
+    for p in procs:
+        if not p["url"]:
+            continue
+        page.goto(p["url"], wait_until="networkidle")
+        page.wait_for_timeout(1500)
+        if pcp_estado(page) == "login":
+            return "deslogado"
+        if diag:
+            salvar_diag(page, f"pcp_docs_{p['processo'].replace('/', '-')}")
+        for d in page.evaluate(JS_PCP_DOCS):
+            mid = hash_msg("pcp", p["chave"], str(d["id"]))
+            if db.execute("SELECT 1 FROM mensagens WHERE id=?", (mid,)).fetchone():
+                continue
+            texto = f"📄 Novo documento: {d['tipo']}\n{d['nome']}"
+            db.execute("INSERT INTO mensagens VALUES(?,?,?,?,?,?,?,?,?)",
+                       (mid, p["processo"], p["promotor"], "Documento", d["quando"], d["tipo"], texto,
+                        agora, 0 if not primeira_vez else 1))
+            if not primeira_vez:
+                novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": "Documento",
+                              "horario": d["quando"], "autor": d["tipo"], "texto": texto, "id": mid})
+        db.commit()
+        time.sleep(random.uniform(1.0, 2.5))
+    return notificar(db, novas, primeira_vez, len(procs), agora)
+
+
 # ----------------------------------------------------------------- painel
 def gerar_painel(db, status):
     e = html.escape
@@ -1188,6 +1369,8 @@ def rodar(uma_vez=False, visivel=False, diag=False):
     gerar_painel(db, "Iniciando")
     if CFG.get("PLATAFORMA", "bll").lower() == "licitanet":
         fn_processar, fn_login = processar_licitanet, login_licitanet
+    elif CFG.get("PLATAFORMA", "bll").lower() == "pcp":
+        fn_processar, fn_login = processar_pcp, login_pcp
     else:
         fn_processar, fn_login = processar, login_automatico
     if CFG.get("EMPRESA_ID"):
