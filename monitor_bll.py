@@ -96,10 +96,16 @@ def carregar_config(empresa=None):
 CFG = carregar_config()
 
 
+BASES_BLL = {"bll": "https://bllcompras.com", "bnc": "https://bnccompras.com"}  # mesmo sistema
+
+
 def usar_empresa(empresa):
     """Aponta configuração e arquivos (banco, login, painel) para a pasta da empresa."""
-    global CFG, PERFIL, BANCO, PAINEL, DIAG
+    global CFG, PERFIL, BANCO, PAINEL, DIAG, BASE, URL_PROPOSTAS, URL_INICIO
     CFG = carregar_config(empresa)
+    BASE = BASES_BLL.get(CFG.get("PLATAFORMA", "bll").lower(), BASE)
+    URL_PROPOSTAS = f"{BASE}/Proposal/ProposalSearch"
+    URL_INICIO = f"{BASE}/Participant"
     dados = PASTA / "empresas" / empresa
     dados.mkdir(parents=True, exist_ok=True)
     PERFIL, BANCO, PAINEL, DIAG = (dados / "perfil_navegador", dados / "bll_monitor.db",
@@ -726,7 +732,7 @@ def processar(db, page, primeira_vez, diag=False):
 
 
 def plataforma_nome():
-    return {"licitanet": "Licitanet", "pcp": "Portal de Compras Públicas"}.get(CFG.get("PLATAFORMA", "bll").lower(), "BLL")
+    return {"licitanet": "Licitanet", "pcp": "Portal de Compras Públicas", "bnc": "BNC"}.get(CFG.get("PLATAFORMA", "bll").lower(), "BLL")
 
 
 def notificar(db, novas, primeira_vez, n_ativos, agora):
