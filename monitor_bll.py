@@ -1060,6 +1060,21 @@ def processar_licitanet(db, page, primeira_vez, diag=False):
     return notificar(db, novas, primeira_vez, len(ativos), agora)
 
 
+def avaliar(page, js, arg=None, tentativas=4):
+    """page.evaluate tolerante a recarregamentos/redirecionamentos da página."""
+    for i in range(tentativas):
+        try:
+            return page.evaluate(js) if arg is None else page.evaluate(js, arg)
+        except Exception as e:
+            if "context was destroyed" not in str(e) and "navigat" not in str(e).lower() or i == tentativas - 1:
+                raise
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+            page.wait_for_timeout(1500)
+
+
 # ================================================================= PORTAL DE COMPRAS PÚBLICAS
 PCP_BASE = "https://operacao.portaldecompraspublicas.com.br"
 PCP_LISTAS = ["/4/SuasPropostas/", "/4/SeusPregoes/"]
@@ -1122,7 +1137,7 @@ JS_PCP_DOCS = """
 
 def pcp_estado(page):
     try:
-        return page.evaluate(JS_PCP_LOGADO)
+        return avaliar(page, JS_PCP_LOGADO)
     except Exception:
         return "nao"
 
@@ -1157,7 +1172,7 @@ def login_pcp(page):
         page.get_by_role("button", name=re.compile("entrar", re.I)).first.click()
     for _ in range(30):
         page.wait_for_timeout(1000)
-        if page.evaluate(JS_CAPTCHA_VISIVEL):
+        if avaliar(page, JS_CAPTCHA_VISIVEL):
             return "captcha"
         if pcp_estado(page) == "ok":
             log("Portal de Compras Públicas: login ok.")
@@ -1181,7 +1196,7 @@ def pcp_ler_processos(page, diag=False):
             pass
         if diag:
             salvar_diag(page, "pcp_lista_" + caminho.strip("/").split("/")[-1])
-        for r in page.evaluate(JS_PCP_LISTA):
+        for r in avaliar(page, JS_PCP_LISTA):
             c = r["cel"]
             num = c.get("NÚMERO") or c.get("NUMERO", "")
             chave = r["chave"] or num
@@ -1225,7 +1240,7 @@ def processar_pcp(db, page, primeira_vez, diag=False):
             return "deslogado"
         if diag:
             salvar_diag(page, f"pcp_docs_{p['processo'].replace('/', '-')}")
-        for d in page.evaluate(JS_PCP_DOCS):
+        for d in avaliar(page, JS_PCP_DOCS):
             mid = hash_msg("pcp", p["chave"], str(d["id"]))
             if db.execute("SELECT 1 FROM mensagens WHERE id=?", (mid,)).fetchone():
                 continue
