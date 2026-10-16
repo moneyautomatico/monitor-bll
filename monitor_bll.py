@@ -1396,6 +1396,12 @@ def rodar(uma_vez=False, visivel=False, diag=False):
         ctx = contexto(pw, visivel)
         ctx.set_default_navigation_timeout(60000)  # sites lentos: espera até 60 s antes de desistir
         ctx.set_default_timeout(45000)
+        arq_cookies = PERFIL.parent / "cookies_sessao.json"
+        try:  # recupera a sessão (cookies de sessão somem quando o navegador fecha)
+            if arq_cookies.exists():
+                ctx.add_cookies(json.loads(arq_cookies.read_text(encoding="utf-8")))
+        except Exception as e:
+            log(f"Não consegui restaurar a sessão: {e}")
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         if True:
             if dentro_do_horario():
@@ -1432,6 +1438,11 @@ def rodar(uma_vez=False, visivel=False, diag=False):
                     gerar_painel(db, f"Erro no último ciclo: {e}")
             else:
                 gerar_painel(db, "Fora do horário de monitoramento")
+        try:
+            arq_cookies.write_text(json.dumps(ctx.cookies()), encoding="utf-8")
+            os.chmod(arq_cookies, 0o600)
+        except Exception:
+            pass
         ctx.close()
         estado(db, "duracao_ciclo", str(int(time.time() - inicio_ciclo)))
       if uma_vez:
