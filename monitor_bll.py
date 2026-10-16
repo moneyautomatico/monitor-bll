@@ -1394,6 +1394,8 @@ def rodar(uma_vez=False, visivel=False, diag=False):
       with VagaNavegador(), sync_playwright() as pw:
         inicio_ciclo = time.time()
         ctx = contexto(pw, visivel)
+        ctx.set_default_navigation_timeout(60000)  # sites lentos: espera até 60 s antes de desistir
+        ctx.set_default_timeout(45000)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         if True:
             if dentro_do_horario():
