@@ -1,6 +1,6 @@
 """Painel central do Monitor BLL (http://IP:8080, protegido por usuário e senha).
 
-Abas: Visão geral · Mensagens · Processos · Empresas · Configurações.
+Abas: Visão geral · Mensagens · Processos · Buscar · Empresas · Configurações.
 Permite cadastrar/editar/pausar/remover empresas e ajustar os alertas sem usar o terminal.
 """
 import base64
@@ -14,12 +14,15 @@ import secrets
 import shutil
 import sqlite3
 import subprocess
+import threading
 import unicodedata
 import urllib.parse
 import urllib.request
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+import buscas
 
 PASTA = Path(__file__).resolve().parent
 EMPRESAS = PASTA / "empresas"
@@ -29,7 +32,9 @@ CSRF = secrets.token_hex(16)
 AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "cadastrada": "Empresa cadastrada. Em alguns minutos chega o “Monitor BLL ativo” com o nome dela.",
           "atualizada": "Empresa atualizada.", "feito": "Feito.",
-          "config": "Configurações salvas e monitores reiniciados."}
+          "config": "Configurações salvas e monitores reiniciados.",
+          "busca_salva": "Busca salva. Vou mandar no Telegram um resumo agora e, depois, só as licitações novas.",
+          "busca_rodando": "Verificando agora. Se houver novidades, chegam no Telegram em instantes."}
 e = html.escape
 
 
@@ -228,11 +233,13 @@ button.sec,.btn.sec{background:var(--borda);color:var(--txt)}button.perigo{backg
 .msg{padding:10px 14px;border-radius:8px;margin-bottom:14px;background:var(--verde2)}.msg.erro{background:var(--errobg);color:var(--erro)}
 pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:auto;font-size:12px;max-height:560px}
 .barra{height:8px;background:var(--borda);border-radius:6px;overflow:hidden;margin-top:6px}.barra i{display:block;height:100%;background:var(--verde)}
+.bgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0 16px}
+.ufs{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}.uf{display:flex;gap:3px;align-items:center;font-weight:400;margin:0;padding:4px 8px;border:1px solid var(--borda);border-radius:6px}
 @media (max-width:700px){.ocultar{display:none}nav a{padding:12px 8px}}
 """
 
 ABAS = [("/", "Visão geral"), ("/mensagens", "Mensagens"), ("/processos", "Processos"),
-        ("/empresas", "Empresas"), ("/config", "Configurações")]
+        ("/buscar", "Buscar"), ("/empresas", "Empresas"), ("/config", "Configurações")]
 
 
 def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
@@ -444,6 +451,7 @@ def pg_config(aviso=""):
 <label>Horário de funcionamento <small>(0 a 24)</small></label>
 <input type="number" min="0" max="23" name="HORARIO_INICIO" value="{g('HORARIO_INICIO', '0')}"> até
 <input type="number" min="1" max="24" name="HORARIO_FIM" value="{g('HORARIO_FIM', '24')}">
+<label>Buscas salvas: verificar a cada (minutos)</label><input class="campo" type="number" min="10" name="BUSCA_INTERVALO_MINUTOS" value="{g('BUSCA_INTERVALO_MINUTOS', '30')}">
 <label>Situações ignoradas <small>(separadas por vírgula)</small></label>
 <input class="campo" name="SITUACOES_IGNORADAS" value="{g('SITUACOES_IGNORADAS', 'HOMOLOGADO,CANCELADO,REVOGADO,ANULADO,FRACASSADO,DESERTO')}">
 <div class="acoes"><button>Salvar e reiniciar monitores</button></div></form></div>
@@ -453,6 +461,148 @@ def pg_config(aviso=""):
 <label>Token <small>(vazio = bot geral)</small></label><input class="campo" type="password" name="token" autocomplete="off">
 <div class="acoes"><button>Descobrir conversas</button></div></form></div>"""
     return pagina("Configurações", corpo, "/config", aviso)
+
+
+def filtros_busca(qs):
+    """qs = parse_qs completo (listas)."""
+    um = lambda k: (qs.get(k) or [""])[0].strip()  # noqa: E731
+    ufs = [u for u in qs.get("uf", []) if u in buscas.UFS]
+    return {"q": um("q"), "excluir": um("excluir"), "ufs": ufs, "municipio": um("municipio"),
+            "modalidade": um("modalidade"), "status": um("status") if "status" in qs else "recebendo_proposta",
+            "vmin": re.sub(r"[^\d.]", "", um("vmin").replace(".", "").replace(",", ".")),
+            "vmax": re.sub(r"[^\d.]", "", um("vmax").replace(".", "").replace(",", ".")),
+            "itens": um("itens"), "nome": um("nome")}
+
+
+def form_busca(f):
+    sel = lambda a, b: "selected" if str(a) == str(b) else ""  # noqa: E731
+    ufs = "".join(f'<label class="uf"><input type="checkbox" name="uf" value="{u}" {"checked" if u in f["ufs"] else ""}>{u}</label>'
+                  for u in buscas.UFS)
+    mods = "".join(f'<option value="{v}" {sel(v, f["modalidade"])}>{n}</option>' for v, n in buscas.MODALIDADES)
+    sits = "".join(f'<option value="{v}" {sel(v, f["status"])}>{n}</option>' for v, n in buscas.SITUACOES)
+    return f"""<form method="get" action="/buscar" class="form" style="max-width:none">
+<div class="bgrid">
+<div><label>Palavras-chave <small>(vírgula = OU: <i>papel a4, toner</i>)</small></label>
+<input class="campo" name="q" value="{e(f['q'])}" placeholder="ex.: material de limpeza, café"></div>
+<div><label>Excluir se tiver <small>(vírgula separa)</small></label>
+<input class="campo" name="excluir" value="{e(f['excluir'])}" placeholder="ex.: serviço, locação"></div>
+<div><label>Município <small>(vírgula = OU)</small></label>
+<input class="campo" name="municipio" value="{e(f['municipio'])}" placeholder="ex.: Campinas, Sorocaba"></div>
+<div><label>Modalidade</label><select class="campo" name="modalidade"><option value="">Todas</option>{mods}</select></div>
+<div><label>Situação</label><select class="campo" name="status">{sits}</select></div>
+<div><label>Valor estimado <small>(R$)</small></label>
+<input name="vmin" value="{e(f['vmin'])}" placeholder="mínimo" style="width:48%"> <input name="vmax" value="{e(f['vmax'])}" placeholder="máximo" style="width:48%"></div>
+</div>
+<details {"open" if f["ufs"] else ""}><summary style="cursor:pointer;margin-top:12px;font-weight:600;font-size:13px">Estados (UF) {("– " + ", ".join(f["ufs"])) if f["ufs"] else "– todos"}</summary>
+<div class="ufs">{ufs}</div></details>
+<label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" name="itens" value="1" {"checked" if f["itens"] else ""}>
+Procurar as palavras-chave também dentro dos <b>itens</b> <small>(mais lento)</small></label>
+<div class="acoes"><button>Buscar</button><a class="btn sec" href="/buscar">Limpar</a></div></form>"""
+
+
+def pg_buscar(qs, aviso=""):
+    f = filtros_busca(qs)
+    pag = max(1, int(re.sub(r"\D", "", (qs.get("pagina") or ["1"])[0]) or 1))
+    corpo = "<h2>Buscar licitações</h2>" + form_busca(f)
+    feita = any(k in qs for k in ("q", "uf", "municipio", "modalidade", "status"))
+    if feita:
+        itens, total, erro = buscas.buscar(f, pag)
+        if erro:
+            corpo += f'<div class="msg erro">{e(erro)}</div>'
+        cards = ""
+        for it in itens:
+            achados = "".join(f'<li><b>Item {e(str(x.get("numeroItem")))}</b>: {e((x.get("descricao") or "")[:180])}'
+                              f' <span class="sub">({e(str(x.get("quantidade") or ""))} {e(x.get("unidadeMedida") or "")})</span></li>'
+                              for x in it.get("_itens_achados", []))
+            cnpj, ano, seq = buscas.ref(it)
+            origem = it.get("link_sistema_origem") or ""
+            cards += f"""<div class="card"><div class="sub">{e(it.get('modalidade_licitacao_nome') or '')} · {e(it.get('title') or '')}
+· publicada {e(buscas.data_br(it.get('data_publicacao_pncp')))}</div>
+<div class="nome" style="margin:4px 0">{e(it.get('orgao_nome') or '')}</div>
+<div class="sub"><b>{e(it.get('municipio_nome') or '')}/{e(it.get('uf') or '')}</b> · {e(it.get('unidade_nome') or '')}</div>
+<p style="margin:8px 0;font-size:14px">{e(it.get('description') or '')}</p>
+{f'<ul class="sub" style="margin:4px 0 8px">{achados}</ul>' if achados else ''}
+<div class="sub">Valor estimado: <b>{e(buscas.moeda(it.get('valor_total_estimado')))}</b>
+{f" · Propostas até: <b>{e(buscas.data_br(it.get('data_fim_vigencia')))}</b>" if it.get('data_fim_vigencia') else ''}</div>
+<div class="acoes"><a class="btn" target="_blank" rel="noopener" href="{e(buscas.link_pncp(it))}">Ver edital (PNCP)</a>
+<a class="btn sec" href="/buscar/itens?cnpj={e(str(cnpj))}&ano={e(str(ano))}&seq={e(str(seq))}">Itens</a>
+{f'<a class="btn sec" target="_blank" rel="noopener" href="{e(origem)}">Sistema de origem</a>' if origem.startswith("http") else ''}</div></div>"""
+        base = urllib.parse.urlencode([(k, v) for k, vs in qs.items() if k != "pagina" for v in vs])
+        nav = '<div class="acoes">'
+        if pag > 1:
+            nav += f'<a class="btn sec" href="/buscar?{base}&pagina={pag - 1}">← Anterior</a>'
+        nav += f'<span class="sub" style="align-self:center">Página {pag}</span>'
+        if total > pag * 50:
+            nav += f'<a class="btn sec" href="/buscar?{base}&pagina={pag + 1}">Próxima →</a>'
+        nav += "</div>"
+        salvar = f"""<form method="post" action="/buscas/salvar" class="linha" style="margin-top:10px">
+<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="filtros" value="{e(json.dumps(f, ensure_ascii=False))}">
+<input name="nome" placeholder="Nome da busca (ex.: Limpeza SP)" value="{e(f['q'][:40])}">
+<button>🔔 Salvar busca e avisar novas no Telegram</button></form>"""
+        corpo += (f'<h3>{len(itens)} resultado(s) nesta página'
+                  f'{" (de cerca de " + str(total) + " no PNCP)" if total else ""}</h3>' + salvar +
+                  f'<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr))">'
+                  f'{cards or "<p>Nada encontrado com esses filtros.</p>"}</div>' + nav)
+    lista = buscas.salvas()
+    if lista:
+        linhas = ""
+        for b in lista:
+            resumo = " · ".join(x for x in [b.get("q") and f"“{b['q']}”", ", ".join(b.get("ufs") or []),
+                                             b.get("municipio"), dict(buscas.MODALIDADES).get(b.get("modalidade", ""), ""),
+                                             b.get("excluir") and f"sem: {b['excluir']}"] if x)
+            linhas += (f'<tr><td><b>{e(b["nome"])}</b><div class="sub">{e(resumo or "todas")}</div></td>'
+                       f'<td>{"🔔 Avisando" if b.get("alertar") else "⏸ Pausada"}</td>'
+                       f'<td class="ocultar">{e(b.get("ultima") or "—")}</td><td>{b.get("novas_total", 0)}</td>'
+                       f'<td><div class="acoes" style="margin:0">'
+                       f'<a class="btn sec" href="/buscar?{urllib.parse.urlencode(busca_para_qs(b), doseq=True)}">Abrir</a>'
+                       f'{botao("/buscas/" + b["id"] + "/rodar", "Verificar agora", "sec")}'
+                       f'{botao("/buscas/" + b["id"] + ("/pausar" if b.get("alertar") else "/ligar"), "Pausar" if b.get("alertar") else "Ativar", "sec")}'
+                       f'{botao("/buscas/" + b["id"] + "/remover", "Remover", "perigo", "Remover esta busca salva?")}</div></td></tr>')
+        corpo += (f'<h2 style="margin-top:26px">Buscas salvas</h2><p class="sub">Verificadas a cada '
+                  f'{int(minutos_busca())} min (só licitações abertas). Novas vão para o Telegram geral.</p>'
+                  f'<table><tr><th>Busca</th><th>Alerta</th><th class="ocultar">Última verificação</th><th>Novas</th><th></th></tr>{linhas}</table>')
+    corpo += '<p class="sub" style="margin-top:18px">Fonte: PNCP – Portal Nacional de Contratações Públicas (todas as plataformas e órgãos que seguem a Lei 14.133).</p>'
+    return pagina("Buscar", corpo, "/buscar", aviso)
+
+
+def busca_para_qs(b):
+    return {"q": b.get("q", ""), "excluir": b.get("excluir", ""), "uf": b.get("ufs", []), "municipio": b.get("municipio", ""),
+            "modalidade": b.get("modalidade", ""), "status": "recebendo_proposta", "vmin": b.get("vmin", ""),
+            "vmax": b.get("vmax", ""), **({"itens": "1"} if b.get("itens") else {})}
+
+
+def pg_itens(q):
+    cnpj, ano, seq = (re.sub(r"\D", "", q.get(k, "")) for k in ("cnpj", "ano", "seq"))
+    its = buscas.listar_itens(cnpj, ano, seq)
+    linhas = "".join(f'<tr><td>{e(str(x.get("numeroItem")))}</td><td class="txt">{e(x.get("descricao") or "")}</td>'
+                     f'<td>{e(str(x.get("quantidade") or ""))} {e(x.get("unidadeMedida") or "")}</td>'
+                     f'<td>{e(buscas.moeda(x.get("valorUnitarioEstimado")))}</td>'
+                     f'<td class="ocultar">{e(x.get("situacaoCompraItemNome") or "")}</td></tr>' for x in its)
+    corpo = (f'<h2>Itens da licitação</h2><p><a class="btn sec" href="javascript:history.back()">← Voltar</a> '
+             f'<a class="btn" target="_blank" rel="noopener" href="https://pncp.gov.br/app/editais/{cnpj}/{ano}/{seq}">Ver edital (PNCP)</a></p>'
+             f'<table><tr><th>Nº</th><th>Descrição</th><th>Qtd.</th><th>Valor unit. estimado</th><th class="ocultar">Situação</th></tr>'
+             f'{linhas or "<tr><td colspan=5>Itens não disponíveis.</td></tr>"}</table>')
+    return pagina("Itens", corpo, "/buscar")
+
+
+def minutos_busca():
+    try:
+        return float(CFG_ATUAL().get("BUSCA_INTERVALO_MINUTOS", "30") or 30)
+    except ValueError:
+        return 30.0
+
+
+def telegram_geral(texto):
+    c = CFG_ATUAL()
+    tok, chat = c.get("TELEGRAM_TOKEN"), c.get("TELEGRAM_CHAT_ID")
+    if not tok or not chat:
+        return
+    dados = urllib.parse.urlencode({"chat_id": chat, "text": texto, "parse_mode": "HTML",
+                                    "disable_web_page_preview": "true"}).encode()
+    try:
+        urllib.request.urlopen(f"https://api.telegram.org/bot{tok}/sendMessage", dados, timeout=20).read()
+    except Exception as ex:  # noqa: BLE001
+        print("Telegram (buscas):", ex, flush=True)
 
 
 # ------------------------------------------------------------------ ações
@@ -585,6 +735,10 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(form_empresa())
             if p == "/config":
                 return self.enviar(pg_config(AVISOS.get(q.get("ok", ""), "")))
+            if p == "/buscar":
+                return self.enviar(pg_buscar(urllib.parse.parse_qs(url.query), AVISOS.get(q.get("ok", ""), "")))
+            if p == "/buscar/itens":
+                return self.enviar(pg_itens(q))
             m = re.fullmatch(r"/empresas/([a-z0-9-]+)(/log)?", p)
             if m and (EMPRESAS / f"{m.group(1)}.env").exists():
                 if m.group(2):
@@ -619,7 +773,7 @@ class Painel(BaseHTTPRequestHandler):
             if p == "/config":
                 v = {k: f.get(k, "").strip() for k in ("TELEGRAM_CHAT_ID", "NTFY_TOPICO", "CHAMADA_USUARIO",
                                                         "INTERVALO_MINUTOS", "MAX_NAVEGADORES", "HORARIO_INICIO",
-                                                        "HORARIO_FIM", "SITUACOES_IGNORADAS")}
+                                                        "HORARIO_FIM", "SITUACOES_IGNORADAS", "BUSCA_INTERVALO_MINUTOS")}
                 if f.get("TELEGRAM_TOKEN", "").strip():
                     v["TELEGRAM_TOKEN"] = f["TELEGRAM_TOKEN"].strip()
                 gravar_env(CONFIG, v)
@@ -627,6 +781,22 @@ class Painel(BaseHTTPRequestHandler):
                     if x["ativo"]:
                         sh("systemctl", "restart", f"monitor-bll@{x['id']}")
                 return self.redirecionar("/config?ok=config")
+            if p == "/buscas/salvar":
+                try:
+                    filtros = json.loads(f.get("filtros", "{}"))
+                except ValueError:
+                    filtros = {}
+                filtros["nome"] = f.get("nome", "").strip()[:60]
+                bid = buscas.salvar_busca(filtros)
+                threading.Thread(target=buscas.verificar_salvas, args=(telegram_geral, bid), daemon=True).start()
+                return self.redirecionar("/buscar?ok=busca_salva")
+            m = re.fullmatch(r"/buscas/(b\d+)/(rodar|pausar|ligar|remover)", p)
+            if m:
+                if m.group(2) == "rodar":
+                    threading.Thread(target=buscas.verificar_salvas, args=(telegram_geral, m.group(1)), daemon=True).start()
+                    return self.redirecionar("/buscar?ok=busca_rodando")
+                buscas.alterar_busca(m.group(1), m.group(2))
+                return self.redirecionar("/buscar?ok=feito")
             if p == "/telegram":
                 return self.enviar(pagina("Telegram", "<h2>Conversas encontradas</h2>" + descobrir(f.get("token", "").strip()) +
                                           '<p><a class="btn sec" href="/config">Voltar</a></p>', "/config"))
@@ -661,4 +831,5 @@ class Painel(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"Painel em http://0.0.0.0:{PORTA}")
+    threading.Thread(target=buscas.ciclo, args=(telegram_geral, minutos_busca), daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORTA), Painel).serve_forever()
