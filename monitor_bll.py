@@ -1432,6 +1432,82 @@ def pcp_ler_processos(page, diag=False):
     return procs
 
 
+PCP_PUBLICO = "https://www.portaldecompraspublicas.com.br/processos/x/x/x-{chave}"
+
+
+def pcp_baixar_ranking(page, chave):
+    """Abre a página pública do processo (logado) e baixa o PDF 'Ranking nos Itens'. Só leitura."""
+    ir(page, PCP_PUBLICO.format(chave=chave))
+    page.wait_for_timeout(5000)
+    for rot in ("Rejeitar", "Aceitar"):
+        try:
+            page.get_by_text(rot, exact=True).first.click(timeout=2000)
+            break
+        except Exception:
+            pass
+    for _ in range(2):  # fecha janelas de propaganda ("Aviso de licitações")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(500)
+    card = page.locator(".step-card", has_text="Ranking nos Itens").first
+    if not card.count():
+        log(f"PCP {chave}: cartão 'Ranking nos Itens' não encontrado na página pública ({page.url}).")
+        return None
+    try:
+        with page.expect_download(timeout=45000) as baixa:
+            card.locator("button").first.scroll_into_view_if_needed()
+            card.locator("button").first.click(timeout=10000)
+        caminho = baixa.value.path()
+        dados = Path(caminho).read_bytes()
+    except Exception as ex:
+        log(f"PCP {chave}: ranking não baixou ({ex}).")
+        return None
+    return dados if dados[:4] == b"%PDF" else None
+
+
+def pcp_classificacao(db, page, p, primeira_vez):
+    """Baixa e grava a classificação de cada item do processo; devolve alertas de mudança de posição."""
+    import pcp_ranking
+    dados = pcp_baixar_ranking(page, p["chave"])
+    if not dados:
+        return []
+    itens = pcp_ranking.classificar(pcp_ranking.ranking_pdf(dados),
+                                    CFG.get("CLASSIFICACAO_NOME") or CFG.get("EMPRESA_NOME", ""), CFG.get("EMPRESA_CNPJ", ""))
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    novas = []
+    for n, it in itens.items():
+        chave = f"pcp|{p['processo']}|{p['promotor']}|{n}"
+        ant = db.execute("SELECT nossa_pos, nosso_lance FROM classificacao WHERE chave=?", (chave,)).fetchone()
+        rk = [{"pos": x["pos"], "nome": x["nome"], "num": x["cnpj"], "valor": x["valor"] or 0, "excluido": x["excluido"],
+               "qtd": "", "marca": x.get("marca", ""), "tipo": x.get("tipo", "")} for x in it["ranking"]]
+        nossa = next((x for x in it["ranking"] if x["nossa"]), None)
+        lider = next((x for x in it["ranking"] if x["pos"] == 1), None)
+        pos = nossa["pos"] if nossa else None
+        db.execute("INSERT OR REPLACE INTO classificacao VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (chave, p["processo"], p["promotor"], n, it["descricao"][:200], "Ranking (PDF)",
+                    lider["nome"] if lider else "", moeda_br(lider["valor"]) if lider else "",
+                    json.dumps(rk, ensure_ascii=False), pos, moeda_br(nossa["valor"]) if nossa else "", time.time(), agora))
+        if ant and not primeira_vez and nossa and (pos != ant[0] or moeda_br(nossa["valor"]) != ant[1]):
+            if pos is None:
+                txt = f"Item {n}: sua empresa aparece como DESCLASSIFICADA/INABILITADA/REJEITADA."
+            elif ant[0] is None:
+                txt = f"Item {n}: sua empresa está em {pos}º lugar ({moeda_br(nossa['valor'])})."
+            elif pos != ant[0]:
+                txt = f"Item {n}: você {'subiu' if pos < ant[0] else 'caiu'} de {ant[0]}º para {pos}º ({moeda_br(nossa['valor'])})."
+            else:
+                txt = f"Item {n}: seu valor mudou para {moeda_br(nossa['valor'])} – continua em {pos}º."
+            if lider and pos != 1:
+                txt += f"\n1º: {lider['nome']} – {moeda_br(lider['valor'])}"
+            txt += f"\n{it['descricao'][:90]}"
+            mid = hash_msg("pcp-classif", p["chave"], n, agora, txt)
+            db.execute("INSERT OR IGNORE INTO mensagens VALUES(?,?,?,?,?,?,?,?,?)",
+                       (mid, p["processo"], p["promotor"], "Classificação", agora, "Portal", txt, agora, 0))
+            novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": "📊 Classificação",
+                          "horario": agora, "autor": "Portal", "texto": txt, "id": mid})
+    db.commit()
+    log(f"PCP {p['processo']}: classificação de {len(itens)} item(ns) lida.")
+    return novas
+
+
 def processar_pcp(db, page, primeira_vez, diag=False):
     procs = pcp_ler_processos(page, diag)
     if procs is None:
@@ -1475,6 +1551,20 @@ def processar_pcp(db, page, primeira_vez, diag=False):
                               "horario": d["quando"], "autor": d["tipo"], "texto": texto, "id": mid})
         db.commit()
         time.sleep(random.uniform(1.0, 2.5))
+
+    # classificação por item (PDF "Ranking nos Itens" da página pública) – a cada 30 min por processo
+    for p in procs:
+        if not p.get("chave"):
+            continue
+        k = f"pcp_ranking_{p['chave']}"
+        ultimo = float(estado(db, k) or 0)
+        if time.time() - ultimo < 30 * 60 and not diag:
+            continue
+        try:
+            novas += pcp_classificacao(db, page, p, primeira_vez)
+        except Exception as ex:  # nunca atrapalha mensagens/documentos
+            log(f"PCP {p['processo']}: erro ao ler classificação ({ex}).")
+        estado(db, k, str(time.time()))
     return notificar(db, novas, primeira_vez, len(procs), agora)
 
 
@@ -1547,7 +1637,7 @@ fp.onchange=f;fb.oninput=f;
 def contexto(pw, visivel):
     visivel = visivel or CFG.get("NAVEGADOR_VISIVEL") == "1"  # no servidor roda numa tela virtual (xvfb)
     return pw.chromium.launch_persistent_context(
-        str(PERFIL), headless=not visivel, locale="pt-BR",
+        str(PERFIL), headless=not visivel, locale="pt-BR", accept_downloads=True,
         viewport={"width": 1366, "height": 800})
 
 
