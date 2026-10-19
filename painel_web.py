@@ -22,6 +22,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import analise
 import buscas
 
 PASTA = Path(__file__).resolve().parent
@@ -235,11 +236,16 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .barra{height:8px;background:var(--borda);border-radius:6px;overflow:hidden;margin-top:6px}.barra i{display:block;height:100%;background:var(--verde)}
 .bgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0 16px}
 .ufs{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}.uf{display:flex;gap:3px;align-items:center;font-weight:400;margin:0;padding:4px 8px;border:1px solid var(--borda);border-radius:6px}
+.md li{margin:4px 0}.md li.chk{list-style:none;margin-left:-22px}.md li.chk input{margin-right:6px}
+.md li.chk label{font-weight:400;display:inline;margin:0;font-size:inherit}
+@media print{header,.acoes,.msg{display:none}.analise{border:0}}
+.analise{background:var(--card);border:1px solid var(--borda);border-radius:10px;padding:6px 20px 16px;max-width:900px;line-height:1.5}
+.analise h3{border-bottom:1px solid var(--borda);padding-bottom:4px;margin-top:22px}.analise h4{margin:14px 0 4px;font-size:14px}
 @media (max-width:700px){.ocultar{display:none}nav a{padding:12px 8px}}
 """
 
 ABAS = [("/", "Visão geral"), ("/mensagens", "Mensagens"), ("/processos", "Processos"),
-        ("/buscar", "Buscar"), ("/empresas", "Empresas"), ("/config", "Configurações")]
+        ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/empresas", "Empresas"), ("/config", "Configurações")]
 
 
 def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
@@ -445,6 +451,11 @@ def pg_config(aviso=""):
 <label>Tópico ntfy geral</label><input class="campo" name="NTFY_TOPICO" value="{g('NTFY_TOPICO')}">
 <label>Ligação pelo Telegram (CallMeBot) <small>@usuario, ou vazio para desligar</small></label>
 <input class="campo" name="CHAMADA_USUARIO" value="{g('CHAMADA_USUARIO')}">
+<h3>Inteligência artificial (análise de editais)</h3>
+<p class="sub">Chave gratuita do Google Gemini: entre em <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>, faça login com uma conta Google e clique em “Create API key”.</p>
+<label>Chave do Gemini <small>({"configurada; " if c.get("GEMINI_API_KEY") else ""}deixe vazio para manter)</small></label>
+<input class="campo" type="password" name="GEMINI_API_KEY" autocomplete="off">
+<label>Modelo <small>(vazio = gemini-2.5-flash)</small></label><input class="campo" name="GEMINI_MODELO" value="{g('GEMINI_MODELO')}" placeholder="gemini-2.5-flash">
 <h3>Ritmo</h3>
 <label>Intervalo entre verificações (minutos)</label><input class="campo" type="number" step="0.5" min="1" name="INTERVALO_MINUTOS" value="{g('INTERVALO_MINUTOS', '2')}">
 <label>Navegadores simultâneos <small>(≈ 1 por GB de memória livre)</small></label><input class="campo" type="number" min="1" max="12" name="MAX_NAVEGADORES" value="{g('MAX_NAVEGADORES', '3')}">
@@ -526,6 +537,7 @@ def pg_buscar(qs, aviso=""):
 {f" · Propostas até: <b>{e(buscas.data_br(it.get('data_fim_vigencia')))}</b>" if it.get('data_fim_vigencia') else ''}</div>
 <div class="acoes"><a class="btn" target="_blank" rel="noopener" href="{e(buscas.link_pncp(it))}">Ver edital (PNCP)</a>
 <a class="btn sec" href="/buscar/itens?cnpj={e(str(cnpj))}&ano={e(str(ano))}&seq={e(str(seq))}">Itens</a>
+{botao_analisar(cnpj, ano, seq, f"{it.get('orgao_nome') or ''} – {it.get('title') or ''} – {it.get('municipio_nome') or ''}/{it.get('uf') or ''}")}
 {f'<a class="btn sec" target="_blank" rel="noopener" href="{e(origem)}">Sistema de origem</a>' if origem.startswith("http") else ''}</div></div>"""
         base = urllib.parse.urlencode([(k, v) for k, vs in qs.items() if k != "pagina" for v in vs])
         nav = '<div class="acoes">'
@@ -580,9 +592,91 @@ def pg_itens(q):
                      f'<td class="ocultar">{e(x.get("situacaoCompraItemNome") or "")}</td></tr>' for x in its)
     corpo = (f'<h2>Itens da licitação</h2><p><a class="btn sec" href="javascript:history.back()">← Voltar</a> '
              f'<a class="btn" target="_blank" rel="noopener" href="https://pncp.gov.br/app/editais/{cnpj}/{ano}/{seq}">Ver edital (PNCP)</a></p>'
+             f'<div style="margin-bottom:12px">{botao_analisar(cnpj, ano, seq, "")}</div>'
              f'<table><tr><th>Nº</th><th>Descrição</th><th>Qtd.</th><th>Valor unit. estimado</th><th class="ocultar">Situação</th></tr>'
              f'{linhas or "<tr><td colspan=5>Itens não disponíveis.</td></tr>"}</table>')
     return pagina("Itens", corpo, "/buscar")
+
+
+def botao_analisar(cnpj, ano, seq, titulo):
+    ch = analise.chave_pncp(cnpj, ano, seq)
+    feito = analise.ler(ch)
+    if feito and feito.get("status") in ("pronto", "analisando"):
+        return f'<a class="btn" href="/analise/{ch}">🤖 Ver análise</a>'
+    return (f'<form method="post" action="/analise/pncp" style="display:inline"><input type="hidden" name="csrf" value="{CSRF}">'
+            f'<input type="hidden" name="cnpj" value="{e(str(cnpj))}"><input type="hidden" name="ano" value="{e(str(ano))}">'
+            f'<input type="hidden" name="seq" value="{e(str(seq))}"><input type="hidden" name="titulo" value="{e(titulo)}">'
+            f'<button>🤖 Analisar edital (IA)</button></form>')
+
+
+def pg_analise(ch):
+    d = analise.ler(ch)
+    if not d:
+        return pagina("Análise", "<h2>Análise não encontrada</h2>", "/editais")
+    o = d.get("origem", {})
+    edital = (f'<a class="btn sec" target="_blank" rel="noopener" href="https://pncp.gov.br/app/editais/{e(o.get("cnpj", ""))}/'
+              f'{e(o.get("ano", ""))}/{e(o.get("seq", ""))}">Ver edital (PNCP)</a>') if o.get("tipo") == "pncp" else ""
+    topo = f'<h2>🤖 Análise do edital</h2><p class="sub">{e(d.get("titulo") or "")}</p>'
+    if d.get("status") == "analisando":
+        corpo = topo + (f'<div class="msg">Analisando desde {e(d.get("inicio", ""))}… Baixando o edital e lendo com a IA. '
+                        'Costuma levar de 30 segundos a 3 minutos. Esta página atualiza sozinha.</div>')
+        return pagina("Analisando", corpo, "/editais").replace("<head>", '<head><meta http-equiv="refresh" content="8">', 1)
+    if d.get("status") == "erro":
+        corpo = topo + f'<div class="msg erro">{e(d.get("erro", ""))}</div><div class="acoes">' + \
+            botao(f"/analise/{ch}/refazer", "Tentar de novo") + edital + '<a class="btn sec" href="/config">Configurações</a></div>'
+        return pagina("Análise", corpo, "/editais")
+    arqs = ", ".join(d.get("arquivos") or [])
+    corpo = (topo + '<div class="acoes" style="margin-bottom:12px">' + edital +
+             botao(f"/analise/{ch}/telegram", "📨 Enviar no Telegram", "sec") +
+             botao(f"/analise/{ch}/refazer", "Analisar de novo", "sec", "Refazer a análise (gasta uma consulta da IA)?") +
+             '<button class="sec" onclick="window.print()">Imprimir / PDF</button></div>'
+             f'<div class="analise">{analise.md_html(d.get("md", ""))}</div>'
+             f'<p class="sub">Gerado em {e(d.get("fim", ""))} por {e(d.get("modelo", ""))} · Arquivos lidos: {e(arqs) or "—"}<br>'
+             '⚠️ A IA pode errar ou deixar algo de fora. Confira sempre no edital antes de enviar documentos e proposta.</p>')
+    return pagina("Análise", corpo, "/editais")
+
+
+def pg_editais(aviso="", erro=False):
+    tem_chave = bool(CFG_ATUAL().get("GEMINI_API_KEY"))
+    alerta = "" if tem_chave else ('<div class="msg erro">Falta a chave gratuita do Gemini. '
+                                   'Cadastre em <a href="/config">Configurações → Inteligência artificial</a>.</div>')
+    linhas = "".join(
+        f'<tr><td><a href="/analise/{e(d["chave"])}"><b>{e(d.get("titulo") or d["chave"])}</b></a></td>'
+        f'<td>{ {"pronto": "✅ Pronta", "analisando": "⏳ Analisando", "erro": "❌ Erro"}.get(d.get("status"), "") }</td>'
+        f'<td class="ocultar">{e(d.get("fim") or d.get("inicio") or "")}</td></tr>' for d in analise.listar())
+    corpo = f"""<h2>Editais (IA)</h2>{alerta}
+<div class="form"><h3 style="margin-top:0">Analisar um edital que você tem em mãos</h3>
+<p class="sub">Para editais de qualquer plataforma (BLL, BNC, Licitanet...). Envie o PDF do edital e, se quiser, o termo de referência (até 18 MB no total).
+Para licitações do PNCP, use o botão “🤖 Analisar edital (IA)” na aba Buscar.</p>
+<form method="post" action="/analise/upload" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{CSRF}">
+<label>Nome para identificar</label><input class="campo" name="titulo" placeholder="ex.: Pregão 45/2026 – Prefeitura de X">
+<label>Arquivos (PDF, DOCX ou ZIP)</label><input type="file" name="arquivo" multiple required accept=".pdf,.docx,.zip">
+<div class="acoes"><button>🤖 Analisar</button></div></form></div>
+<h2 style="margin-top:22px">Análises feitas</h2>
+<table><tr><th>Edital</th><th>Situação</th><th class="ocultar">Quando</th></tr>{linhas or '<tr><td colspan="3">Nenhuma ainda.</td></tr>'}</table>
+<p class="sub">IA gratuita: Google Gemini (faixa gratuita tem limite diário de consultas). Na faixa gratuita o Google pode usar o conteúdo
+enviado para melhorar seus produtos; editais são públicos, mas evite enviar documentos internos da empresa.</p>"""
+    return pagina("Editais (IA)", corpo, "/editais", aviso, erro)
+
+
+def ler_multipart(handler, tam):
+    """Retorna (campos, arquivos[(nome, bytes)]) de um formulário multipart."""
+    from email.parser import BytesParser
+    from email.policy import default
+    bruto = handler.rfile.read(tam)
+    msg = BytesParser(policy=default).parsebytes(
+        b"Content-Type: " + handler.headers.get("Content-Type", "").encode() + b"\r\n\r\n" + bruto)
+    campos, arqs = {}, []
+    for parte in msg.iter_parts():
+        nome = parte.get_param("name", header="content-disposition")
+        arq = parte.get_filename()
+        dados = parte.get_payload(decode=True) or b""
+        if arq:
+            if dados:
+                arqs.append((Path(arq).name, dados))
+        elif nome:
+            campos[nome] = dados.decode("utf-8", "ignore")
+    return campos, arqs
 
 
 def minutos_busca():
@@ -737,6 +831,11 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_config(AVISOS.get(q.get("ok", ""), "")))
             if p == "/buscar":
                 return self.enviar(pg_buscar(urllib.parse.parse_qs(url.query), AVISOS.get(q.get("ok", ""), "")))
+            if p == "/editais":
+                return self.enviar(pg_editais())
+            m = re.fullmatch(r"/analise/([a-z0-9-]+)", p)
+            if m:
+                return self.enviar(pg_analise(m.group(1)))
             if p == "/buscar/itens":
                 return self.enviar(pg_itens(q))
             m = re.fullmatch(r"/empresas/([a-z0-9-]+)(/log)?", p)
@@ -756,6 +855,18 @@ class Painel(BaseHTTPRequestHandler):
         if not self.autorizado():
             return
         tam = int(self.headers.get("Content-Length", "0") or 0)
+        if self.path.rstrip("/") == "/analise/upload":
+            if tam > 40 * 1024 * 1024:
+                return self.enviar(pg_editais("Arquivos grandes demais (máx. 40 MB).", True), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not arqs:
+                return self.enviar(pg_editais("Escolha ao menos um arquivo.", True))
+            ch = analise.chave_upload(arqs)
+            titulo = campos.get("titulo", "").strip()[:150] or ", ".join(n for n, _ in arqs)[:150]
+            analise.iniciar(ch, CFG_ATUAL(), {"tipo": "upload", "arquivos": arqs, "titulo": titulo})
+            return self.redirecionar(f"/analise/{ch}")
         f = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(min(tam, 100000)).decode("utf-8"),
                                                         keep_blank_values=True).items()}
         if not hmac.compare_digest(f.get("csrf", ""), CSRF):
@@ -776,11 +887,38 @@ class Painel(BaseHTTPRequestHandler):
                                                         "HORARIO_FIM", "SITUACOES_IGNORADAS", "BUSCA_INTERVALO_MINUTOS")}
                 if f.get("TELEGRAM_TOKEN", "").strip():
                     v["TELEGRAM_TOKEN"] = f["TELEGRAM_TOKEN"].strip()
+                if f.get("GEMINI_API_KEY", "").strip():
+                    v["GEMINI_API_KEY"] = f["GEMINI_API_KEY"].strip()
+                v["GEMINI_MODELO"] = f.get("GEMINI_MODELO", "").strip()
                 gravar_env(CONFIG, v)
                 for x in empresas():
                     if x["ativo"]:
                         sh("systemctl", "restart", f"monitor-bll@{x['id']}")
                 return self.redirecionar("/config?ok=config")
+            if p == "/analise/pncp":
+                cnpj, ano, seq = (re.sub(r"\D", "", f.get(k, "")) for k in ("cnpj", "ano", "seq"))
+                ch = analise.chave_pncp(cnpj, ano, seq)
+                d = analise.ler(ch)
+                if not d or d.get("status") == "erro":
+                    analise.iniciar(ch, CFG_ATUAL(), {"tipo": "pncp", "cnpj": cnpj, "ano": ano, "seq": seq,
+                                                      "titulo": f.get("titulo", "").strip()[:200] or ch})
+                return self.redirecionar(f"/analise/{ch}")
+            m = re.fullmatch(r"/analise/([a-z0-9-]+)/(telegram|refazer)", p)
+            if m:
+                ch, acao = m.groups()
+                d = analise.ler(ch)
+                if not d:
+                    return self.redirecionar("/editais")
+                if acao == "telegram" and d.get("md"):
+                    for parte in analise.md_telegram(d["md"], d.get("titulo", "")):
+                        telegram_geral(parte)
+                elif acao == "refazer":
+                    o = d.get("origem", {})
+                    if o.get("tipo") == "pncp":
+                        analise.iniciar(ch, CFG_ATUAL(), dict(o, titulo=d.get("titulo", "")))
+                    else:
+                        return self.enviar(pg_editais("Para refazer um edital enviado, envie o arquivo de novo.", True))
+                return self.redirecionar(f"/analise/{ch}")
             if p == "/buscas/salvar":
                 try:
                     filtros = json.loads(f.get("filtros", "{}"))

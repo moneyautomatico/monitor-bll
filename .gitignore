@@ -2,3 +2,4 @@ __pycache__/
 buscas_salvas.json
 buscas_vistos.json
 *.tmp
+analises/
