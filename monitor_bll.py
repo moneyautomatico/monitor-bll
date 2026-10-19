@@ -1504,7 +1504,7 @@ def pcp_baixar_ranking(page, url, chave):
         log(f"PCP {chave}: sem 'Ranking nos Itens' na página pública ainda ({page.url}).")
         return None
     try:
-        with page.expect_download(timeout=45000) as baixa:
+        with page.expect_download(timeout=120000) as baixa:
             card.locator("button").first.scroll_into_view_if_needed()
             card.locator("button").first.click(timeout=10000)
         caminho = baixa.value.path()
