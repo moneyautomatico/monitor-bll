@@ -24,11 +24,8 @@ def texto_pdf(dados):
 
 
 with sync_playwright() as p:
-    nav = p.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"])
-    ctx = nav.new_context(accept_downloads=True, locale="pt-BR", viewport={"width": 1366, "height": 800},
-                          user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                                     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-    ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    nav = p.chromium.launch(headless=False)  # janela na tela virtual (xvfb), como o monitor
+    ctx = nav.new_context(accept_downloads=True, locale="pt-BR", viewport={"width": 1366, "height": 800})
     pg = ctx.new_page()
 
     def resp(r):
