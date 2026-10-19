@@ -51,10 +51,17 @@ with sync_playwright() as p:
             break
         except Exception:  # noqa: BLE001
             pass
-    pg.wait_for_timeout(6000)  # espera o site ficar interativo
+    pg.wait_for_timeout(8000)  # espera o site ficar interativo
+    for _ in range(3):  # fecha janelas como "Aviso de licitações"
+        pg.keyboard.press("Escape")
+        pg.evaluate("""() => document.querySelectorAll('.modal .close, .modal [aria-label*=lose], .cdk-overlay-backdrop, [class*=close-button]')
+                          .forEach(b => { try { b.click(); } catch (e) {} })""")
+        pg.wait_for_timeout(700)
     pedidos = []
     ctx.on("request", lambda r: pedidos.append(f"{r.method} {r.resource_type} {r.url}")
-           if r.resource_type in ("xhr", "fetch", "document") else None)
+           if r.resource_type not in ("image", "font", "stylesheet", "media") else None)
+    ctx.on("response", lambda r: print("   resposta:", r.status, r.url[:200], (r.text()[:300] if "json" in r.headers.get("content-type", "") else ""))
+           if "portaldecompraspublicas" in r.url and r.request.resource_type in ("xhr", "fetch") else None)
     card = pg.locator(".step-card", has_text=ALVO).first
     el = card.locator("button").first if card.count() else pg.get_by_text(ALVO, exact=False).first
     print(f"\n=== ELEMENTO '{ALVO}' ===")
@@ -67,13 +74,12 @@ with sync_playwright() as p:
 
     conteudo, onde = None, ""
     try:
-        with ctx.expect_page(timeout=8000) as nova:
-            with pg.expect_download(timeout=8000) as baixa:
-                el.scroll_into_view_if_needed()
-                el.click(force=True)
+        with pg.expect_download(timeout=30000) as baixa:
+            el.scroll_into_view_if_needed()
+            el.evaluate("b => b.click()")
     except Exception:  # noqa: BLE001
         pass
-    pg.wait_for_timeout(5000)
+    pg.wait_for_timeout(3000)
     for outra in ctx.pages[1:]:
         try:
             outra.wait_for_load_state("domcontentloaded", timeout=20000)
