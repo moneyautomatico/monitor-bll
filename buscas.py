@@ -5,6 +5,7 @@ O PNCP recebe, por lei (14.133/2021), as licitações de todos os órgãos e de 
 """
 import html
 import json
+import subprocess
 import threading
 import time
 import unicodedata
@@ -18,7 +19,9 @@ PASTA = Path(__file__).resolve().parent
 ARQ_SALVAS = PASTA / "buscas_salvas.json"
 ARQ_VISTOS = PASTA / "buscas_vistos.json"
 API = "https://pncp.gov.br/api/search/"
-UA = {"User-Agent": "Licitatudo/1.0 (consulta publica)", "Accept": "application/json"}
+UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0 Safari/537.36", "Accept": "application/json, text/plain, */*",
+      "Accept-Language": "pt-BR,pt;q=0.9", "Referer": "https://pncp.gov.br/app/editais"}
 TRAVA = threading.Lock()
 
 UFS = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI",
@@ -43,9 +46,25 @@ def termos(txt):
 
 
 def _get(url, timeout=25):
-    req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.load(r)
+    """Tenta urllib (2x) e, se o PNCP fechar a conexão, usa o curl do sistema."""
+    ultimo = None
+    for _ in range(2):
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8") or "null")
+        except Exception as ex:  # noqa: BLE001
+            ultimo = ex
+            time.sleep(1)
+    try:
+        r = subprocess.run(["curl", "-s", "--compressed", "-m", str(timeout), "-A", UA["User-Agent"],
+                            "-H", "Accept: application/json", url], capture_output=True, text=True, timeout=timeout + 5)
+        if r.returncode == 0 and r.stdout.strip():
+            return json.loads(r.stdout)
+        ultimo = RuntimeError(f"curl código {r.returncode}")
+    except Exception as ex:  # noqa: BLE001
+        ultimo = ex
+    raise ultimo
 
 
 # ------------------------------------------------------------------ busca
