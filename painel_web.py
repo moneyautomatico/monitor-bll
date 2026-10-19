@@ -541,17 +541,7 @@ def pg_processos(q):
     ops = "".join(f'<option value="{e(x["id"])}" {"selected" if x["id"] == emp else ""}>{e(x["nome"])}</option>'
                   for x in emps)
     sops = "".join(f'<option {"selected" if s == filtro else ""}>{e(s)}</option>' for s in sorted(sits) if s)
-    pcps = [x for x in emps if eh_pcp(x["id"])]
-    envio = ""
-    if pcps:
-        ops_p = "".join(f'<option value="{e(x["id"])}">{e(x["nome"])}</option>' for x in pcps)
-        envio = f"""<details class="form" style="margin-bottom:14px;max-width:none"><summary style="cursor:pointer;font-weight:600">
-📊 Classificação do Portal de Compras – enviar PDF “Ranking nos Itens”</summary>
-<p class="sub">Na página pública do processo (portaldecompraspublicas.com.br → Processos → Acessar processo), em Documentos, baixe
-“Ranking nos Itens” e envie aqui. O painel mostra a classificação completa de cada item com a sua empresa destacada.</p>
-<form method="post" action="/classificacao/upload" enctype="multipart/form-data" class="linha"><input type="hidden" name="csrf" value="{CSRF}">
-<select name="empresa">{ops_p}</select><input type="file" name="arquivo" accept=".pdf" required><button>Enviar</button></form></details>"""
-    corpo = envio + f"""<h2>Processos</h2><form class="linha" method="get">
+    corpo = f"""<h2>Processos</h2><form class="linha" method="get">
 <select name="empresa"><option value="">Todas as empresas</option>{ops}</select>
 <select name="situacao"><option value="">Todas as situações</option>
 <option value="andamento" {"selected" if filtro == "andamento" else ""}>Só em andamento</option>{sops}</select>
