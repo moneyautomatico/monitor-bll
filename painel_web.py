@@ -577,45 +577,11 @@ def pg_empresas(aviso="", erro=False):
         linhas += f"""<tr><td><b>{e(x['nome'])}</b> <span class="tag parado">{e(x['plat'])}</span><div class="sub">{e(x['cfg'].get('BLL_EMAIL', ''))}</div></td>
 <td><span class="tag {cls}">{e(txt)}</span></td><td class="ocultar">{e(x['cfg'].get('ENVIAR_PARA', 'geral'))}</td>
 <td><div class="acoes" style="margin:0"><a class="btn sec" href="/empresas/{e(x['id'])}">Editar</a>{pausar}
-{botao(f"/empresas/{x['id']}/testar", "Testar alerta", "sec")}<a class="btn sec" href="/empresas/{e(x['id'])}/log">Log</a>
-<a class="btn sec" href="/empresas/{e(x['id'])}/duplicar" title="Mesmo login, outro perfil (ex.: outra empresa no mesmo usuário)">Duplicar (outro perfil)</a></div></td></tr>"""
+{botao(f"/empresas/{x['id']}/testar", "Testar alerta", "sec")}<a class="btn sec" href="/empresas/{e(x['id'])}/log">Log</a></div></td></tr>"""
     corpo = f"""<h2>Empresas</h2><div class="acoes" style="margin-bottom:12px"><a class="btn" href="/empresas/nova">+ Cadastrar empresa</a></div>
 <table><tr><th>Empresa</th><th>Situação</th><th class="ocultar">Alertas</th><th>Ações</th></tr>
 {linhas or '<tr><td colspan="4">Nenhuma empresa cadastrada.</td></tr>'}</table>"""
     return pagina("Empresas", corpo, "/empresas", aviso, erro)
-
-
-def form_duplicar(eid):
-    cfg = ler_env(EMPRESAS / f"{eid}.env")
-    corpo = f"""<h2>Duplicar empresa</h2><div class="form">
-<p>Cria uma nova empresa usando o <b>mesmo login</b> de <b>{e(cfg.get('EMPRESA_NOME', eid))}</b>
-({e(cfg.get('BLL_EMAIL', ''))} · {e(cfg.get('PLATAFORMA', 'bll').upper())}), mudando só o nome e o perfil escolhido após o login.
-A senha é copiada, não precisa digitar.</p>
-<form method="post" action="/empresas/{e(eid)}/duplicar"><input type="hidden" name="csrf" value="{CSRF}">
-<label>Nome da nova empresa</label><input class="campo" name="nome" required placeholder="ex.: VC COMERCIAL">
-<label>Perfil <small>(como aparece em “Escolha de perfil”, ex.: OPERADOR VC 000145)</small></label>
-<input class="campo" name="perfil" required>
-<div class="acoes"><button>Criar e iniciar monitor</button><a class="btn sec" href="/empresas">Cancelar</a></div></form></div>"""
-    return pagina("Duplicar", corpo, "/empresas")
-
-
-def duplicar_empresa(eid, f):
-    nome, perfil = f.get("nome", "").strip(), f.get("perfil", "").strip()
-    if not nome or not perfil:
-        return "Informe o nome e o perfil."
-    base = ler_env(EMPRESAS / f"{eid}.env")
-    novo = gerar_id(nome)
-    n = 2
-    while (EMPRESAS / f"{novo}.env").exists():
-        novo = f"{gerar_id(nome)[:27]}-{n}"
-        n += 1
-    v = {k: base[k] for k in base if not k.startswith("CLASSIFICACAO_")}
-    v.update({"EMPRESA_NOME": nome, "BLL_PERFIL": perfil})
-    gravar_env(EMPRESAS / f"{novo}.env", v)
-    garantir_servico()
-    sh("systemctl", "enable", f"monitor-bll@{novo}")
-    sh("systemctl", "restart", f"monitor-bll@{novo}")
-    return None
 
 
 def form_empresa(eid=None):
@@ -1088,9 +1054,6 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_classificacao(q))
             if p == "/buscar/itens":
                 return self.enviar(pg_itens(q))
-            m = re.fullmatch(r"/empresas/([a-z0-9-]+)/duplicar", p)
-            if m and (EMPRESAS / f"{m.group(1)}.env").exists():
-                return self.enviar(form_duplicar(m.group(1)))
             m = re.fullmatch(r"/empresas/([a-z0-9-]+)(/log)?", p)
             if m and (EMPRESAS / f"{m.group(1)}.env").exists():
                 if m.group(2):
@@ -1219,10 +1182,6 @@ class Painel(BaseHTTPRequestHandler):
             if p == "/telegram":
                 return self.enviar(pagina("Telegram", "<h2>Conversas encontradas</h2>" + descobrir(f.get("token", "").strip()) +
                                           '<p><a class="btn sec" href="/config">Voltar</a></p>', "/config"))
-            m = re.fullmatch(r"/empresas/([a-z0-9-]+)/duplicar", p)
-            if m and (EMPRESAS / f"{m.group(1)}.env").exists():
-                err = duplicar_empresa(m.group(1), f)
-                return self.enviar(pg_empresas(e(err), True)) if err else self.redirecionar("/empresas?ok=cadastrada")
             m = re.fullmatch(r"/empresas/([a-z0-9-]+)(?:/(pausar|retomar|testar|remover|reiniciar))?", p)
             if m and (EMPRESAS / f"{m.group(1)}.env").exists():
                 eid, acao = m.group(1), m.group(2)
