@@ -13,7 +13,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-venv python3-p
 echo "==> 2/6 Criando ambiente Python e baixando o navegador..."
 python3 -m venv venv
 ./venv/bin/pip install -q --upgrade pip
-./venv/bin/pip install -q playwright requests
+./venv/bin/pip install -q playwright requests pypdf pdfplumber
 sudo ./venv/bin/python -m playwright install-deps chromium
 ./venv/bin/python -m playwright install chromium
 

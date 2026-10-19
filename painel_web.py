@@ -338,6 +338,8 @@ O histórico e o login atuais são mantidos.</p>
                 pos = '<span class="tag">🥇 1º</span>'
             elif r[8]:
                 pos = f'<span class="tag aviso">{r[8]}º</span>'
+            elif r[9]:
+                pos = '<span class="tag erro">desclassificada</span>'
             else:
                 pos = '<span class="tag parado">sem lance</span>'
             try:
@@ -349,10 +351,10 @@ O histórico e o login atuais são mantidos.</p>
             url = "/classificacao?" + urllib.parse.urlencode({"empresa": x["id"], "processo": r[0], "promotor": r[1]})
             linhas += (f'<tr><td>{pos}</td><td>{e(x["nome"])} <span class="sub">{e(x["plat"])}</span></td>'
                        f'<td><a href="{url}"><b>{e(r[0])}</b></a><div class="sub ocultar">{e(r[1])}</div></td>'
-                       f'<td>Lote {e(r[2])}</td><td class="ocultar">{e(r[4])}</td>'
+                       f'<td>{"Item" if x["plat"] == "Portal de Compras" else "Lote"} {e(r[2])}</td><td class="ocultar">{e(r[4])}</td>'
                        f'<td>{e(r[9]) or "—"}</td><td class="ocultar">{lid}</td></tr>')
         tab_pos = ('<h2 style="margin-top:22px">Nossa posição nos lotes</h2>'
-                   '<table><tr><th>Posição</th><th>Empresa</th><th>Processo</th><th>Lote</th><th class="ocultar">Fase</th>'
+                   '<table><tr><th>Posição</th><th>Empresa</th><th>Processo</th><th>Lote/Item</th><th class="ocultar">Fase</th>'
                    f'<th>Nosso lance</th><th class="ocultar">Lance do 1º</th></tr>{linhas}</table>'
                    '<p class="sub">Só processos em andamento. Clique no processo para ver a classificação completa.</p>')
     corpo = (kpis + (f'<div class="msg erro">{aviso}</div>' if aviso else "") + tab_pos +
@@ -411,10 +413,63 @@ def resumo_classif(lotes):
     partes = []
     for r in lotes:
         if r[8]:
-            partes.append(f'<span class="tag {"" if r[8] == 1 else "aviso"}">L{e(r[2])}: {r[8]}º</span>')
-        elif r[9] == "" and r[7] and r[7] != "[]":
+            partes.append(f'<span class="tag {"" if r[8] == 1 else "aviso"}">{"It" if r[4] == "Ranking (PDF)" else "L"}{e(r[2])}: {r[8]}º</span>')
+        elif r[9]:
+            partes.append(f'<span class="tag erro">{"It" if r[4] == "Ranking (PDF)" else "L"}{e(r[2])}: desclass.</span>')
+        elif r[7] and r[7] != "[]":
             partes.append(f'<span class="tag parado">L{e(r[2])}: –</span>')
     return " ".join(partes)
+
+
+def salvar_ranking_pcp(eid, nome_arq, dados):
+    """Grava no banco da empresa a classificação lida do PDF 'Ranking nos Itens' do Portal de Compras."""
+    import pcp_ranking
+    if dados[:4] != b"%PDF":
+        return None, "O arquivo não é um PDF."
+    try:
+        itens = pcp_ranking.ranking_pdf(dados)
+        num, orgao = pcp_ranking.cabecalho(dados)
+    except Exception as ex:  # noqa: BLE001
+        return None, f"Não consegui ler o PDF ({ex})."
+    if not itens:
+        return None, "Não encontrei itens com classificação neste PDF. É o “Ranking nos Itens”?"
+    cfg = ler_env(EMPRESAS / f"{eid}.env")
+    pcp_ranking.classificar(itens, cfg.get("CLASSIFICACAO_NOME") or cfg.get("EMPRESA_NOME", ""), cfg.get("EMPRESA_CNPJ", ""))
+    (EMPRESAS / eid).mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(EMPRESAS / eid / "bll_monitor.db", timeout=10)
+    con.execute("""CREATE TABLE IF NOT EXISTS classificacao(
+        chave TEXT PRIMARY KEY, processo TEXT, promotor TEXT, lote TEXT, descricao TEXT, fase TEXT,
+        primeiro TEXT, melhor TEXT, ranking TEXT, nossa_pos INTEGER, nosso_lance TEXT, lido_em REAL, atualizado TEXT)""")
+    processo, promotor = num, orgao
+    m = re.search(r"(\d{5,})", nome_arq or "")
+    try:
+        achado = None
+        if m:
+            achado = con.execute("SELECT processo, promotor FROM processos WHERE url LIKE ?", (f"%ttCD_CHAVE={m.group(1)}%",)).fetchone()
+        if not achado and num:
+            achado = con.execute("SELECT processo, promotor FROM processos WHERE processo=?", (num,)).fetchone()
+        if achado:
+            processo, promotor = achado
+    except sqlite3.Error:
+        pass
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+    moeda = lambda v: ("R$ " + f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")) if v is not None else ""  # noqa: E731
+    for n, it in itens.items():
+        rk = [{"pos": x["pos"], "nome": x["nome"], "num": x["cnpj"], "valor": x["valor"] or 0, "excluido": x["excluido"],
+               "qtd": "", "marca": x.get("marca", ""), "tipo": x.get("tipo", "")} for x in it["ranking"]]
+        nossa = next((x for x in it["ranking"] if x["nossa"]), None)
+        lider = next((x for x in it["ranking"] if x["pos"] == 1), None)
+        con.execute("INSERT OR REPLACE INTO classificacao VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (f"pcp|{processo}|{promotor}|{n}", processo, promotor, n, it["descricao"][:200], "Ranking (PDF)",
+                     lider["nome"] if lider else "", moeda(lider["valor"]) if lider else "", json.dumps(rk, ensure_ascii=False),
+                     nossa["pos"] if nossa else None, moeda(nossa["valor"]) if nossa else "", 0, agora))
+    con.commit()
+    con.close()
+    return (processo, promotor), None
+
+
+def eh_pcp(eid):
+    return ler_env(EMPRESAS / f"{eid}.env").get("PLATAFORMA", "").lower() == "pcp"
 
 
 def pg_classificacao(q):
@@ -422,6 +477,7 @@ def pg_classificacao(q):
     if not (EMPRESAS / f"{eid}.env").exists():
         return pagina("Classificação", "<h2>Empresa não encontrada</h2>", "/processos")
     cfg_emp = ler_env(EMPRESAS / f"{eid}.env")
+    pcp = cfg_emp.get("PLATAFORMA", "").lower() == "pcp"
     nome = cfg_emp.get("EMPRESA_NOME", eid)
     nrm = lambda t: " ".join(unicodedata.normalize("NFKD", t or "").encode("ascii", "ignore").decode().upper().split())  # noqa: E731
     alvo = nrm(cfg_emp.get("CLASSIFICACAO_NOME") or nome)
@@ -433,16 +489,20 @@ def pg_classificacao(q):
             rank = []
         linhas = ""
         for x in rank:
-            nossa = bool(alvo) and alvo in nrm(x.get("nome"))
+            cnpj_emp = re.sub(r"\D", "", cfg_emp.get("EMPRESA_CNPJ", ""))
+            nossa = (bool(alvo) and alvo in nrm(x.get("nome"))) or (bool(cnpj_emp) and re.sub(r"\D", "", str(x.get("num"))) == cnpj_emp)
             cls = "nova" if nossa else ""
             pos = f'{x["pos"]}º' if x.get("pos") else "❌"
             val = "R$ " + f'{x["valor"]:,.2f}'.replace(",", "X").replace(".", ",").replace("X", ".")
             linhas += (f'<tr class="{cls}"><td><b>{pos}</b></td><td>{e(x["nome"])}{" ⭐" if nossa else ""}'
-                       f'<div class="sub">Participante {e(x["num"])}{" · desclassificada/inabilitada" if x.get("excluido") else ""}</div></td>'
+                       f'<div class="sub">{"CNPJ" if "/" in str(x["num"]) else "Participante"} {e(x["num"])}'
+                       f'{(" · marca " + e(x["marca"])) if x.get("marca") else ""}'
+                       f'{" · desclassificada/inabilitada" if x.get("excluido") else ""}</div></td>'
                        f'<td>{val}</td><td class="ocultar">{x.get("qtd", "")}</td></tr>')
-        sua = f'<span class="tag {"" if r[8] == 1 else "aviso"}">Sua posição: {r[8]}º · {e(r[9])}</span>' if r[8] else \
-            '<span class="tag parado">Sua empresa não aparece nos lances deste lote</span>'
-        blocos += (f'<h3>Lote {e(r[2])} – {e(r[3])} <span class="tag parado">{e(r[4])}</span></h3>'
+        sua = (f'<span class="tag {"" if r[8] == 1 else "aviso"}">Sua posição: {r[8]}º · {e(r[9])}</span>' if r[8] else
+               f'<span class="tag erro">Sua empresa: desclassificada/inabilitada · {e(r[9])}</span>' if r[9] else
+               '<span class="tag parado">Sua empresa não aparece nos lances deste lote</span>')
+        blocos += (f'<h3>{"Item" if pcp else "Lote"} {e(r[2])} – {e(r[3][:120])} <span class="tag parado">{e(r[4])}</span></h3>'
                    f'<p class="sub">{sua} · 1º na plataforma: {e(r[5])} {e(r[6])} · lido em {e(r[10])}</p>'
                    f'<table><tr><th>Pos.</th><th>Empresa</th><th>Melhor lance</th><th class="ocultar">Lances</th></tr>'
                    f'{linhas or "<tr><td colspan=4>Sem lances registrados.</td></tr>"}</table>')
@@ -481,7 +541,17 @@ def pg_processos(q):
     ops = "".join(f'<option value="{e(x["id"])}" {"selected" if x["id"] == emp else ""}>{e(x["nome"])}</option>'
                   for x in emps)
     sops = "".join(f'<option {"selected" if s == filtro else ""}>{e(s)}</option>' for s in sorted(sits) if s)
-    corpo = f"""<h2>Processos</h2><form class="linha" method="get">
+    pcps = [x for x in emps if eh_pcp(x["id"])]
+    envio = ""
+    if pcps:
+        ops_p = "".join(f'<option value="{e(x["id"])}">{e(x["nome"])}</option>' for x in pcps)
+        envio = f"""<details class="form" style="margin-bottom:14px;max-width:none"><summary style="cursor:pointer;font-weight:600">
+📊 Classificação do Portal de Compras – enviar PDF “Ranking nos Itens”</summary>
+<p class="sub">Na página pública do processo (portaldecompraspublicas.com.br → Processos → Acessar processo), em Documentos, baixe
+“Ranking nos Itens” e envie aqui. O painel mostra a classificação completa de cada item com a sua empresa destacada.</p>
+<form method="post" action="/classificacao/upload" enctype="multipart/form-data" class="linha"><input type="hidden" name="csrf" value="{CSRF}">
+<select name="empresa">{ops_p}</select><input type="file" name="arquivo" accept=".pdf" required><button>Enviar</button></form></details>"""
+    corpo = envio + f"""<h2>Processos</h2><form class="linha" method="get">
 <select name="empresa"><option value="">Todas as empresas</option>{ops}</select>
 <select name="situacao"><option value="">Todas as situações</option>
 <option value="andamento" {"selected" if filtro == "andamento" else ""}>Só em andamento</option>{sops}</select>
@@ -994,6 +1064,21 @@ class Painel(BaseHTTPRequestHandler):
         if not self.autorizado():
             return
         tam = int(self.headers.get("Content-Length", "0") or 0)
+        if self.path.rstrip("/") == "/classificacao/upload":
+            if tam > 20 * 1024 * 1024:
+                return self.enviar(pagina("Erro", "<h2>Arquivo grande demais</h2>"), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            eid = campos.get("empresa", "")
+            if not arqs or not (EMPRESAS / f"{eid}.env").exists():
+                return self.enviar(pagina("Erro", "<h2>Escolha a empresa e o PDF.</h2>", "/processos"))
+            chave, erro = salvar_ranking_pcp(eid, arqs[0][0], arqs[0][1])
+            if erro:
+                return self.enviar(pagina("Erro", f'<h2>Não deu certo</h2><div class="msg erro">{e(erro)}</div>'
+                                          '<p><a class="btn sec" href="/processos">Voltar</a></p>', "/processos"))
+            return self.redirecionar("/classificacao?" + urllib.parse.urlencode(
+                {"empresa": eid, "processo": chave[0], "promotor": chave[1]}))
         if self.path.rstrip("/") == "/analise/upload":
             if tam > 40 * 1024 * 1024:
                 return self.enviar(pg_editais("Arquivos grandes demais (máx. 40 MB).", True), 413)
