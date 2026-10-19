@@ -1508,28 +1508,66 @@ def pcp_baixar_ranking(page, url, chave):
     except Exception:
         pass
     botao = card.locator("button").first
+    achados = []
+    padrao = re.compile(r"https://arquivos\.portaldecompraspublicas\.com\.br/v1/download/[0-9a-fA-F]+")
+
+    def segurar(route):  # não deixa o navegador baixar: só anota o endereço do arquivo
+        achados.append(route.request.url)
+        route.abort()
+
+    def resposta(r):
+        if "arquivo/download" in r.url:
+            try:
+                achados.extend(padrao.findall(r.text()))
+            except Exception:
+                pass
+
+    ctx = page.context
+    ctx.route("https://arquivos.portaldecompraspublicas.com.br/**", segurar)
+    page.on("response", resposta)
     dados, erro = None, ""
-    for tentativa in range(3):  # o site às vezes ainda não está pronto para o clique
-        try:
-            page.mouse.move(300 + 50 * tentativa, 400)
-            botao.scroll_into_view_if_needed()
-            with page.expect_download(timeout=40000) as baixa:
+    try:
+        for tentativa in range(3):  # o site às vezes ainda não está pronto para o clique
+            try:
+                page.mouse.move(300 + 50 * tentativa, 400)
+                botao.scroll_into_view_if_needed()
                 botao.click(timeout=10000)
-            dados = Path(baixa.value.path()).read_bytes()
-            break
-        except Exception as ex:
-            erro = str(ex)[:120]
-            if page.is_closed():
-                log(f"PCP {chave}: a aba do ranking foi fechada durante o download ({erro}).")
-                return None
+            except Exception as ex:
+                erro = str(ex)[:120]
+            for _ in range(40):  # até 20 s esperando o endereço do arquivo
+                if achados:
+                    break
+                page.wait_for_timeout(500)
+            if achados:
+                break
             try:
                 page.keyboard.press("Escape")
             except Exception:
                 pass
-            page.wait_for_timeout(3000)
-    if not dados:
-        log(f"PCP {chave}: ranking não baixou após 3 tentativas ({erro}).")
+            page.wait_for_timeout(2000)
+    finally:
+        try:
+            ctx.unroute("https://arquivos.portaldecompraspublicas.com.br/**", segurar)
+            page.remove_listener("response", resposta)
+        except Exception:
+            pass
+    url = next((u for u in achados if padrao.match(u)), None)
+    if not url:
+        log(f"PCP {chave}: o site não gerou o arquivo do ranking ({erro or 'sem resposta ao clique'}).")
         return None
+    dados = None
+    try:  # baixa com a mesma sessão do navegador, sem abrir o PDF
+        r = ctx.request.get(url, timeout=90000)
+        dados = r.body() if r.ok else None
+    except Exception as ex:
+        erro = str(ex)[:120]
+    if not dados or dados[:4] != b"%PDF":
+        try:
+            r = requests.get(url, timeout=90)
+            dados = r.content if r.ok else None
+        except Exception as ex:
+            log(f"PCP {chave}: falha ao baixar o ranking ({ex} / {erro}).")
+            return None
     return dados if dados[:4] == b"%PDF" else None
 
 
