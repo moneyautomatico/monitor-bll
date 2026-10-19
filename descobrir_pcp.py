@@ -44,10 +44,11 @@ with sync_playwright() as p:
         print(f"[{st}] {t[:30]} {u}")
     jsons.clear()
 
-    el = pg.get_by_text(ALVO, exact=False).first
+    card = pg.locator(".step-card", has_text=ALVO).first
+    el = card.locator("button").first if card.count() else pg.get_by_text(ALVO, exact=False).first
     print(f"\n=== ELEMENTO '{ALVO}' ===")
     try:
-        print(el.evaluate("e => (e.closest('a,button,tr,li,div') || e).outerHTML.slice(0, 1500)"))
+        print(el.evaluate("e => (e.closest('.step-card') || e).outerHTML.slice(0, 600)"))
     except Exception as ex:  # noqa: BLE001
         print("não encontrado:", ex)
         nav.close()
