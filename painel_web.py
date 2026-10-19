@@ -302,13 +302,22 @@ O histórico e o login atuais são mantidos.</p>
 <div class="barra"><i style="width:{uso}%"></i></div></div></div>
 <div class="kpi"><div class="v">{livre} MB</div><div class="l">memória livre de {total_mem} MB · {vagas} navegador(es) simultâneos</div></div>
 </div>"""
-    cards = ""
+    cards, posicoes = "", []
+    ign = {t.strip().upper() for t in cfg.get("SITUACOES_IGNORADAS", "HOMOLOGADO,CANCELADO,REVOGADO,ANULADO,FRACASSADO,DESERTO").split(",")}
+    for x in emps:
+        ativos_proc = {(p[0], p[1]) for p in x["procs"] if (p[2] or "").upper() not in ign}
+        for r in classif(x["id"]):
+            if (r[0], r[1]) in ativos_proc and "CANCELAD" not in (r[4] or "").upper():
+                posicoes.append((x, r))
     for x in emps:
         cls, txt = tag_status(x)
+        mine = [r for (y, r) in posicoes if y["id"] == x["id"] and r[8]]
+        x["resumo_pos"] = (f'<div class="sub">📊 {sum(1 for r in mine if r[8] == 1)} lote(s) em 1º · '
+                           f'{sum(1 for r in mine if r[8] > 1)} em outras posições</div>') if mine else ""
         cards += f"""<div class="card {cls}"><div class="nome">{e(x['nome'])} <span class="tag parado">{e(x['plat'])}</span></div>
 <div style="margin:6px 0"><span class="tag {cls}">{e(txt)}</span></div>
 <div class="sub">{x['andamento']} processo(s) em andamento · {x['novas_hoje']} nova(s) hoje</div>
-<div class="sub">Última verificação: {e(x['ultima'] or '—')}{f" · ciclo {x['duracao']} s" if x['duracao'] else ""}</div>
+{x['resumo_pos']}<div class="sub">Última verificação: {e(x['ultima'] or '—')}{f" · ciclo {x['duracao']} s" if x['duracao'] else ""}</div>
 <div class="acoes"><a class="btn sec" href="/mensagens?empresa={e(x['id'])}">Mensagens</a>
 <a class="btn sec" href="/processos?empresa={e(x['id'])}">Processos</a>
 <a class="btn sec" href="/empresas/{e(x['id'])}">Editar</a></div></div>"""
@@ -318,7 +327,35 @@ O histórico e o login atuais são mantidos.</p>
                  "os navegadores simultâneos (se houver memória) ou o plano do servidor.")
     else:
         aviso = ""
-    corpo = (kpis + (f'<div class="msg erro">{aviso}</div>' if aviso else "") +
+    tab_pos = ""
+    if posicoes:
+        def ordem(it):
+            r = it[1]
+            return (r[8] is None, r[8] or 99, it[0]["nome"], r[0], r[2])
+        linhas = ""
+        for x, r in sorted(posicoes, key=ordem):
+            if r[8] == 1:
+                pos = '<span class="tag">🥇 1º</span>'
+            elif r[8]:
+                pos = f'<span class="tag aviso">{r[8]}º</span>'
+            else:
+                pos = '<span class="tag parado">sem lance</span>'
+            try:
+                rk = json.loads(r[7] or "[]")
+                lider = next((z for z in rk if z.get("pos") == 1), None)
+            except ValueError:
+                lider = None
+            lid = ("R$ " + f'{lider["valor"]:,.2f}'.replace(",", "X").replace(".", ",").replace("X", ".")) if lider else e(r[6])
+            url = "/classificacao?" + urllib.parse.urlencode({"empresa": x["id"], "processo": r[0], "promotor": r[1]})
+            linhas += (f'<tr><td>{pos}</td><td>{e(x["nome"])} <span class="sub">{e(x["plat"])}</span></td>'
+                       f'<td><a href="{url}"><b>{e(r[0])}</b></a><div class="sub ocultar">{e(r[1])}</div></td>'
+                       f'<td>Lote {e(r[2])}</td><td class="ocultar">{e(r[4])}</td>'
+                       f'<td>{e(r[9]) or "—"}</td><td class="ocultar">{lid}</td></tr>')
+        tab_pos = ('<h2 style="margin-top:22px">Nossa posição nos lotes</h2>'
+                   '<table><tr><th>Posição</th><th>Empresa</th><th>Processo</th><th>Lote</th><th class="ocultar">Fase</th>'
+                   f'<th>Nosso lance</th><th class="ocultar">Lance do 1º</th></tr>{linhas}</table>'
+                   '<p class="sub">Só processos em andamento. Clique no processo para ver a classificação completa.</p>')
+    corpo = (kpis + (f'<div class="msg erro">{aviso}</div>' if aviso else "") + tab_pos +
              f'<h2>Empresas</h2><div class="grid">{cards or "<p>Nenhuma empresa. <a href=/empresas/nova>Cadastrar</a></p>"}</div>')
     return pagina("Visão geral", corpo, "/", recarregar=True)
 
