@@ -365,7 +365,7 @@ O histórico e o login atuais são mantidos.</p>
 def pg_mensagens(q):
     emp, busca, so_novas = q.get("empresa", ""), q.get("q", ""), q.get("novas", "")
     emps = empresas()
-    ops = "".join(f'<option value="{e(x["id"])}" {"selected" if x["id"] == emp else ""}>{e(x["nome"])}</option>'
+    ops = "".join(f'<option value="{e(x["id"])}" {"selected" if x["id"] == emp else ""}>{e(x["nome"])} · {e(x["plat"])}</option>'
                   for x in emps)
     msgs = mensagens(emp, busca)
     if so_novas:
@@ -533,12 +533,12 @@ def pg_processos(q):
             if filtro and filtro != "andamento" and p[2] != filtro:
                 continue
             cls = "parado" if (p[2] or "").upper() in ign else ""
-            linhas += (f'<tr><td>{e(x["nome"])}</td><td><b>{e(p[0])}</b></td><td>{e(p[1])}</td>'
+            linhas += (f'<tr><td>{e(x["nome"])}<div><span class="tag parado">{e(x["plat"])}</span></div></td><td><b>{e(p[0])}</b></td><td>{e(p[1])}</td>'
                        f'<td><span class="tag {cls}">{e(p[2])}</span></td><td class="ocultar">{e(p[3])}</td>'
                        f'<td class="ocultar">{e(p[4])}</td>'
                        f'<td>{resumo_classif(cls_emp.get((p[0], p[1]), []))} '
                        f'{"<a class=sub href=/classificacao?" + urllib.parse.urlencode({"empresa": x["id"], "processo": p[0], "promotor": p[1]}) + ">ver</a>" if cls_emp.get((p[0], p[1])) else ""}</td></tr>')
-    ops = "".join(f'<option value="{e(x["id"])}" {"selected" if x["id"] == emp else ""}>{e(x["nome"])}</option>'
+    ops = "".join(f'<option value="{e(x["id"])}" {"selected" if x["id"] == emp else ""}>{e(x["nome"])} · {e(x["plat"])}</option>'
                   for x in emps)
     sops = "".join(f'<option {"selected" if s == filtro else ""}>{e(s)}</option>' for s in sorted(sits) if s)
     corpo = f"""<h2>Processos</h2><form class="linha" method="get">
@@ -546,7 +546,7 @@ def pg_processos(q):
 <select name="situacao"><option value="">Todas as situações</option>
 <option value="andamento" {"selected" if filtro == "andamento" else ""}>Só em andamento</option>{sops}</select>
 <button>Filtrar</button></form>
-<table><tr><th>Empresa</th><th>Processo</th><th>Órgão</th><th>Situação</th><th class="ocultar">Disputa</th><th class="ocultar">Atualizado na BLL</th><th>Classificação</th></tr>
+<table><tr><th>Empresa</th><th>Processo</th><th>Órgão</th><th>Situação</th><th class="ocultar">Disputa</th><th class="ocultar">Atualizado na plataforma</th><th>Classificação</th></tr>
 {linhas or '<tr><td colspan="7">Nenhum processo.</td></tr>'}</table>"""
     return pagina("Processos", corpo, "/processos")
 
