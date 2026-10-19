@@ -351,10 +351,10 @@ O histórico e o login atuais são mantidos.</p>
             url = "/classificacao?" + urllib.parse.urlencode({"empresa": x["id"], "processo": r[0], "promotor": r[1]})
             linhas += (f'<tr><td>{pos}</td><td>{e(x["nome"])} <span class="sub">{e(x["plat"])}</span></td>'
                        f'<td><a href="{url}"><b>{e(r[0])}</b></a><div class="sub ocultar">{e(r[1])}</div></td>'
-                       f'<td>{"Item" if x["plat"] == "Portal de Compras" else "Lote"} {e(r[2])}</td><td class="ocultar">{e(r[4])}</td>'
+                       f'<td>L{e(nlote(r[2]))}</td><td class="ocultar">{e(r[4])}</td>'
                        f'<td>{e(r[9]) or "—"}</td><td class="ocultar">{lid}</td></tr>')
         tab_pos = ('<h2 style="margin-top:22px">Nossa posição nos lotes</h2>'
-                   '<table><tr><th>Posição</th><th>Empresa</th><th>Processo</th><th>Lote/Item</th><th class="ocultar">Fase</th>'
+                   '<table><tr><th>Posição</th><th>Empresa</th><th>Processo</th><th>Lote</th><th class="ocultar">Fase</th>'
                    f'<th>Nosso lance</th><th class="ocultar">Lance do 1º</th></tr>{linhas}</table>'
                    '<p class="sub">Só processos em andamento. Clique no processo para ver a classificação completa.</p>')
     corpo = (kpis + (f'<div class="msg erro">{aviso}</div>' if aviso else "") + tab_pos +
@@ -409,13 +409,19 @@ def classif(eid, processo=None, promotor=None):
     return sorted(linhas, key=lambda r: num(r[2]))
 
 
+def nlote(n):
+    """'0001' -> '1' (lotes e itens sempre como L1, L2...)."""
+    n = str(n or "").strip()
+    return str(int(n)) if n.isdigit() else n
+
+
 def resumo_classif(lotes):
     partes = []
     for r in lotes:
         if r[8]:
-            partes.append(f'<span class="tag {"" if r[8] == 1 else "aviso"}">{"It" if r[4] == "Ranking (PDF)" else "L"}{e(r[2])}: {r[8]}º</span>')
+            partes.append(f'<span class="tag {"" if r[8] == 1 else "aviso"}">L{e(nlote(r[2]))}: {r[8]}º</span>')
         elif r[9]:
-            partes.append(f'<span class="tag erro">{"It" if r[4] == "Ranking (PDF)" else "L"}{e(r[2])}: desclass.</span>')
+            partes.append(f'<span class="tag erro">L{e(nlote(r[2]))}: desclass.</span>')
         elif r[7] and r[7] != "[]":
             partes.append(f'<span class="tag parado">L{e(r[2])}: –</span>')
     return " ".join(partes)
@@ -502,7 +508,7 @@ def pg_classificacao(q):
         sua = (f'<span class="tag {"" if r[8] == 1 else "aviso"}">Sua posição: {r[8]}º · {e(r[9])}</span>' if r[8] else
                f'<span class="tag erro">Sua empresa: desclassificada/inabilitada · {e(r[9])}</span>' if r[9] else
                '<span class="tag parado">Sua empresa não aparece nos lances deste lote</span>')
-        blocos += (f'<h3>{"Item" if pcp else "Lote"} {e(r[2])} – {e(r[3][:120])} <span class="tag parado">{e(r[4])}</span></h3>'
+        blocos += (f'<h3>L{e(nlote(r[2]))} – {e(r[3][:120])} <span class="tag parado">{e(r[4])}</span></h3>'
                    f'<p class="sub">{sua} · 1º na plataforma: {e(r[5])} {e(r[6])} · lido em {e(r[10])}</p>'
                    f'<table><tr><th>Pos.</th><th>Empresa</th><th>Melhor lance</th><th class="ocultar">Lances</th></tr>'
                    f'{linhas or "<tr><td colspan=4>Sem lances registrados.</td></tr>"}</table>')

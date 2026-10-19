@@ -821,12 +821,12 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
         if ant and not primeira_vez and nossa and pos != pos_ant:
             lider = next((r for r in ranking if r["pos"] == 1), None)
             if pos is None:
-                txt = f"Lote {lt['lote']}: sua empresa aparece como DESCLASSIFICADA/INABILITADA."
+                txt = f"L{lt['lote']}: sua empresa aparece como DESCLASSIFICADA/INABILITADA."
             elif pos_ant is None:
-                txt = f"Lote {lt['lote']}: sua empresa entrou na classificação em {pos}º lugar ({moeda_br(nossa['valor'])})."
+                txt = f"L{lt['lote']}: sua empresa entrou na classificação em {pos}º lugar ({moeda_br(nossa['valor'])})."
             else:
                 seta = "subiu" if pos < pos_ant else "caiu"
-                txt = f"Lote {lt['lote']}: você {seta} de {pos_ant}º para {pos}º ({moeda_br(nossa['valor'])})."
+                txt = f"L{lt['lote']}: você {seta} de {pos_ant}º para {pos}º ({moeda_br(nossa['valor'])})."
             if lider and pos != 1:
                 txt += f"\n1º: {lider['nome']} – {moeda_br(lider['valor'])}"
             txt += f"\nFase: {lt['fase']}"
@@ -1610,13 +1610,13 @@ def pcp_classificacao(db, page, p, primeira_vez):
                     json.dumps(rk, ensure_ascii=False), pos, moeda_br(nossa["valor"]) if nossa else "", time.time(), agora))
         if ant and not primeira_vez and nossa and (pos != ant[0] or moeda_br(nossa["valor"]) != ant[1]):
             if pos is None:
-                txt = f"Item {n}: sua empresa aparece como DESCLASSIFICADA/INABILITADA/REJEITADA."
+                txt = f"L{int(n) if str(n).isdigit() else n}: sua empresa aparece como DESCLASSIFICADA/INABILITADA/REJEITADA."
             elif ant[0] is None:
-                txt = f"Item {n}: sua empresa está em {pos}º lugar ({moeda_br(nossa['valor'])})."
+                txt = f"L{int(n) if str(n).isdigit() else n}: sua empresa está em {pos}º lugar ({moeda_br(nossa['valor'])})."
             elif pos != ant[0]:
-                txt = f"Item {n}: você {'subiu' if pos < ant[0] else 'caiu'} de {ant[0]}º para {pos}º ({moeda_br(nossa['valor'])})."
+                txt = f"L{int(n) if str(n).isdigit() else n}: você {'subiu' if pos < ant[0] else 'caiu'} de {ant[0]}º para {pos}º ({moeda_br(nossa['valor'])})."
             else:
-                txt = f"Item {n}: seu valor mudou para {moeda_br(nossa['valor'])} – continua em {pos}º."
+                txt = f"L{int(n) if str(n).isdigit() else n}: seu valor mudou para {moeda_br(nossa['valor'])} – continua em {pos}º."
             if lider and pos != 1:
                 txt += f"\n1º: {lider['nome']} – {moeda_br(lider['valor'])}"
             txt += f"\n{it['descricao'][:90]}"
