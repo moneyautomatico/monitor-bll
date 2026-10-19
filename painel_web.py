@@ -347,6 +347,77 @@ def pg_mensagens(q):
     return pagina("Mensagens", corpo, "/mensagens", recarregar=True)
 
 
+def classif(eid, processo=None, promotor=None):
+    db = EMPRESAS / eid / "bll_monitor.db"
+    if not db.exists():
+        return []
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        sql = "SELECT processo, promotor, lote, descricao, fase, primeiro, melhor, ranking, nossa_pos, nosso_lance, atualizado FROM classificacao"
+        args = ()
+        if processo is not None:
+            sql += " WHERE processo=? AND promotor=?"
+            args = (processo, promotor)
+        linhas = con.execute(sql, args).fetchall()
+        con.close()
+    except Exception:  # noqa: BLE001  (tabela ainda não existe)
+        return []
+    def num(x):
+        try:
+            return int(re.sub(r"\D", "", x) or 0)
+        except ValueError:
+            return 0
+    return sorted(linhas, key=lambda r: num(r[2]))
+
+
+def resumo_classif(lotes):
+    partes = []
+    for r in lotes:
+        if r[8]:
+            partes.append(f'<span class="tag {"" if r[8] == 1 else "aviso"}">L{e(r[2])}: {r[8]}º</span>')
+        elif r[9] == "" and r[7] and r[7] != "[]":
+            partes.append(f'<span class="tag parado">L{e(r[2])}: –</span>')
+    return " ".join(partes)
+
+
+def pg_classificacao(q):
+    eid, proc, prom = q.get("empresa", ""), q.get("processo", ""), q.get("promotor", "")
+    if not (EMPRESAS / f"{eid}.env").exists():
+        return pagina("Classificação", "<h2>Empresa não encontrada</h2>", "/processos")
+    cfg_emp = ler_env(EMPRESAS / f"{eid}.env")
+    nome = cfg_emp.get("EMPRESA_NOME", eid)
+    nrm = lambda t: " ".join(unicodedata.normalize("NFKD", t or "").encode("ascii", "ignore").decode().upper().split())  # noqa: E731
+    alvo = nrm(cfg_emp.get("CLASSIFICACAO_NOME") or nome)
+    blocos = ""
+    for r in classif(eid, proc, prom):
+        try:
+            rank = json.loads(r[7] or "[]")
+        except ValueError:
+            rank = []
+        linhas = ""
+        for x in rank:
+            nossa = bool(alvo) and alvo in nrm(x.get("nome"))
+            cls = "nova" if nossa else ""
+            pos = f'{x["pos"]}º' if x.get("pos") else "❌"
+            val = "R$ " + f'{x["valor"]:,.2f}'.replace(",", "X").replace(".", ",").replace("X", ".")
+            linhas += (f'<tr class="{cls}"><td><b>{pos}</b></td><td>{e(x["nome"])}{" ⭐" if nossa else ""}'
+                       f'<div class="sub">Participante {e(x["num"])}{" · desclassificada/inabilitada" if x.get("excluido") else ""}</div></td>'
+                       f'<td>{val}</td><td class="ocultar">{x.get("qtd", "")}</td></tr>')
+        sua = f'<span class="tag {"" if r[8] == 1 else "aviso"}">Sua posição: {r[8]}º · {e(r[9])}</span>' if r[8] else \
+            '<span class="tag parado">Sua empresa não aparece nos lances deste lote</span>'
+        blocos += (f'<h3>Lote {e(r[2])} – {e(r[3])} <span class="tag parado">{e(r[4])}</span></h3>'
+                   f'<p class="sub">{sua} · 1º na plataforma: {e(r[5])} {e(r[6])} · lido em {e(r[10])}</p>'
+                   f'<table><tr><th>Pos.</th><th>Empresa</th><th>Melhor lance</th><th class="ocultar">Lances</th></tr>'
+                   f'{linhas or "<tr><td colspan=4>Sem lances registrados.</td></tr>"}</table>')
+    corpo = (f'<h2>Classificação – {e(proc)}</h2><p class="sub">{e(nome)} · {e(prom)}</p>'
+             f'<p><a class="btn sec" href="/processos?empresa={e(eid)}">← Processos</a></p>'
+             + (blocos or '<div class="msg">Ainda não li a classificação deste processo. Ela aparece depois do próximo ciclo do monitor '
+                '(só para processos que já tiveram disputa).</div>') +
+             '<p class="sub">Calculada pelos “Registros da sessão do lote”: menor lance de cada empresa, '
+             'descontando as marcadas como desclassificadas/inabilitadas. Confira sempre na plataforma.</p>')
+    return pagina("Classificação", corpo, "/processos", recarregar=True)
+
+
 def pg_processos(q):
     emp, filtro = q.get("empresa", ""), q.get("situacao", "")
     emps = empresas()
@@ -355,6 +426,9 @@ def pg_processos(q):
     for x in emps:
         if emp and x["id"] != emp:
             continue
+        cls_emp = {}
+        for r in classif(x["id"]):
+            cls_emp.setdefault((r[0], r[1]), []).append(r)
         for p in sorted(x["procs"], key=lambda p: para_data(p[3] or ""), reverse=True):
             sits.add(p[2])
             if filtro == "andamento" and (p[2] or "").upper() in ign:
@@ -364,7 +438,9 @@ def pg_processos(q):
             cls = "parado" if (p[2] or "").upper() in ign else ""
             linhas += (f'<tr><td>{e(x["nome"])}</td><td><b>{e(p[0])}</b></td><td>{e(p[1])}</td>'
                        f'<td><span class="tag {cls}">{e(p[2])}</span></td><td class="ocultar">{e(p[3])}</td>'
-                       f'<td class="ocultar">{e(p[4])}</td></tr>')
+                       f'<td class="ocultar">{e(p[4])}</td>'
+                       f'<td>{resumo_classif(cls_emp.get((p[0], p[1]), []))} '
+                       f'{"<a class=sub href=/classificacao?" + urllib.parse.urlencode({"empresa": x["id"], "processo": p[0], "promotor": p[1]}) + ">ver</a>" if cls_emp.get((p[0], p[1])) else ""}</td></tr>')
     ops = "".join(f'<option value="{e(x["id"])}" {"selected" if x["id"] == emp else ""}>{e(x["nome"])}</option>'
                   for x in emps)
     sops = "".join(f'<option {"selected" if s == filtro else ""}>{e(s)}</option>' for s in sorted(sits) if s)
@@ -373,8 +449,8 @@ def pg_processos(q):
 <select name="situacao"><option value="">Todas as situações</option>
 <option value="andamento" {"selected" if filtro == "andamento" else ""}>Só em andamento</option>{sops}</select>
 <button>Filtrar</button></form>
-<table><tr><th>Empresa</th><th>Processo</th><th>Órgão</th><th>Situação</th><th class="ocultar">Disputa</th><th class="ocultar">Atualizado na BLL</th></tr>
-{linhas or '<tr><td colspan="6">Nenhum processo.</td></tr>'}</table>"""
+<table><tr><th>Empresa</th><th>Processo</th><th>Órgão</th><th>Situação</th><th class="ocultar">Disputa</th><th class="ocultar">Atualizado na BLL</th><th>Classificação</th></tr>
+{linhas or '<tr><td colspan="7">Nenhum processo.</td></tr>'}</table>"""
     return pagina("Processos", corpo, "/processos")
 
 
@@ -860,6 +936,8 @@ class Painel(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/analise/([a-z0-9-]+)", p)
             if m:
                 return self.enviar(pg_analise(m.group(1)))
+            if p == "/classificacao":
+                return self.enviar(pg_classificacao(q))
             if p == "/buscar/itens":
                 return self.enviar(pg_itens(q))
             m = re.fullmatch(r"/empresas/([a-z0-9-]+)(/log)?", p)

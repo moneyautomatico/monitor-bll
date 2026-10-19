@@ -241,6 +241,9 @@ def abrir_banco():
         processo TEXT, promotor TEXT, situacao TEXT, disputa TEXT,
         atualizada TEXT, url TEXT, visto_em TEXT, PRIMARY KEY(processo, promotor))""")
     db.execute("""CREATE TABLE IF NOT EXISTS estado(chave TEXT PRIMARY KEY, valor TEXT)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS classificacao(
+        chave TEXT PRIMARY KEY, processo TEXT, promotor TEXT, lote TEXT, descricao TEXT, fase TEXT,
+        primeiro TEXT, melhor TEXT, ranking TEXT, nossa_pos INTEGER, nosso_lance TEXT, lido_em REAL, atualizado TEXT)""")
     return db
 
 
@@ -643,6 +646,199 @@ def extrair_mensagens(dados, rotulo):
     return out
 
 
+# ----------------------------------------------------------------- classificação dos lotes (só leitura)
+JS_ABA_TODOS = """
+() => {
+  const b = [...document.querySelectorAll('button, a, li')].find(x => x.getClientRects().length > 0 &&
+      (x.innerText || '').trim().toUpperCase() === 'TODOS');
+  if (!b) return false;
+  b.click(); return true;
+}
+"""
+
+JS_LOTES = """
+() => {
+  const norm = t => (t || '').replace(/\\s+/g, ' ').trim().toUpperCase();
+  for (const t of document.querySelectorAll('table')) {
+    if (!t.getClientRects().length) continue;
+    const cab = [...t.querySelectorAll('thead th, tr:first-child th')].map(x => norm(x.innerText));
+    const iL = cab.findIndex(c => c.startsWith('LOTE')), iC = cab.findIndex(c => c.includes('COLOCADO'));
+    if (iL < 0 || iC < 0) continue;
+    const iD = cab.findIndex(c => c.startsWith('DESCRI')), iF = cab.findIndex(c => c === 'FASE' || c.startsWith('FASE'));
+    const iM = cab.findIndex(c => c.includes('MELHOR'));
+    const linhas = [];
+    [...t.querySelectorAll('tbody tr')].forEach((tr, idx) => {
+      const td = [...tr.querySelectorAll('td')];
+      if (td.length < cab.length - 1) return;
+      const v = i => i >= 0 && td[i] ? td[i].innerText.trim() : '';
+      if (!v(iL)) return;
+      linhas.push({idx, lote: v(iL), descricao: v(iD), fase: v(iF), primeiro: v(iC), melhor: v(iM),
+                   botoes: tr.querySelectorAll('button, a').length});
+    });
+    if (linhas.length) return linhas;
+  }
+  return [];
+}
+"""
+
+JS_ABRIR_REGISTRO = """
+(lote) => {
+  for (const t of document.querySelectorAll('table')) {
+    if (!t.getClientRects().length) continue;
+    const cab = [...t.querySelectorAll('thead th, tr:first-child th')].map(x => (x.innerText || '').trim().toUpperCase());
+    const iL = cab.findIndex(c => c.startsWith('LOTE'));
+    if (iL < 0 || !cab.some(c => c.includes('COLOCADO'))) continue;
+    for (const tr of t.querySelectorAll('tbody tr')) {
+      const td = [...tr.querySelectorAll('td')];
+      if (!td[iL] || td[iL].innerText.trim() !== lote) continue;
+      const bs = [...tr.querySelectorAll('button, a')].filter(b => b.getClientRects().length);
+      if (!bs.length) return false;
+      bs[bs.length - 1].click();   // último botão da linha = "Registros da sessão do lote"
+      return true;
+    }
+  }
+  return false;
+}
+"""
+
+FASES_VIVAS = ("DISPUTA", "RANDÔMICO", "RANDOMICO", "FECHADO", "DESEMPATE", "ABERTO")
+RE_PART = re.compile(r"^(.*?)\s*\(PARTICIPANTE\s*(\d+)\)\s*$", re.I)
+
+
+def valor_br(txt):
+    t = re.sub(r"[^\d,.-]", "", txt or "")
+    if not t:
+        return None
+    try:
+        return float(t.replace(".", "").replace(",", "."))
+    except ValueError:
+        return None
+
+
+def moeda_br(v):
+    return "R$ " + f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if v is not None else "—"
+
+
+def _norm(t):
+    import unicodedata
+    return " ".join(unicodedata.normalize("NFKD", t or "").encode("ascii", "ignore").decode().upper().split())
+
+
+def montar_ranking(linhas, melhor_tabela):
+    """linhas = [[horário, movimento, autor, descrição], ...] do 'Registros da sessão do lote'."""
+    lances, excluidos = {}, set()
+    for c in linhas:
+        if len(c) < 4:
+            continue
+        mov, autor, desc = c[1].upper(), c[2], c[3]
+        m = RE_PART.match(autor.strip())
+        if not m:
+            continue
+        nome, num = m.group(1).strip(), m.group(2)
+        if mov.strip() == "LANCE":
+            v = valor_br(desc)
+            if v is not None:
+                lances.setdefault(num, {"nome": nome, "num": num, "lances": []})["lances"].append(v)
+        elif re.search(r"DESCLASSIF|INABILIT|RECUSAD|EXCLU", _norm(mov + " " + desc)):
+            excluidos.add(num)
+        elif re.search(r"(RE)?CLASSIFICAD|HABILITAD|REVERT|RETORN", _norm(mov + " " + desc)):
+            excluidos.discard(num)
+    if not lances:
+        return []
+    todos = [v for x in lances.values() for v in x["lances"]]
+    melhor = valor_br(melhor_tabela)
+    maior_ganha = melhor is not None and abs(melhor - max(todos)) < 0.005 and abs(melhor - min(todos)) >= 0.005
+    for x in lances.values():
+        x["valor"] = max(x["lances"]) if maior_ganha else min(x["lances"])
+        x["excluido"] = x["num"] in excluidos
+    ordem = sorted(lances.values(), key=lambda x: (x["excluido"], -x["valor"] if maior_ganha else x["valor"]))
+    pos = 0
+    out = []
+    for x in ordem:
+        if not x["excluido"]:
+            pos += 1
+        out.append({"pos": pos if not x["excluido"] else None, "nome": x["nome"], "num": x["num"],
+                    "valor": x["valor"], "excluido": x["excluido"], "qtd": len(x["lances"])})
+    return out
+
+
+def eh_nossa(nome):
+    alvo = _norm(CFG.get("CLASSIFICACAO_NOME") or CFG.get("EMPRESA_NOME", ""))
+    return bool(alvo) and alvo in _norm(nome)
+
+
+def ler_classificacao(db, page, p, primeira_vez, diag=False):
+    """Lê a classificação de cada lote do processo (já com a sala de disputa aberta). Retorna alertas novos."""
+    if page.evaluate(JS_ABA_TODOS):
+        page.wait_for_timeout(1800)
+    lotes = avaliar(page, JS_LOTES) or []
+    if diag:
+        (DIAG / f"04_lotes_{p['processo'].replace('/', '-')}.json").write_text(
+            json.dumps(lotes, ensure_ascii=False, indent=1), encoding="utf-8")
+    novas, agora = [], datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    for lt in lotes:
+        chave = hash_msg(p["processo"], p["promotor"], lt["lote"])
+        ant = db.execute("SELECT fase, primeiro, melhor, nossa_pos, lido_em, ranking FROM classificacao WHERE chave=?",
+                         (chave,)).fetchone()
+        viva = any(f in lt["fase"].upper() for f in FASES_VIVAS)
+        mudou = not ant or (ant[0], ant[1], ant[2]) != (lt["fase"], lt["primeiro"], lt["melhor"])
+        velho = not ant or time.time() - (ant[4] or 0) > (120 if viva else 6 * 3600)
+        if "CANCELAD" in lt["fase"].upper() or not (mudou or velho or diag):
+            continue
+        if not page.evaluate(JS_ABRIR_REGISTRO, lt["lote"]):
+            continue
+        dados = None
+        for _ in range(20):
+            page.wait_for_timeout(500)
+            if page.evaluate("""() => [...document.querySelectorAll('.modal')].some(m =>
+                  m.getClientRects().length > 0 && /registros da sess/i.test(m.innerText) && m.querySelector('table'))"""):
+                page.wait_for_timeout(800)
+                dados = page.evaluate(JS_LER_MODAL)
+                break
+        if not page.evaluate(JS_FECHAR_MODAL):
+            page.keyboard.press("Escape")
+        page.wait_for_timeout(500)
+        if not dados:
+            log(f"{p['processo']} lote {lt['lote']}: registros da sessão não abriram.")
+            continue
+        if diag:
+            (DIAG / f"05_registros_{p['processo'].replace('/', '-')}_lote{lt['lote']}.json").write_text(
+                json.dumps(dados, ensure_ascii=False, indent=1), encoding="utf-8")
+        linhas = []
+        for t in dados.get("tabelas", []):
+            if any("MOVIMENTO" in c for c in t["cab"]):
+                linhas += t["linhas"]
+        ranking = montar_ranking(linhas, lt["melhor"])
+        nossa = next((r for r in ranking if eh_nossa(r["nome"])), None)
+        pos = nossa["pos"] if nossa else None
+        db.execute("INSERT OR REPLACE INTO classificacao VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (chave, p["processo"], p["promotor"], lt["lote"], lt["descricao"], lt["fase"], lt["primeiro"],
+                    lt["melhor"], json.dumps(ranking, ensure_ascii=False), pos,
+                    moeda_br(nossa["valor"]) if nossa else "", time.time(), agora))
+        db.commit()
+        pos_ant = ant[3] if ant else None
+        if ant and not primeira_vez and nossa and pos != pos_ant:
+            lider = next((r for r in ranking if r["pos"] == 1), None)
+            if pos is None:
+                txt = f"Lote {lt['lote']}: sua empresa aparece como DESCLASSIFICADA/INABILITADA."
+            elif pos_ant is None:
+                txt = f"Lote {lt['lote']}: sua empresa entrou na classificação em {pos}º lugar ({moeda_br(nossa['valor'])})."
+            else:
+                seta = "subiu" if pos < pos_ant else "caiu"
+                txt = f"Lote {lt['lote']}: você {seta} de {pos_ant}º para {pos}º ({moeda_br(nossa['valor'])})."
+            if lider and pos != 1:
+                txt += f"\n1º: {lider['nome']} – {moeda_br(lider['valor'])}"
+            txt += f"\nFase: {lt['fase']}"
+            mid = hash_msg(p["processo"], p["promotor"], "Classificação", agora, txt)
+            db.execute("INSERT OR IGNORE INTO mensagens VALUES(?,?,?,?,?,?,?,?,?)",
+                       (mid, p["processo"], p["promotor"], "Classificação", agora, plataforma_nome(), txt, agora, 0))
+            novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": "📊 Classificação",
+                          "horario": agora, "autor": plataforma_nome(), "texto": txt, "id": mid})
+        time.sleep(random.uniform(0.8, 1.8))
+    db.commit()
+    return novas
+
+
 # ----------------------------------------------------------------- ciclo
 def processar(db, page, primeira_vez, diag=False):
     procs = ler_processos(page, diag)
@@ -682,8 +878,7 @@ def processar(db, page, primeira_vez, diag=False):
         info = abrir_menu_chat(page)
         if not info:
             log(f"{p['processo']}: botão de mensagens não encontrado (rode --diagnostico).")
-            continue
-        for item in info["itens"]:
+        for item in (info or {}).get("itens", []):
             rot, qtd = item["rotulo"], item["qtd"]
             chave = f'{p["processo"]}|{p["promotor"]}'
             ant = db.execute("SELECT qtd FROM contadores WHERE processo=? AND escopo=?",
@@ -712,6 +907,11 @@ def processar(db, page, primeira_vez, diag=False):
             db.execute("INSERT OR REPLACE INTO contadores VALUES(?,?,?)", (chave, rot, qtd))
             db.commit()
             time.sleep(random.uniform(1.0, 2.5))  # ritmo humano
+        try:
+            page.keyboard.press("Escape")  # fecha o menu de mensagens, se aberto
+            novas += ler_classificacao(db, page, p, primeira_vez, diag)
+        except Exception as ex:  # a classificação nunca pode atrapalhar as mensagens
+            log(f"{p['processo']}: não consegui ler a classificação ({ex}).")
 
     # quadro de notificações da página inicial
     notifs = ler_notificacoes(page) or []
