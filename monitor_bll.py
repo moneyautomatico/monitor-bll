@@ -361,7 +361,7 @@ def login_automatico(page):
     if len(senha) != 6 or not senha.isdigit():
         log("Login: BLL_SENHA deve ter 6 números (o teclado da BLL aceita 6 dígitos).")
         return "falhou"
-    page.goto(f"{BASE}/Home/Login", wait_until="networkidle")
+    ir(page, f"{BASE}/Home/Login")
     page.wait_for_timeout(2500)  # dá tempo do reCAPTCHA invisível carregar
     fechar_avisos(page)
     campo = page.locator("#Email")
@@ -397,7 +397,7 @@ def login_automatico(page):
         log(f"Login não concluído. Janela na tela: {erro.strip()[:300]}")
         salvar_diag(page, "login_falhou")
         return "falhou"
-    page.goto(URL_INICIO, wait_until="networkidle")
+    ir(page, URL_INICIO)
     return "ok" if logado(page) else "falhou"
 
 
@@ -411,7 +411,7 @@ def salvar_diag(page, nome):
 def trocar_perfil(page):
     """Abre 'Perfis' (como no menu do usuário) e escolhe o perfil configurado."""
     perfil = CFG.get("BLL_PERFIL", "OPERADOR")
-    page.goto(URL_INICIO, wait_until="networkidle")
+    ir(page, URL_INICIO)
     page.wait_for_timeout(1000)
     if not page.evaluate("() => typeof showProfiles === 'function' && (showProfiles(), true)"):
         log("Não achei a opção 'Perfis' para trocar de perfil.")
@@ -453,7 +453,7 @@ JS_LINHAS_PROCESSOS = """
 
 def ler_processos(page, diag=False):
     """Lista em Processos > Propostas, com o link da Disputa de cada um."""
-    page.goto(URL_PROPOSTAS, wait_until="networkidle")
+    ir(page, URL_PROPOSTAS)
     if "errorview" in page.url.lower():  # perfil errado (ex.: Representante Legal)
         log("BLL recusou a página de processos para este perfil; trocando de perfil...")
         if not trocar_perfil(page):
@@ -461,7 +461,7 @@ def ler_processos(page, diag=False):
             log("Refazendo o login para escolher o perfil certo...")
             page.context.clear_cookies()
             log(f"Login automático: {login_automatico(page)}")
-        page.goto(URL_PROPOSTAS, wait_until="networkidle")
+        ir(page, URL_PROPOSTAS)
     if not logado(page):
         return None
     page.wait_for_timeout(1500)
@@ -491,7 +491,7 @@ def ler_processos(page, diag=False):
 
 def ler_notificacoes(page):
     """Quadro 'Notificações' da página inicial do participante."""
-    page.goto(URL_INICIO, wait_until="networkidle")
+    ir(page, URL_INICIO)
     if not logado(page):
         return None
     page.wait_for_timeout(1000)
@@ -673,7 +673,7 @@ def processar(db, page, primeira_vez, diag=False):
     log(f"{len(procs)} processos na lista, {len(ativos)} em andamento.")
 
     for p in ativos:
-        page.goto(p["url"], wait_until="networkidle")
+        ir(page, p["url"])
         if not logado(page):
             return "deslogado"
         page.wait_for_timeout(1500)
@@ -848,7 +848,7 @@ def login_licitanet(page):
     usuario, senha = CFG.get("BLL_EMAIL", ""), CFG.get("BLL_SENHA", "")
     if not usuario or not senha:
         return "sem_credenciais"
-    page.goto(LN_LOGIN, wait_until="networkidle")
+    ir(page, LN_LOGIN)
     page.wait_for_timeout(2000)
     if "login" in page.url.lower():
         campo = page.locator("input[type=text]:visible, input[type=email]:visible, input:not([type]):visible").first
@@ -937,7 +937,7 @@ JS_LN_ESTADO_HOME = """
 
 
 def ln_ler_processos(page, diag=False):
-    page.goto(CFG.get("_LN_HOME") or f"{LN_PORTAL}/home-avulso", wait_until="networkidle")
+    ir(page, CFG.get("_LN_HOME") or f"{LN_PORTAL}/home-avulso")
     est = "carregando"
     for _ in range(15):
         page.wait_for_timeout(1000)
@@ -1012,13 +1012,13 @@ def processar_licitanet(db, page, primeira_vez, diag=False):
 
     for p in ativos:
         if not p["url"]:
-            page.goto(CFG.get("_LN_HOME") or f"{LN_PORTAL}/home-avulso", wait_until="networkidle")
+            ir(page, CFG.get("_LN_HOME") or f"{LN_PORTAL}/home-avulso")
             page.wait_for_timeout(2000)
             p["url"] = ln_url_sala(page, p)
         if not p["url"]:
             log(f"{p['processo']}: não achei a sala de disputa (rode --diagnostico).")
             continue
-        page.goto(p["url"], wait_until="networkidle")
+        ir(page, p["url"])
         page.wait_for_timeout(2500)
         if not ln_logado(page):
             return "deslogado"
@@ -1064,6 +1064,22 @@ def processar_licitanet(db, page, primeira_vez, diag=False):
         log("Licitanet: nenhum processo lido ainda; aguardando para registrar o histórico.")
         return "ok"
     return notificar(db, novas, primeira_vez, len(ativos), agora)
+
+
+def ir(page, url, tentativas=2):
+    """Abre a página sem depender de a rede ficar 100% parada (alguns sites nunca param)."""
+    for i in range(tentativas):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            break
+        except Exception as e:
+            if i == tentativas - 1 or "Timeout" not in str(e):
+                raise
+            log(f"Página demorou para abrir ({url[:60]}…); tentando de novo.")
+    try:
+        page.wait_for_load_state("networkidle", timeout=20000)
+    except Exception:
+        pass  # rede nunca parou: segue com o que já carregou
 
 
 def avaliar(page, js, arg=None, tentativas=4):
@@ -1152,12 +1168,12 @@ def login_pcp(page):
     usuario, senha = CFG.get("BLL_EMAIL", ""), CFG.get("BLL_SENHA", "")
     if not usuario or not senha:
         return "sem_credenciais"
-    page.goto(f"{PCP_BASE}/", wait_until="networkidle")
+    ir(page, f"{PCP_BASE}/")
     page.wait_for_timeout(2500)
     if pcp_estado(page) == "ok":
         return "ok"
     if pcp_estado(page) != "login":
-        page.goto(f"{PCP_BASE}/4/NaoAssinante/DashBoard/", wait_until="networkidle")
+        ir(page, f"{PCP_BASE}/4/NaoAssinante/DashBoard/")
         page.wait_for_timeout(2000)
     campo = page.locator("#username, input[name=username], input[type=text]:visible, input[type=email]:visible").first
     try:
@@ -1192,7 +1208,7 @@ def login_pcp(page):
 def pcp_ler_processos(page, diag=False):
     procs, vistos = [], set()
     for caminho in PCP_LISTAS:
-        page.goto(PCP_BASE + caminho, wait_until="networkidle")
+        ir(page, PCP_BASE + caminho)
         page.wait_for_timeout(1500)
         if pcp_estado(page) != "ok":
             return None
@@ -1240,7 +1256,7 @@ def processar_pcp(db, page, primeira_vez, diag=False):
     for p in procs:
         if not p["url"]:
             continue
-        page.goto(p["url"], wait_until="networkidle")
+        ir(page, p["url"])
         page.wait_for_timeout(1500)
         if pcp_estado(page) == "login":
             return "deslogado"
@@ -1342,7 +1358,7 @@ def modo_login():
         page.goto(f"{BASE}/Home/Login")
         print("\nEntre na BLL na janela que abriu (usuário, senha e, se pedir, o perfil de PARTICIPANTE).")
         input("Quando estiver vendo a tela de Notificações/Processos, volte aqui e tecle ENTER... ")
-        page.goto(URL_PROPOSTAS, wait_until="networkidle")
+        ir(page, URL_PROPOSTAS)
         print("Login salvo." if logado(page) else "Ainda parece deslogado. Tente de novo.")
         ctx.close()
 
@@ -1387,6 +1403,7 @@ def rodar(uma_vez=False, visivel=False, diag=False):
     intervalo = max(1.0, float(CFG["INTERVALO_MINUTOS"].replace(",", ".")))  # mínimo 1 minuto
     avisou_logout = False
     falhas_login = 0
+    erros_seguidos = 0
     gerar_painel(db, "Iniciando")
     if CFG.get("PLATAFORMA", "bll").lower() == "licitanet":
         fn_processar, fn_login = processar_licitanet, login_licitanet
@@ -1438,10 +1455,15 @@ def rodar(uma_vez=False, visivel=False, diag=False):
                     else:
                         avisou_logout = False
                         falhas_login = 0
+                        erros_seguidos = 0
                         gerar_painel(db, "Monitor ativo")
                 except Exception as e:  # nunca derrubar o loop
                     log(f"Erro no ciclo: {e!r}")
-                    gerar_painel(db, f"Erro no último ciclo: {e}")
+                    erros_seguidos += 1
+                    if "Timeout" in str(e) and erros_seguidos < 3:
+                        gerar_painel(db, "⏳ Site da plataforma lento no último ciclo – tentando de novo")
+                    else:
+                        gerar_painel(db, f"Erro no último ciclo: {e}")
             else:
                 gerar_painel(db, "Fora do horário de monitoramento")
         try:
