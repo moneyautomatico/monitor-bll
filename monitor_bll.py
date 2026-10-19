@@ -1489,7 +1489,7 @@ def pcp_url_publica(db, page, p):
 def pcp_baixar_ranking(page, url, chave):
     """Abre a página pública do processo (logado) e baixa o PDF 'Ranking nos Itens'. Só leitura."""
     ir(page, url)
-    page.wait_for_timeout(5000)
+    page.wait_for_timeout(8000)
     for rot in ("Rejeitar", "Aceitar"):
         try:
             page.get_by_text(rot, exact=True).first.click(timeout=2000)
@@ -1527,7 +1527,12 @@ def pcp_baixar_ranking(page, url, chave):
     page.on("response", resposta)
     dados, erro = None, ""
     try:
-        for tentativa in range(3):  # o site às vezes ainda não está pronto para o clique
+        for tentativa in range(4):  # o site às vezes ainda não está pronto para o clique
+            if tentativa == 3:  # última chance: recarrega a página e espera mais
+                ir(page, url)
+                page.wait_for_timeout(10000)
+                card = page.locator(".step-card", has_text="Ranking nos Itens").first
+                botao = card.locator("button").first
             try:
                 page.mouse.move(300 + 50 * tentativa, 400)
                 botao.scroll_into_view_if_needed()
