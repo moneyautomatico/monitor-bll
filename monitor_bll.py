@@ -1520,10 +1520,10 @@ def pcp_classificacao(db, page, p, primeira_vez):
     import pcp_ranking
     url = pcp_url_publica(db, page, p)
     if not url:
-        return []
+        return None
     dados = pcp_baixar_ranking(page, url, p["chave"])
     if not dados:
-        return []
+        return None
     itens = pcp_ranking.classificar(pcp_ranking.ranking_pdf(dados),
                                     CFG.get("CLASSIFICACAO_NOME") or CFG.get("EMPRESA_NOME", ""), CFG.get("EMPRESA_CNPJ", ""))
     agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
@@ -1614,11 +1614,14 @@ def processar_pcp(db, page, primeira_vez, diag=False):
         ultimo = float(estado(db, k) or 0)
         if time.time() - ultimo < 30 * 60 and not diag:
             continue
+        r = None
         try:
-            novas += pcp_classificacao(db, page, p, primeira_vez)
+            r = pcp_classificacao(db, page, p, primeira_vez)
         except Exception as ex:  # nunca atrapalha mensagens/documentos
             log(f"PCP {p['processo']}: erro ao ler classificação ({ex}).")
-        estado(db, k, str(time.time()))
+        novas += r or []
+        # deu certo: próxima leitura em 30 min; falhou: tenta de novo em 10 min
+        estado(db, k, str(time.time() if r is not None else time.time() - 20 * 60))
     return notificar(db, novas, primeira_vez, len(procs), agora)
 
 
