@@ -917,7 +917,7 @@ def processar(db, page, primeira_vez, diag=False):
     # histórico: classificação final dos processos já encerrados (lida uma única vez, poucos por ciclo)
     lidos_hist = 0
     for p in procs:
-        if lidos_hist >= int(CFG.get("HISTORICO_POR_CICLO", "2") or 2):
+        if lidos_hist >= int(CFG.get("HISTORICO_POR_CICLO", "8") or 8):
             break
         if p["situacao"].upper() not in ignorar or not p["url"] or "CANCELAD" in p["situacao"].upper():
             continue
