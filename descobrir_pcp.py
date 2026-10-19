@@ -24,8 +24,11 @@ def texto_pdf(dados):
 
 
 with sync_playwright() as p:
-    nav = p.chromium.launch(headless=True)
-    ctx = nav.new_context(accept_downloads=True)
+    nav = p.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"])
+    ctx = nav.new_context(accept_downloads=True, locale="pt-BR", viewport={"width": 1366, "height": 800},
+                          user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+    ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     pg = ctx.new_page()
 
     def resp(r):
@@ -34,6 +37,8 @@ with sync_playwright() as p:
             jsons.append((r.status, r.url, tipo))
 
     ctx.on("response", resp)
+    erros = []
+    pg.on("pageerror", lambda ex: erros.append(str(ex)[:150]))
     pg.goto(URL, wait_until="domcontentloaded", timeout=60000)
     try:
         pg.wait_for_load_state("networkidle", timeout=20000)
@@ -52,6 +57,11 @@ with sync_playwright() as p:
         except Exception:  # noqa: BLE001
             pass
     pg.wait_for_timeout(8000)  # espera o site ficar interativo
+    pg.mouse.move(400, 400)
+    pg.mouse.wheel(0, 600)
+    pg.wait_for_timeout(2000)
+    print("Angular ativo:", pg.evaluate("() => !!(window.ng || document.querySelector('[ng-version]'))"),
+          "| erros de script:", erros[:3])
     for _ in range(3):  # fecha janelas como "Aviso de licitações"
         pg.keyboard.press("Escape")
         pg.evaluate("""() => document.querySelectorAll('.modal .close, .modal [aria-label*=lose], .cdk-overlay-backdrop, [class*=close-button]')
@@ -76,7 +86,7 @@ with sync_playwright() as p:
     try:
         with pg.expect_download(timeout=30000) as baixa:
             el.scroll_into_view_if_needed()
-            el.evaluate("b => b.click()")
+            el.click(timeout=10000)
     except Exception:  # noqa: BLE001
         pass
     pg.wait_for_timeout(3000)
