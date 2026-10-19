@@ -1704,6 +1704,11 @@ def processar_pcp(db, page, primeira_vez, diag=False):
         ultimo = float(estado(db, k) or 0)
         if time.time() - ultimo < 30 * 60 and not diag:
             continue
+        encerrado = re.search(r"finaliz|homolog|encerrad|fracass|desert|revog|anulad|cancel", (p.get("situacao") or "").lower())
+        ja_lido = db.execute("SELECT 1 FROM classificacao WHERE processo=? AND promotor=? LIMIT 1",
+                             (p["processo"], p["promotor"])).fetchone()
+        if encerrado and ja_lido and not diag:  # processo encerrado: a classificação final já está guardada
+            continue
         r = None
         try:
             r = pcp_classificacao(db, page, p, primeira_vez)
