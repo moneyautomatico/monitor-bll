@@ -1519,7 +1519,13 @@ def pcp_baixar_ranking(page, url, chave):
             break
         except Exception as ex:
             erro = str(ex)[:120]
-            page.keyboard.press("Escape")
+            if page.is_closed():
+                log(f"PCP {chave}: a aba do ranking foi fechada durante o download ({erro}).")
+                return None
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
             page.wait_for_timeout(3000)
     if not dados:
         log(f"PCP {chave}: ranking não baixou após 3 tentativas ({erro}).")
@@ -1533,7 +1539,14 @@ def pcp_classificacao(db, page, p, primeira_vez):
     url = pcp_url_publica(db, page, p)
     if not url:
         return None
-    dados = pcp_baixar_ranking(page, url, p["chave"])
+    aba = page.context.new_page()  # aba própria: se algo der errado, não afeta a janela principal
+    try:
+        dados = pcp_baixar_ranking(aba, url, p["chave"])
+    finally:
+        try:
+            aba.close()
+        except Exception:
+            pass
     if not dados:
         return None
     itens = pcp_ranking.classificar(pcp_ranking.ranking_pdf(dados),
