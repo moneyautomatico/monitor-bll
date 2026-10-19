@@ -1504,13 +1504,25 @@ def pcp_baixar_ranking(page, url, chave):
         log(f"PCP {chave}: sem 'Ranking nos Itens' na página pública ainda ({page.url}).")
         return None
     try:
-        with page.expect_download(timeout=120000) as baixa:
-            card.locator("button").first.scroll_into_view_if_needed()
-            card.locator("button").first.click(timeout=10000)
-        caminho = baixa.value.path()
-        dados = Path(caminho).read_bytes()
-    except Exception as ex:
-        log(f"PCP {chave}: ranking não baixou ({ex}).")
+        page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        pass
+    botao = card.locator("button").first
+    dados, erro = None, ""
+    for tentativa in range(3):  # o site às vezes ainda não está pronto para o clique
+        try:
+            page.mouse.move(300 + 50 * tentativa, 400)
+            botao.scroll_into_view_if_needed()
+            with page.expect_download(timeout=40000) as baixa:
+                botao.click(timeout=10000)
+            dados = Path(baixa.value.path()).read_bytes()
+            break
+        except Exception as ex:
+            erro = str(ex)[:120]
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(3000)
+    if not dados:
+        log(f"PCP {chave}: ranking não baixou após 3 tentativas ({erro}).")
         return None
     return dados if dados[:4] == b"%PDF" else None
 
