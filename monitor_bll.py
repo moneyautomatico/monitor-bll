@@ -25,6 +25,7 @@ import re
 import sqlite3
 import sys
 import time
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
@@ -1432,12 +1433,62 @@ def pcp_ler_processos(page, diag=False):
     return procs
 
 
-PCP_PUBLICO = "https://www.portaldecompraspublicas.com.br/processos/x/x/x-{chave}"
+PCP_SITE = "https://www.portaldecompraspublicas.com.br"
+JS_ACHAR_PUBLICO = r"""
+(chave) => {
+  let html = document.documentElement.outerHTML.replace(/&amp;/g, '&');
+  try { html = decodeURIComponent(html); } catch (e) { html = html.replace(/%2F/gi, '/').replace(/%3A/gi, ':'); }
+  const re = new RegExp(String.raw`https?://(?:www\.)?portaldecompraspublicas\.com\.br/processos/[^\s"'<>&?#]*-` + chave + '(?![0-9])', 'g');
+  const m = html.match(re);
+  if (m) return m[0];
+  const a = [...document.querySelectorAll('a[href*="/processos/"]')].map(x => x.href).find(h => new RegExp('-' + chave + '/?$').test(h));
+  return a || '';
+}
+"""
 
 
-def pcp_baixar_ranking(page, chave):
+def pcp_url_publica(db, page, p):
+    """Descobre (e guarda) o endereço da página pública do processo."""
+    k = f"pcp_url_{p['chave']}"
+    url = estado(db, k)
+    if url:
+        return url
+    # 1) página do processo na área do fornecedor (link/QR Code apontam para a página pública)
+    for caminho in (f"/4/Pregoes/DadosPregao/?sIA=Edit&ttCD_CHAVE={p['chave']}", p.get("url") or ""):
+        if not caminho:
+            continue
+        try:
+            ir(page, caminho if caminho.startswith("http") else PCP_BASE + caminho)
+            page.wait_for_timeout(1500)
+            url = avaliar(page, JS_ACHAR_PUBLICO, p["chave"])
+        except Exception:
+            url = ""
+        if url:
+            break
+    # 2) busca pública pelo número do processo
+    if not url:
+        for q in (f"processo={urllib.parse.quote(p['processo'])}", f"objeto={urllib.parse.quote(p.get('objeto', '')[:40])}"):
+            try:
+                ir(page, f"{PCP_SITE}/processos?filtroEspecial=0&pagina=1&{q}")
+                page.wait_for_timeout(5000)
+                url = avaliar(page, JS_ACHAR_PUBLICO, p["chave"])
+            except Exception:
+                url = ""
+            if url:
+                break
+    if url and url.startswith("/"):
+        url = PCP_SITE + url
+    if url:
+        estado(db, k, url)
+        log(f"PCP {p['processo']}: página pública encontrada ({url}).")
+    else:
+        log(f"PCP {p['processo']}: não achei a página pública do processo (chave {p['chave']}).")
+    return url
+
+
+def pcp_baixar_ranking(page, url, chave):
     """Abre a página pública do processo (logado) e baixa o PDF 'Ranking nos Itens'. Só leitura."""
-    ir(page, PCP_PUBLICO.format(chave=chave))
+    ir(page, url)
     page.wait_for_timeout(5000)
     for rot in ("Rejeitar", "Aceitar"):
         try:
@@ -1450,7 +1501,7 @@ def pcp_baixar_ranking(page, chave):
         page.wait_for_timeout(500)
     card = page.locator(".step-card", has_text="Ranking nos Itens").first
     if not card.count():
-        log(f"PCP {chave}: cartão 'Ranking nos Itens' não encontrado na página pública ({page.url}).")
+        log(f"PCP {chave}: sem 'Ranking nos Itens' na página pública ainda ({page.url}).")
         return None
     try:
         with page.expect_download(timeout=45000) as baixa:
@@ -1467,7 +1518,10 @@ def pcp_baixar_ranking(page, chave):
 def pcp_classificacao(db, page, p, primeira_vez):
     """Baixa e grava a classificação de cada item do processo; devolve alertas de mudança de posição."""
     import pcp_ranking
-    dados = pcp_baixar_ranking(page, p["chave"])
+    url = pcp_url_publica(db, page, p)
+    if not url:
+        return []
+    dados = pcp_baixar_ranking(page, url, p["chave"])
     if not dados:
         return []
     itens = pcp_ranking.classificar(pcp_ranking.ranking_pdf(dados),
