@@ -914,6 +914,28 @@ def processar(db, page, primeira_vez, diag=False):
         except Exception as ex:  # a classificação nunca pode atrapalhar as mensagens
             log(f"{p['processo']}: não consegui ler a classificação ({ex}).")
 
+    # histórico: classificação final dos processos já encerrados (lida uma única vez, poucos por ciclo)
+    lidos_hist = 0
+    for p in procs:
+        if lidos_hist >= int(CFG.get("HISTORICO_POR_CICLO", "2") or 2):
+            break
+        if p["situacao"].upper() not in ignorar or not p["url"] or "CANCELAD" in p["situacao"].upper():
+            continue
+        k = "hist_" + hash_msg(p["processo"], p["promotor"])
+        if estado(db, k):
+            continue
+        try:
+            ir(page, p["url"])
+            if not logado(page):
+                return "deslogado"
+            page.wait_for_timeout(1500)
+            ler_classificacao(db, page, p, True, diag)  # True = só registra, sem alertas
+            log(f"{p['processo']}: classificação final (histórico) registrada.")
+        except Exception as ex:
+            log(f"{p['processo']}: não consegui ler o histórico ({ex}).")
+        estado(db, k, datetime.now().strftime("%d/%m/%Y %H:%M"))
+        lidos_hist += 1
+
     # quadro de notificações da página inicial
     notifs = ler_notificacoes(page) or []
     for n in notifs:

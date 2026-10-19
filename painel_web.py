@@ -505,7 +505,15 @@ def pg_classificacao(q):
                        f'{(" · marca " + e(x["marca"])) if x.get("marca") else ""}'
                        f'{" · desclassificada/inabilitada" if x.get("excluido") else ""}</div></td>'
                        f'<td>{val}</td><td class="ocultar">{x.get("qtd", "")}</td></tr>')
-        sua = (f'<span class="tag {"" if r[8] == 1 else "aviso"}">Sua posição: {r[8]}º · {e(r[9])}</span>' if r[8] else
+        dif = ""
+        lider = next((z for z in rank if z.get("pos") == 1), None)
+        minha = next((z for z in rank if alvo and alvo in nrm(z.get("nome"))), None)
+        if lider and minha and r[8] and r[8] > 1 and lider.get("valor"):
+            d = minha["valor"] - lider["valor"]
+            dif = (f' · {"acima" if d >= 0 else "abaixo"} do 1º em R$ '
+                   + f"{abs(d):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                   + f' ({str(round(abs(d) / lider["valor"] * 100, 1)).replace(".", ",")}%)')
+        sua = (f'<span class="tag {"" if r[8] == 1 else "aviso"}">Sua posição: {r[8]}º · {e(r[9])}{dif}</span>' if r[8] else
                f'<span class="tag erro">Sua empresa: desclassificada/inabilitada · {e(r[9])}</span>' if r[9] else
                '<span class="tag parado">Sua empresa não aparece nos lances deste lote</span>')
         blocos += (f'<h3>L{e(nlote(r[2]))} – {e(r[3][:120])} <span class="tag parado">{e(r[4])}</span></h3>'
