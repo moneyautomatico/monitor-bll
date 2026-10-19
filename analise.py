@@ -77,6 +77,45 @@ Use "- [ ]" para cada documento, agrupados em:
 """
 
 
+ARQ_INSTRUCOES = PASTA / "analise_instrucoes.txt"
+ARQ_EMPRESA = PASTA / "analise_empresa.txt"
+
+
+def instrucoes():
+    """Instruções editáveis pelo painel (vazio = padrão)."""
+    try:
+        t = ARQ_INSTRUCOES.read_text(encoding="utf-8").strip()
+        return t or PROMPT
+    except Exception:  # noqa: BLE001
+        return PROMPT
+
+
+def perfil_empresa():
+    try:
+        return ARQ_EMPRESA.read_text(encoding="utf-8").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def salvar_config_ia(texto_instrucoes, texto_empresa):
+    t = (texto_instrucoes or "").replace("\r\n", "\n").strip()
+    ARQ_INSTRUCOES.write_text("" if t == PROMPT.strip() else t, encoding="utf-8")
+    ARQ_EMPRESA.write_text((texto_empresa or "").replace("\r\n", "\n").strip(), encoding="utf-8")
+
+
+def montar_pedido(contexto="", extra=""):
+    blocos = []
+    if contexto:
+        blocos.append(contexto)
+    emp = perfil_empresa()
+    if emp:
+        blocos.append("SOBRE A NOSSA EMPRESA (use para avaliar se atendemos às exigências e o que falta):\n" + emp)
+    blocos.append(instrucoes())
+    if extra:
+        blocos.append("PEDIDO ADICIONAL PARA ESTA ANÁLISE (tem prioridade):\n" + extra)
+    return "\n\n".join(blocos)
+
+
 # ------------------------------------------------------------------ util
 def chave_pncp(cnpj, ano, seq):
     return f"{re.sub(r'[^0-9]', '', str(cnpj))}-{re.sub(r'[^0-9]', '', str(ano))}-{re.sub(r'[^0-9]', '', str(seq))}"
@@ -185,7 +224,7 @@ def arquivos_pncp(cnpj, ano, seq):
 
 
 # ------------------------------------------------------------------ Gemini
-def gemini(chave_api, modelo, partes, contexto=""):
+def gemini(chave_api, modelo, partes, pedido):
     conteudo, usados, total = [], [], 0
     for tipo, nome, dado in partes:
         if tipo == "pdf":
@@ -204,7 +243,7 @@ def gemini(chave_api, modelo, partes, contexto=""):
             usados.append(nome)
     if not conteudo:
         raise RuntimeError("Nenhum arquivo legível (PDF, DOCX ou ZIP) foi encontrado para esta licitação.")
-    conteudo.append({"text": (contexto + "\n\n" if contexto else "") + PROMPT})
+    conteudo.append({"text": pedido})
     corpo = json.dumps({"contents": [{"role": "user", "parts": conteudo}],
                         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192}}).encode()
     erros = []
@@ -263,8 +302,9 @@ def _rodar(chave, cfg, origem):
             partes = [p for nome, dados in origem["arquivos"] for p in preparar(nome, dados)]
             nomes = [n for n, _ in origem["arquivos"]]
             contexto = ""
-        md, modelo, usados = gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes, contexto)
-        base.update(status="pronto", md=md, modelo=modelo, arquivos=usados or nomes,
+        md, modelo, usados = gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes,
+                                    montar_pedido(contexto, origem.get("extra", "")))
+        base.update(status="pronto", md=md, extra=origem.get("extra", ""), modelo=modelo, arquivos=usados or nomes,
                     fim=datetime.now().strftime("%d/%m/%Y %H:%M"))
     except Exception as ex:  # noqa: BLE001
         base.update(status="erro", erro=str(ex)[:800], fim=datetime.now().strftime("%d/%m/%Y %H:%M"))

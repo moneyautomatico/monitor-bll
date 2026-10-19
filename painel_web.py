@@ -34,6 +34,7 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "cadastrada": "Empresa cadastrada. Em alguns minutos chega o “Monitor BLL ativo” com o nome dela.",
           "atualizada": "Empresa atualizada.", "feito": "Feito.",
           "config": "Configurações salvas e monitores reiniciados.",
+          "ia": "Instruções da IA salvas. Valem para as próximas análises.",
           "busca_salva": "Busca salva. Vou mandar no Telegram um resumo agora e, depois, só as licitações novas.",
           "busca_rodando": "Verificando agora. Se houver novidades, chegam no Telegram em instantes."}
 e = html.escape
@@ -628,12 +629,24 @@ def pg_analise(ch):
     arqs = ", ".join(d.get("arquivos") or [])
     corpo = (topo + '<div class="acoes" style="margin-bottom:12px">' + edital +
              botao(f"/analise/{ch}/telegram", "📨 Enviar no Telegram", "sec") +
-             botao(f"/analise/{ch}/refazer", "Analisar de novo", "sec", "Refazer a análise (gasta uma consulta da IA)?") +
              '<button class="sec" onclick="window.print()">Imprimir / PDF</button></div>'
+             + (f'<div class="msg">Pedido adicional usado: {e(d["extra"])}</div>' if d.get("extra") else "") +
              f'<div class="analise">{analise.md_html(d.get("md", ""))}</div>'
              f'<p class="sub">Gerado em {e(d.get("fim", ""))} por {e(d.get("modelo", ""))} · Arquivos lidos: {e(arqs) or "—"}<br>'
-             '⚠️ A IA pode errar ou deixar algo de fora. Confira sempre no edital antes de enviar documentos e proposta.</p>')
+             '⚠️ A IA pode errar ou deixar algo de fora. Confira sempre no edital antes de enviar documentos e proposta.</p>'
+             + form_refazer(ch, d))
     return pagina("Análise", corpo, "/editais")
+
+
+def form_refazer(ch, d):
+    return (f'<details class="form" style="margin-top:16px"><summary style="cursor:pointer;font-weight:600">'
+            f'🔁 Analisar de novo / fazer uma pergunta sobre este edital</summary>'
+            f'<form method="post" action="/analise/{ch}/refazer"><input type="hidden" name="csrf" value="{CSRF}">'
+            f'<label>Pedido adicional <small>(opcional – ex.: “foque no lote 3”, “a empresa não tem balanço de 2025, isso impede?”, '
+            f'“liste só os documentos”)</small></label><textarea class="campo" name="extra" rows="3" style="max-width:100%">'
+            f'{e(d.get("extra", ""))}</textarea>'
+            f'<p class="sub">Usa as instruções atuais da aba Editais (IA) + este pedido. Gasta uma consulta da IA.</p>'
+            f'<div class="acoes"><button>Analisar de novo</button></div></form></details>')
 
 
 def pg_editais(aviso="", erro=False):
@@ -651,7 +664,18 @@ Para licitações do PNCP, use o botão “🤖 Analisar edital (IA)” na aba B
 <form method="post" action="/analise/upload" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Nome para identificar</label><input class="campo" name="titulo" placeholder="ex.: Pregão 45/2026 – Prefeitura de X">
 <label>Arquivos (PDF, DOCX ou ZIP)</label><input type="file" name="arquivo" multiple required accept=".pdf,.docx,.zip">
+<label>Pedido adicional <small>(opcional – só para esta análise)</small></label>
+<textarea class="campo" name="extra" rows="2" placeholder="ex.: foque nos itens de material de limpeza"></textarea>
 <div class="acoes"><button>🤖 Analisar</button></div></form></div>
+<h2 style="margin-top:22px">Como a IA deve analisar</h2>
+<div class="form" style="max-width:900px"><form method="post" action="/editais/ia"><input type="hidden" name="csrf" value="{CSRF}">
+<label>Sobre a empresa <small>(opcional – o que vende, onde atende, certidões/atestados que já tem. A IA usa para dizer o que falta)</small></label>
+<textarea class="campo" name="empresa" rows="5" style="max-width:100%" placeholder="ex.: Distribuidora de material de limpeza e descartáveis, ME, atende SP e MG. Temos atestados de fornecimento de limpeza para 3 prefeituras. Não temos balanço de 2025 ainda.">{e(analise.perfil_empresa())}</textarea>
+<label>Instruções para a IA <small>({"personalizadas" if analise.ARQ_INSTRUCOES.exists() and analise.ARQ_INSTRUCOES.read_text(encoding="utf-8").strip() else "padrão"} – edite à vontade: tire seções, acrescente perguntas, mude o formato)</small></label>
+<textarea class="campo" name="instrucoes" rows="22" style="max-width:100%;font-family:ui-monospace,Consolas,monospace;font-size:12.5px">{e(analise.instrucoes())}</textarea>
+<p class="sub">Dicas: use “## Título” para seções e “- [ ]” para itens de checklist (viram caixinhas). Vale para as próximas análises.</p>
+<div class="acoes"><button name="acao" value="salvar">Salvar instruções</button>
+<button class="sec" name="acao" value="padrao" onclick="return confirm('Voltar as instruções para o padrão? (o texto sobre a empresa é mantido)')">Restaurar padrão</button></div></form></div>
 <h2 style="margin-top:22px">Análises feitas</h2>
 <table><tr><th>Edital</th><th>Situação</th><th class="ocultar">Quando</th></tr>{linhas or '<tr><td colspan="3">Nenhuma ainda.</td></tr>'}</table>
 <p class="sub">IA gratuita: Google Gemini (faixa gratuita tem limite diário de consultas). Na faixa gratuita o Google pode usar o conteúdo
@@ -832,7 +856,7 @@ class Painel(BaseHTTPRequestHandler):
             if p == "/buscar":
                 return self.enviar(pg_buscar(urllib.parse.parse_qs(url.query), AVISOS.get(q.get("ok", ""), "")))
             if p == "/editais":
-                return self.enviar(pg_editais())
+                return self.enviar(pg_editais(AVISOS.get(q.get("ok", ""), "")))
             m = re.fullmatch(r"/analise/([a-z0-9-]+)", p)
             if m:
                 return self.enviar(pg_analise(m.group(1)))
@@ -865,7 +889,12 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_editais("Escolha ao menos um arquivo.", True))
             ch = analise.chave_upload(arqs)
             titulo = campos.get("titulo", "").strip()[:150] or ", ".join(n for n, _ in arqs)[:150]
-            analise.iniciar(ch, CFG_ATUAL(), {"tipo": "upload", "arquivos": arqs, "titulo": titulo})
+            pasta = analise.DIR / ch
+            pasta.mkdir(parents=True, exist_ok=True)
+            for nome, dados in arqs:
+                (pasta / re.sub(r"[^\w.\- ]", "_", nome)[:120]).write_bytes(dados)
+            analise.iniciar(ch, CFG_ATUAL(), {"tipo": "upload", "arquivos": arqs, "titulo": titulo,
+                                              "extra": campos.get("extra", "").strip()[:2000]})
             return self.redirecionar(f"/analise/{ch}")
         f = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(min(tam, 100000)).decode("utf-8"),
                                                         keep_blank_values=True).items()}
@@ -913,12 +942,20 @@ class Painel(BaseHTTPRequestHandler):
                     for parte in analise.md_telegram(d["md"], d.get("titulo", "")):
                         telegram_geral(parte)
                 elif acao == "refazer":
-                    o = d.get("origem", {})
-                    if o.get("tipo") == "pncp":
-                        analise.iniciar(ch, CFG_ATUAL(), dict(o, titulo=d.get("titulo", "")))
-                    else:
-                        return self.enviar(pg_editais("Para refazer um edital enviado, envie o arquivo de novo.", True))
+                    o = dict(d.get("origem", {}), titulo=d.get("titulo", ""), extra=f.get("extra", d.get("extra", "")).strip()[:2000])
+                    if o.get("tipo") != "pncp":
+                        pasta = analise.DIR / ch
+                        o["arquivos"] = [(x.name, x.read_bytes()) for x in sorted(pasta.glob("*")) if x.is_file()] if pasta.is_dir() else []
+                        if not o["arquivos"]:
+                            return self.enviar(pg_editais("Os arquivos desta análise não estão mais guardados. Envie de novo.", True))
+                    analise.iniciar(ch, CFG_ATUAL(), o)
                 return self.redirecionar(f"/analise/{ch}")
+            if p == "/editais/ia":
+                if f.get("acao") == "padrao":
+                    analise.salvar_config_ia("", f.get("empresa", ""))
+                else:
+                    analise.salvar_config_ia(f.get("instrucoes", ""), f.get("empresa", ""))
+                return self.redirecionar("/editais?ok=ia")
             if p == "/buscas/salvar":
                 try:
                     filtros = json.loads(f.get("filtros", "{}"))

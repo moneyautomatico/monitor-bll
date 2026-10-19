@@ -3,3 +3,5 @@ buscas_salvas.json
 buscas_vistos.json
 *.tmp
 analises/
+analise_instrucoes.txt
+analise_empresa.txt
