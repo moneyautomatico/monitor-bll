@@ -3,15 +3,24 @@ Uso: xvfb-run -a venv/bin/python descobrir_pcp.py <url_da_pagina_publica> ["Rank
 Clica no documento indicado e mostra as respostas JSON, o endereço aberto e o texto do arquivo.
 """
 import io
+import json
+import re
 import sys
+from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
 if len(sys.argv) < 2 or not sys.argv[1].startswith("http"):
     print(__doc__)
     sys.exit(1)
-URL = sys.argv[1]
-ALVO = sys.argv[2] if len(sys.argv) > 2 else "Ranking nos Itens"
+args = sys.argv[1:]
+EMPRESA = ""
+if "--empresa" in args:
+    i = args.index("--empresa")
+    EMPRESA = args[i + 1]
+    del args[i:i + 2]
+URL = args[0]
+ALVO = args[1] if len(args) > 1 else "Ranking nos Itens"
 jsons = []
 
 
@@ -26,7 +35,25 @@ def texto_pdf(dados):
 with sync_playwright() as p:
     nav = p.chromium.launch(headless=False)  # janela na tela virtual (xvfb), como o monitor
     ctx = nav.new_context(accept_downloads=True, locale="pt-BR", viewport={"width": 1366, "height": 800})
+    if EMPRESA:
+        arq = Path(__file__).resolve().parent / "empresas" / EMPRESA / "cookies_sessao.json"
+        cks = json.loads(arq.read_text(encoding="utf-8")) if arq.exists() else []
+        ctx.add_cookies(cks)
+        print(f"(sessão da empresa {EMPRESA} carregada: {len(cks)} cookies)")
     pg = ctx.new_page()
+    # teste: a página abre só com o número interno no fim do endereço?
+    m = re.search(r"-(\d{5,})/?$", URL)
+    if m:
+        curto = f"https://www.portaldecompraspublicas.com.br/processos/x/x/x-{m.group(1)}"
+        try:
+            pg.goto(curto, wait_until="domcontentloaded", timeout=60000)
+            pg.wait_for_timeout(6000)
+            corpo = pg.inner_text("body")
+            achou = re.search(r"\d{1,4}/\d{4}", corpo)
+            print(f"=== TESTE ENDEREÇO CURTO: {pg.url}\n    título: {pg.title()} | nº visto: {achou.group(0) if achou else '-'}"
+                  f" | tem 'Ranking nos Itens': {'Ranking nos Itens' in corpo}")
+        except Exception as ex:  # noqa: BLE001
+            print("=== TESTE ENDEREÇO CURTO falhou:", ex)
 
     def resp(r):
         tipo = r.headers.get("content-type", "")
