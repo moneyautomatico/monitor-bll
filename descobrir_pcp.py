@@ -44,6 +44,17 @@ with sync_playwright() as p:
         print(f"[{st}] {t[:30]} {u}")
     jsons.clear()
 
+    for rot in ("Rejeitar", "Aceitar"):
+        try:
+            pg.get_by_text(rot, exact=True).first.click(timeout=4000)
+            print(f"(aviso de cookies fechado: {rot})")
+            break
+        except Exception:  # noqa: BLE001
+            pass
+    pg.wait_for_timeout(6000)  # espera o site ficar interativo
+    pedidos = []
+    ctx.on("request", lambda r: pedidos.append(f"{r.method} {r.resource_type} {r.url}")
+           if r.resource_type in ("xhr", "fetch", "document") else None)
     card = pg.locator(".step-card", has_text=ALVO).first
     el = card.locator("button").first if card.count() else pg.get_by_text(ALVO, exact=False).first
     print(f"\n=== ELEMENTO '{ALVO}' ===")
@@ -58,7 +69,8 @@ with sync_playwright() as p:
     try:
         with ctx.expect_page(timeout=8000) as nova:
             with pg.expect_download(timeout=8000) as baixa:
-                el.click()
+                el.scroll_into_view_if_needed()
+                el.click(force=True)
     except Exception:  # noqa: BLE001
         pass
     pg.wait_for_timeout(5000)
@@ -81,6 +93,9 @@ with sync_playwright() as p:
         print(texto_pdf(dados)[:8000] if dados[:4] == b"%PDF" else dados[:3000].decode("utf-8", "ignore"))
     except Exception:  # noqa: BLE001
         pass
+    print("\n=== PEDIDOS FEITOS APÓS O CLIQUE ===")
+    for x in pedidos[:40]:
+        print(x[:300])
     print("\n=== RESPOSTAS JSON/PDF APÓS O CLIQUE ===")
     for st, u, t in jsons:
         print(f"[{st}] {t[:30]} {u}")
