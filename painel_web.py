@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import analise
+import urgencia
 import buscas
 
 PASTA = Path(__file__).resolve().parent
@@ -362,6 +363,11 @@ O histórico e o login atuais são mantidos.</p>
     return pagina("Visão geral", corpo, "/", recarregar=True)
 
 
+def urg_tag(m):
+    motivo = urgencia.classificar(m["texto"], m["escopo"], m["autor"])
+    return f'<span class="tag erro">🚨 {e(motivo)}</span><br>' if motivo else ""
+
+
 def pg_mensagens(q):
     emp, busca, so_novas = q.get("empresa", ""), q.get("q", ""), q.get("novas", "")
     emps = empresas()
@@ -370,15 +376,18 @@ def pg_mensagens(q):
     msgs = mensagens(emp, busca)
     if so_novas:
         msgs = [m for m in msgs if m["nova"]]
+    if q.get("urgentes"):
+        msgs = [m for m in msgs if urgencia.classificar(m["texto"], m["escopo"], m["autor"])]
     linhas = "".join(
         f'<tr class="{"nova" if m["nova"] and m["visto"].startswith(datetime.now().strftime("%d/%m/%Y")) else ""}">'
         f'<td>{e(m["emp"])}</td><td><b>{e(m["processo"])}</b><div class="sub ocultar">{e(m["promotor"])}</div></td>'
         f'<td class="ocultar">{e(m["escopo"])}</td><td>{e(m["horario"])}</td><td class="ocultar">{e(m["autor"])}</td>'
-        f'<td class="txt">{e(m["texto"])}</td></tr>' for m in msgs)
+        f'<td class="txt">{urg_tag(m)}{e(m["texto"])}</td></tr>' for m in msgs)
     corpo = f"""<h2>Mensagens</h2><form class="linha" method="get">
 <select name="empresa"><option value="">Todas as empresas</option>{ops}</select>
 <input name="q" value="{e(busca)}" placeholder="Buscar texto, processo, autor…">
 <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" name="novas" value="1" {"checked" if so_novas else ""}> só novas</label>
+<label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" name="urgentes" value="1" {"checked" if q.get("urgentes") else ""}> só urgentes</label>
 <button>Filtrar</button></form>
 <table><tr><th>Empresa</th><th>Processo</th><th class="ocultar">Origem</th><th>Horário</th><th class="ocultar">Autor</th><th>Mensagem</th></tr>
 {linhas or '<tr><td colspan="6">Nenhuma mensagem.</td></tr>'}</table>
@@ -639,6 +648,10 @@ def pg_config(aviso=""):
 <input class="campo" type="password" name="TELEGRAM_TOKEN" autocomplete="off">
 <label>Chat ID</label><input class="campo" name="TELEGRAM_CHAT_ID" value="{g('TELEGRAM_CHAT_ID')}">
 <h3>Alarme e ligação</h3>
+<label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" name="ALARME_SO_URGENTE" value="1" {"checked" if c.get("ALARME_SO_URGENTE", "1") != "0" else ""}>
+<b>Alarme forte só para mensagens urgentes</b> <small>(as demais chegam como notificação normal)</small></label>
+<label>Palavras que tornam a mensagem URGENTE <small>(uma por linha: trecho | motivo · sem acento · vale início de palavra)</small></label>
+<textarea class="campo" name="URGENTE_PALAVRAS" rows="10" style="font-family:ui-monospace,Consolas,monospace;font-size:12.5px">{e(urgencia.texto_atual())}</textarea>
 <label>Tópico ntfy geral</label><input class="campo" name="NTFY_TOPICO" value="{g('NTFY_TOPICO')}">
 <label>Ligação pelo Telegram (CallMeBot) <small>@usuario, ou vazio para desligar</small></label>
 <input class="campo" name="CHAMADA_USUARIO" value="{g('CHAMADA_USUARIO')}">
@@ -1118,9 +1131,11 @@ class Painel(BaseHTTPRequestHandler):
                     return self.enviar(pg_empresas(e(err), True))
                 return self.redirecionar("/empresas?ok=cadastrada")
             if p == "/config":
+                urgencia.ARQ.write_text(f.get("URGENTE_PALAVRAS", "").replace("\r\n", "\n").strip() + "\n", encoding="utf-8")
                 v = {k: f.get(k, "").strip() for k in ("TELEGRAM_CHAT_ID", "NTFY_TOPICO", "CHAMADA_USUARIO",
                                                         "INTERVALO_MINUTOS", "MAX_NAVEGADORES", "HORARIO_INICIO",
                                                         "HORARIO_FIM", "SITUACOES_IGNORADAS", "BUSCA_INTERVALO_MINUTOS")}
+                v["ALARME_SO_URGENTE"] = "1" if f.get("ALARME_SO_URGENTE") else "0"
                 if f.get("TELEGRAM_TOKEN", "").strip():
                     v["TELEGRAM_TOKEN"] = f["TELEGRAM_TOKEN"].strip()
                 if f.get("GEMINI_API_KEY", "").strip():

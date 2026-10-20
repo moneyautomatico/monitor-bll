@@ -187,8 +187,8 @@ def ligar(texto):
         return False
 
 
-def alarme(titulo, texto):
-    """Notificação de prioridade máxima no app ntfy (toca alto e pode repetir até você ver)."""
+def alarme(titulo, texto, prioridade="5"):
+    """Notificação no app ntfy. Prioridade 5 = máxima (toca alto); 3 = normal."""
     modo = (CFG.get("ENVIAR_PARA") or "geral").lower() if CFG.get("EMPRESA_ID") else "geral"
     topicos = []
     if modo in ("geral", "ambos"):
@@ -202,7 +202,8 @@ def alarme(titulo, texto):
     for topico in topicos:
         try:
             r = requests.post(f"https://ntfy.sh/{topico}", data=texto[:3000].encode("utf-8"), timeout=20,
-                              params={"title": titulo, "priority": "5", "tags": "rotating_light"})
+                              params={"title": titulo, "priority": prioridade,
+                                      "tags": "rotating_light" if prioridade == "5" else "bell"})
             log(f"Alarme ntfy ({topico}): HTTP {r.status_code}")
             ok = r.ok or ok
         except requests.RequestException as e:
@@ -960,16 +961,30 @@ def plataforma_nome():
 
 def notificar(db, novas, primeira_vez, n_ativos, agora):
     """Envia os alertas das mensagens novas (Telegram, ntfy, ligação) e o aviso de início."""
+    import urgencia
     plat = plataforma_nome()
     e = html.escape
-    if novas:  # uma ligação por ciclo, não uma por mensagem
-        procs_novos = sorted({m["processo"] for m in novas if m["processo"]})
-        ligar(f"Atenção. {CFG.get('EMPRESA_NOME','')}. Nova mensagem na {plat}. "
-              f"Processo {', '.join(procs_novos)}. Veja no Telegram.")
-        resumo = "\n\n".join(f"{m['processo']} · {m['escopo']} · {m['autor']}\n{m['texto'][:300]}" for m in novas[:5])
-        alarme(f"{plat}: {len(novas)} nova(s) – {', '.join(procs_novos)}", resumo)
+    so_urgente = CFG.get("ALARME_SO_URGENTE", "1") != "0"
     for m in novas:
-        txt = (f"🔔 <b>{plat} – Processo {e(m['processo'])}</b>\n"
+        m["urgente"] = urgencia.classificar(m.get("texto", ""), m.get("escopo", ""), m.get("autor", ""))
+    urgentes = [m for m in novas if m["urgente"]]
+    if novas:  # um alarme (e uma ligação) por ciclo, não um por mensagem
+        fortes = urgentes if so_urgente else novas
+        if fortes:
+            procs = sorted({m["processo"] for m in fortes if m["processo"]})
+            motivos = sorted({m["urgente"] for m in fortes if m["urgente"]})
+            ligar(f"Atenção. {CFG.get('EMPRESA_NOME','')}. {'Urgente: ' + ', '.join(motivos) if motivos else 'Nova mensagem'} "
+                  f"na {plat}. Processo {', '.join(procs)}. Veja no Telegram.")
+            resumo = "\n\n".join(f"🚨 {m['urgente'] or 'Nova'} · {m['processo']} · {m['autor']}\n{m['texto'][:300]}" for m in fortes[:5])
+            alarme(f"URGENTE {plat}: {', '.join(motivos) or 'nova mensagem'} – {', '.join(procs)}", resumo, "5")
+        comuns = [m for m in novas if not m["urgente"]] if so_urgente else []
+        if comuns:
+            procs = sorted({m["processo"] for m in comuns if m["processo"]})
+            resumo = "\n\n".join(f"{m['processo']} · {m['escopo']} · {m['autor']}\n{m['texto'][:300]}" for m in comuns[:5])
+            alarme(f"{plat}: {len(comuns)} nova(s) – {', '.join(procs)}", resumo, "3")
+    for m in novas:
+        topo = f"🚨 <b>URGENTE – {e(m['urgente'])}</b>\n" if m["urgente"] else ""
+        txt = (f"{topo}🔔 <b>{plat} – Processo {e(m['processo'])}</b>\n"
                f"{e(m['promotor'])}\n"
                f"📌 {e(m['escopo'])} · {e(m['autor'])} · {e(m['horario'])}\n\n"
                f"{e(m['texto'])}")
