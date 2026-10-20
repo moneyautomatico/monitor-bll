@@ -733,7 +733,7 @@ def eventos_registro(dados, texto_livre):
         if not any("MOVIMENTO" in c for c in t["cab"]):
             continue
         for c in t["linhas"]:
-            if len(c) < 4 or c[1].strip().upper() == "LANCE":
+            if len(c) < 4 or c[1].strip().upper() in ("LANCE", "MENSAGEM"):  # mensagens já vêm pelo chat
                 continue
             if RE_EVENTO.search(_norm(f"{c[1]} {c[3]}")):
                 out.append({"horario": c[0], "autor": c[2] or plataforma_nome(), "texto": f"{c[1]} {c[3]}".strip()})
@@ -892,17 +892,21 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
                 linhas += t["linhas"]
         ranking = montar_ranking(linhas, lt["melhor"], lt["primeiro"])
         # eventos do lote (recurso, contrarrazões, desclassificação...) viram mensagens com alerta
+        k_ev = "eventos_lote_" + chave
+        ja_lia_eventos = bool(estado(db, k_ev))  # 1ª leitura de eventos deste lote: só registra o que já existia
         for ev in eventos_registro(dados, dados.get("texto_livre", "")):
             mid = hash_msg(p["processo"], p["promotor"], f"L{lt['lote']} registro", ev["horario"], ev["autor"], ev["texto"])
             if db.execute("SELECT 1 FROM mensagens WHERE id=?", (mid,)).fetchone():
                 continue
-            avisar = bool(ant) and not primeira_vez  # 1ª leitura do lote: só registra o que já existia
+            avisar = ja_lia_eventos and not primeira_vez
             db.execute("INSERT INTO mensagens VALUES(?,?,?,?,?,?,?,?,?)",
                        (mid, p["processo"], p["promotor"], f"L{lt['lote']} – registro do lote", ev["horario"],
                         ev["autor"], ev["texto"], agora, 0 if avisar else 1))
             if avisar:
                 novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": f"L{lt['lote']} – registro do lote",
                               "horario": ev["horario"], "autor": ev["autor"], "texto": ev["texto"], "id": mid})
+        if not ja_lia_eventos:
+            estado(db, k_ev, agora)
         nossa = next((r for r in ranking if eh_nossa(r["nome"])), None)
         pos = nossa["pos"] if nossa else None
         db.execute("INSERT OR REPLACE INTO classificacao VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
