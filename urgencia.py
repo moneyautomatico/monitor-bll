@@ -59,7 +59,17 @@ def regras(texto_config=""):
     return out
 
 
-def classificar(texto, escopo="", autor="", texto_config=""):
+AUTORES_SISTEMA = {"sistema", "bll", "bnc", "portal", "licitanet", "portal de compras publicas", ""}
+ESCOPOS_NAO_CHAT = ("mudanca de situacao", "documento", "notificacao", "classificacao", "processo (eventos)")
+
+
+def eh_chat(escopo="", autor=""):
+    """Mensagem escrita por uma pessoa (pregoeiro/participante) no chat da sessão."""
+    a, esc = norm(autor), norm(escopo)
+    return a not in AUTORES_SISTEMA and not any(x in esc for x in ESCOPOS_NAO_CHAT)
+
+
+def classificar(texto, escopo="", autor="", texto_config="", chat_urgente=True):
     """Retorna o motivo (str) se a mensagem for urgente, senão ''."""
     t = norm(f"{escopo} {texto}")
     if norm(autor) in ("sistema",) and "mudanca de situacao" not in t and not re.search(r"convoc|recurso", t):
@@ -67,4 +77,6 @@ def classificar(texto, escopo="", autor="", texto_config=""):
     for trecho, motivo in regras(texto_config):
         if re.search(r"(?<![a-z0-9])" + re.escape(trecho), t):  # início de palavra
             return motivo
+    if chat_urgente and eh_chat(escopo, autor):
+        return "Mensagem no chat"
     return ""

@@ -364,7 +364,7 @@ O histórico e o login atuais são mantidos.</p>
 
 
 def urg_tag(m):
-    motivo = urgencia.classificar(m["texto"], m["escopo"], m["autor"])
+    motivo = urgencia.classificar(m["texto"], m["escopo"], m["autor"], chat_urgente=CFG_ATUAL().get("CHAT_URGENTE", "1") != "0")
     return f'<span class="tag erro">🚨 {e(motivo)}</span><br>' if motivo else ""
 
 
@@ -377,7 +377,7 @@ def pg_mensagens(q):
     if so_novas:
         msgs = [m for m in msgs if m["nova"]]
     if q.get("urgentes"):
-        msgs = [m for m in msgs if urgencia.classificar(m["texto"], m["escopo"], m["autor"])]
+        msgs = [m for m in msgs if urgencia.classificar(m["texto"], m["escopo"], m["autor"], chat_urgente=CFG_ATUAL().get("CHAT_URGENTE", "1") != "0")]
     linhas = "".join(
         f'<tr class="{"nova" if m["nova"] and m["visto"].startswith(datetime.now().strftime("%d/%m/%Y")) else ""}">'
         f'<td>{e(m["emp"])}</td><td><b>{e(m["processo"])}</b><div class="sub ocultar">{e(m["promotor"])}</div></td>'
@@ -650,6 +650,8 @@ def pg_config(aviso=""):
 <h3>Alarme e ligação</h3>
 <label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" name="ALARME_SO_URGENTE" value="1" {"checked" if c.get("ALARME_SO_URGENTE", "1") != "0" else ""}>
 <b>Alarme forte só para mensagens urgentes</b> <small>(as demais chegam como notificação normal)</small></label>
+<label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" name="CHAT_URGENTE" value="1" {"checked" if c.get("CHAT_URGENTE", "1") != "0" else ""}>
+<b>Toda mensagem do chat (pregoeiro/participantes) é urgente</b> <small>(eventos automáticos do sistema continuam normais)</small></label>
 <label>Palavras que tornam a mensagem URGENTE <small>(uma por linha: trecho | motivo · sem acento · vale início de palavra)</small></label>
 <textarea class="campo" name="URGENTE_PALAVRAS" rows="10" style="font-family:ui-monospace,Consolas,monospace;font-size:12.5px">{e(urgencia.texto_atual())}</textarea>
 <label>Tópico ntfy geral</label><input class="campo" name="NTFY_TOPICO" value="{g('NTFY_TOPICO')}">
@@ -1136,6 +1138,7 @@ class Painel(BaseHTTPRequestHandler):
                                                         "INTERVALO_MINUTOS", "MAX_NAVEGADORES", "HORARIO_INICIO",
                                                         "HORARIO_FIM", "SITUACOES_IGNORADAS", "BUSCA_INTERVALO_MINUTOS")}
                 v["ALARME_SO_URGENTE"] = "1" if f.get("ALARME_SO_URGENTE") else "0"
+                v["CHAT_URGENTE"] = "1" if f.get("CHAT_URGENTE") else "0"
                 if f.get("TELEGRAM_TOKEN", "").strip():
                     v["TELEGRAM_TOKEN"] = f["TELEGRAM_TOKEN"].strip()
                 if f.get("GEMINI_API_KEY", "").strip():

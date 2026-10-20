@@ -966,7 +966,8 @@ def notificar(db, novas, primeira_vez, n_ativos, agora):
     e = html.escape
     so_urgente = CFG.get("ALARME_SO_URGENTE", "1") != "0"
     for m in novas:
-        m["urgente"] = urgencia.classificar(m.get("texto", ""), m.get("escopo", ""), m.get("autor", ""))
+        m["urgente"] = urgencia.classificar(m.get("texto", ""), m.get("escopo", ""), m.get("autor", ""),
+                                            chat_urgente=CFG.get("CHAT_URGENTE", "1") != "0")
     urgentes = [m for m in novas if m["urgente"]]
     if novas:  # um alarme (e uma ligação) por ciclo, não um por mensagem
         fortes = urgentes if so_urgente else novas
