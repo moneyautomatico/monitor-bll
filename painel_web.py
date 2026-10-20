@@ -663,6 +663,8 @@ def pg_config(aviso=""):
 <input class="campo" type="password" name="GEMINI_API_KEY" autocomplete="off">
 <label>Modelo <small>(vazio = gemini-2.5-flash)</small></label><input class="campo" name="GEMINI_MODELO" value="{g('GEMINI_MODELO')}" placeholder="gemini-2.5-flash">
 <h3>Ritmo</h3>
+<label>Avisar se uma empresa ficar sem verificação por mais de (minutos)</label>
+<input class="campo" type="number" min="5" name="VIGIA_MINUTOS" value="{g('VIGIA_MINUTOS', '15')}">
 <label>Intervalo entre verificações (minutos)</label><input class="campo" type="number" step="0.5" min="1" name="INTERVALO_MINUTOS" value="{g('INTERVALO_MINUTOS', '2')}">
 <label>Navegadores simultâneos <small>(≈ 1 por GB de memória livre)</small></label><input class="campo" type="number" min="1" max="12" name="MAX_NAVEGADORES" value="{g('MAX_NAVEGADORES', '3')}">
 <label>Horário de funcionamento <small>(0 a 24)</small></label>
@@ -908,6 +910,80 @@ def ler_multipart(handler, tam):
     return campos, arqs
 
 
+# ------------------------------------------------------------------ vigia (aviso de monitor parado)
+ARQ_VIGIA = PASTA / "vigia_estado.json"
+
+
+def ntfy_geral(titulo, texto, prioridade="4"):
+    topico = CFG_ATUAL().get("NTFY_TOPICO", "").strip()
+    if not topico:
+        return
+    try:
+        req = urllib.request.Request(f"https://ntfy.sh/{topico}", texto.encode("utf-8"), method="POST",
+                                     headers={"Title": titulo.encode("utf-8").decode("latin-1", "ignore"),
+                                              "Priority": prioridade, "Tags": "warning"})
+        urllib.request.urlopen(req, timeout=20).read()
+    except Exception as ex:  # noqa: BLE001
+        print("ntfy (vigia):", ex, flush=True)
+
+
+def problema_monitor(x, limite):
+    """Retorna a descrição do problema da empresa, ou '' se estiver tudo bem."""
+    if not x["ativo"]:
+        habilitado = sh("systemctl", "is-enabled", f"monitor-bll@{x['id']}") == "enabled"
+        return "o serviço do monitor parou (caiu e não voltou)" if habilitado else ""  # pausado de propósito: ignora
+    st = x["status"] or ""
+    if st.startswith("Fora do horário"):
+        return ""
+    ult = para_data(x["ultima"]) if x["ultima"] else datetime.min
+    minutos = (datetime.now() - ult).total_seconds() / 60 if ult != datetime.min else None
+    if minutos is not None and minutos > limite:
+        return f"sem verificar há {int(minutos)} min"
+    if "Erro" in st or "expirada" in st or "captcha" in st.lower():
+        return f"com problema: {st[:150]}"
+    return ""
+
+
+def vigiar():
+    """A cada 3 min confere se cada empresa ativa está sendo verificada. Avisa uma vez e avisa quando voltar."""
+    import time as _t
+    _t.sleep(180)
+    while True:
+        try:
+            limite = float(CFG_ATUAL().get("VIGIA_MINUTOS", "15") or 15)
+            try:
+                memo = json.loads(ARQ_VIGIA.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                memo = {}
+            agora = datetime.now().timestamp()
+            for x in empresas():
+                prob = problema_monitor(x, limite)
+                m = memo.get(x["id"], {})
+                nome = f'{x["nome"]} ({x["plat"]})'
+                if prob:
+                    m.setdefault("desde", agora)
+                    # erro de status só conta se persistir pelo tempo-limite (evita falso alarme de 1 ciclo)
+                    if not m.get("avisado") and (agora - m["desde"] >= limite * 60 or "sem verificar" in prob
+                                               or ("parou" in prob and agora - m["desde"] >= 300)):
+                        telegram_geral(f"⚠️ <b>Monitor parado – {html.escape(nome)}</b>\n{html.escape(prob)}.\n"
+                                       f"Última verificação: {html.escape(x['ultima'] or '—')}\n"
+                                       "Veja o Log no painel (aba Empresas) ou use Reiniciar.")
+                        ntfy_geral(f"Monitor parado: {nome}", prob)
+                        m["avisado"] = True
+                elif m:
+                    if m.get("avisado"):
+                        telegram_geral(f"✅ <b>Monitor voltou – {html.escape(nome)}</b>\nVerificação normal às {html.escape(x['ultima'])}.")
+                    m = {}
+                if m:
+                    memo[x["id"]] = m
+                else:
+                    memo.pop(x["id"], None)
+            ARQ_VIGIA.write_text(json.dumps(memo), encoding="utf-8")
+        except Exception as ex:  # noqa: BLE001
+            print("Erro no vigia:", ex, flush=True)
+        _t.sleep(180)
+
+
 def minutos_busca():
     try:
         return float(CFG_ATUAL().get("BUSCA_INTERVALO_MINUTOS", "30") or 30)
@@ -1136,7 +1212,7 @@ class Painel(BaseHTTPRequestHandler):
                 urgencia.ARQ.write_text(f.get("URGENTE_PALAVRAS", "").replace("\r\n", "\n").strip() + "\n", encoding="utf-8")
                 v = {k: f.get(k, "").strip() for k in ("TELEGRAM_CHAT_ID", "NTFY_TOPICO", "CHAMADA_USUARIO",
                                                         "INTERVALO_MINUTOS", "MAX_NAVEGADORES", "HORARIO_INICIO",
-                                                        "HORARIO_FIM", "SITUACOES_IGNORADAS", "BUSCA_INTERVALO_MINUTOS")}
+                                                        "HORARIO_FIM", "SITUACOES_IGNORADAS", "BUSCA_INTERVALO_MINUTOS", "VIGIA_MINUTOS")}
                 v["ALARME_SO_URGENTE"] = "1" if f.get("ALARME_SO_URGENTE") else "0"
                 v["CHAT_URGENTE"] = "1" if f.get("CHAT_URGENTE") else "0"
                 if f.get("TELEGRAM_TOKEN", "").strip():
@@ -1232,4 +1308,5 @@ class Painel(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     print(f"Painel em http://0.0.0.0:{PORTA}")
     threading.Thread(target=buscas.ciclo, args=(telegram_geral, minutos_busca), daemon=True).start()
+    threading.Thread(target=vigiar, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORTA), Painel).serve_forever()
