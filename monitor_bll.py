@@ -246,6 +246,12 @@ def abrir_banco():
     db.execute("""CREATE TABLE IF NOT EXISTS classificacao(
         chave TEXT PRIMARY KEY, processo TEXT, promotor TEXT, lote TEXT, descricao TEXT, fase TEXT,
         primeiro TEXT, melhor TEXT, ranking TEXT, nossa_pos INTEGER, nosso_lance TEXT, lido_em REAL, atualizado TEXT)""")
+    if (db.execute("SELECT valor FROM estado WHERE chave='classif_versao'").fetchone() or [""])[0] != "2":
+        # nova regra de desclassificação: relê as classificações da BLL/BNC (inclusive o histórico)
+        db.execute("UPDATE classificacao SET lido_em=0 WHERE chave NOT LIKE 'pcp|%'")
+        db.execute("DELETE FROM estado WHERE chave LIKE 'hist_%'")
+        db.execute("INSERT OR REPLACE INTO estado VALUES('classif_versao','2')")
+        db.commit()
     return db
 
 
@@ -726,25 +732,41 @@ def _norm(t):
     return " ".join(unicodedata.normalize("NFKD", t or "").encode("ascii", "ignore").decode().upper().split())
 
 
-def montar_ranking(linhas, melhor_tabela):
-    """linhas = [[horário, movimento, autor, descrição], ...] do 'Registros da sessão do lote'."""
+RE_NUM_PART = re.compile(r"PARTICIPANTE\s*(\d+)", re.I)
+
+
+def montar_ranking(linhas, melhor_tabela, primeiro_tabela=""):
+    """linhas = [[horário, movimento, autor, descrição], ...] do 'Registros da sessão do lote'.
+    primeiro_tabela = '1º Colocado' oficial mostrado pela plataforma (ex.: 'PARTICIPANTE 668')."""
     lances, excluidos = {}, set()
+    nomes = {}
+    for c in linhas:
+        if len(c) >= 4:
+            m = RE_PART.match(c[2].strip())
+            if m:
+                nomes[m.group(2)] = m.group(1).strip()
     for c in linhas:
         if len(c) < 4:
             continue
         mov, autor, desc = c[1].upper(), c[2], c[3]
         m = RE_PART.match(autor.strip())
-        if not m:
-            continue
-        nome, num = m.group(1).strip(), m.group(2)
         if mov.strip() == "LANCE":
+            if not m:
+                continue
             v = valor_br(desc)
             if v is not None:
-                lances.setdefault(num, {"nome": nome, "num": num, "lances": []})["lances"].append(v)
-        elif re.search(r"DESCLASSIF|INABILIT|RECUSAD|EXCLU", _norm(mov + " " + desc)):
-            excluidos.add(num)
-        elif re.search(r"(RE)?CLASSIFICAD|HABILITAD|REVERT|RETORN", _norm(mov + " " + desc)):
-            excluidos.discard(num)
+                lances.setdefault(m.group(2), {"nome": m.group(1).strip(), "num": m.group(2), "lances": []})["lances"].append(v)
+            continue
+        # eventos (desclassificação, habilitação...): o participante pode estar no autor OU na descrição
+        alvos = set(RE_NUM_PART.findall(f"{autor} {desc}"))
+        if not alvos:
+            texto = _norm(f"{autor} {desc}")
+            alvos = {n for n, nome in nomes.items() if len(nome) > 5 and _norm(nome) in texto}
+        evento = _norm(mov + " " + desc)
+        if re.search(r"DESCLASSIF|INABILIT|RECUSAD|REJEITAD|EXCLU", evento):
+            excluidos |= alvos
+        elif re.search(r"(RE)?CLASSIFICAD|HABILITAD|REVERT|RETORN|ACEIT", evento):
+            excluidos -= alvos
     if not lances:
         return []
     todos = [v for x in lances.values() for v in x["lances"]]
@@ -753,7 +775,16 @@ def montar_ranking(linhas, melhor_tabela):
     for x in lances.values():
         x["valor"] = max(x["lances"]) if maior_ganha else min(x["lances"])
         x["excluido"] = x["num"] in excluidos
-    ordem = sorted(lances.values(), key=lambda x: (x["excluido"], -x["valor"] if maior_ganha else x["valor"]))
+    chave = lambda x: -x["valor"] if maior_ganha else x["valor"]  # noqa: E731
+    # o 1º colocado oficial da plataforma manda: quem estava à frente dele foi desclassificado/inabilitado
+    mo = RE_NUM_PART.search(primeiro_tabela or "")
+    if mo and mo.group(1) in lances:
+        lider = lances[mo.group(1)]
+        lider["excluido"] = False
+        for x in lances.values():
+            if x is not lider and not x["excluido"] and chave(x) < chave(lider):
+                x["excluido"] = True
+    ordem = sorted(lances.values(), key=lambda x: (x["excluido"], chave(x)))
     pos = 0
     out = []
     for x in ordem:
@@ -810,7 +841,7 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
         for t in dados.get("tabelas", []):
             if any("MOVIMENTO" in c for c in t["cab"]):
                 linhas += t["linhas"]
-        ranking = montar_ranking(linhas, lt["melhor"])
+        ranking = montar_ranking(linhas, lt["melhor"], lt["primeiro"])
         nossa = next((r for r in ranking if eh_nossa(r["nome"])), None)
         pos = nossa["pos"] if nossa else None
         db.execute("INSERT OR REPLACE INTO classificacao VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
