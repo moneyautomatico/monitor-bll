@@ -710,6 +710,50 @@ JS_ABRIR_REGISTRO = """
 """
 
 FASES_VIVAS = ("DISPUTA", "RANDÔMICO", "RANDOMICO", "FECHADO", "DESEMPATE", "ABERTO")
+FASES_ATENCAO = ("RECURSO", "CONTRARRAZ", "HABILITA", "JULGAMENTO", "ADJUDICA", "MANIFESTA", "NEGOCIA", "DILIGEN")
+RE_EVENTO = re.compile(r"RECURS|CONTRARRAZ|DESCLASSIF|INABILIT|HABILIT|ACEIT|RECUS|REJEIT|ADJUDIC|HOMOLOG|DILIGEN|"
+                       r"NEGOCIA|CONVOC|ANEX|REABERT|RETOMAD|SUSPEN|FRACASS|DESERT|REVOG|INTEN|MANIFEST|IMPUGN|AMOSTRA")
+RE_DATA_BLOCO = re.compile(r"(\d{2}/\d{2}/\d{4})\s*\|?\s*(\d{2}:\d{2}(?::\d{2})?)")
+JS_TEXTO_MODAL_SEM_TABELA = """
+() => {
+  const modal = [...document.querySelectorAll('.modal')].find(m => m.getClientRects().length > 0);
+  if (!modal) return '';
+  const c = modal.cloneNode(true);
+  c.querySelectorAll('table, .modal-header, script, style').forEach(x => x.remove());
+  document.body.appendChild(c); c.style.display = 'block'; c.style.position = 'absolute'; c.style.left = '-9999px';
+  const t = c.innerText; c.remove(); return t || '';
+}
+"""
+
+
+def eventos_registro(dados, texto_livre):
+    """Eventos (não-lance) dos 'Registros da sessão do lote': linhas da tabela e blocos tipo cartão."""
+    out = []
+    for t in dados.get("tabelas", []):
+        if not any("MOVIMENTO" in c for c in t["cab"]):
+            continue
+        for c in t["linhas"]:
+            if len(c) < 4 or c[1].strip().upper() == "LANCE":
+                continue
+            if RE_EVENTO.search(_norm(f"{c[1]} {c[3]}")):
+                out.append({"horario": c[0], "autor": c[2] or plataforma_nome(), "texto": f"{c[1]} {c[3]}".strip()})
+    # blocos "EMPRESA  dd/mm/aaaa | hh:mm" + texto (ex.: RECURSO REGISTRADO Peça recursal anexada)
+    linhas = [l.strip() for l in (texto_livre or "").splitlines() if l.strip()]
+    atual = None
+    for i, l in enumerate(linhas):
+        m = RE_DATA_BLOCO.search(l)
+        if m:
+            if atual and atual["texto"]:
+                out.append(atual)
+            nome = RE_DATA_BLOCO.sub("", l).strip(" |-") or (linhas[i - 1] if i and not RE_DATA_BLOCO.search(linhas[i - 1]) else "")
+            atual = {"horario": f"{m.group(1)} {m.group(2)}", "autor": nome or plataforma_nome(), "texto": ""}
+        elif atual is not None:
+            if i + 1 < len(linhas) and RE_DATA_BLOCO.search(linhas[i + 1]) and not RE_DATA_BLOCO.sub("", linhas[i + 1]).strip(" |-"):
+                continue  # é o nome do próximo bloco
+            atual["texto"] = (atual["texto"] + " " + l).strip()
+    if atual and atual["texto"]:
+        out.append(atual)
+    return out
 RE_PART = re.compile(r"^(.*?)\s*\(PARTICIPANTE\s*(\d+)\)\s*$", re.I)
 
 
@@ -815,7 +859,8 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
                          (chave,)).fetchone()
         viva = any(f in lt["fase"].upper() for f in FASES_VIVAS)
         mudou = not ant or (ant[0], ant[1], ant[2]) != (lt["fase"], lt["primeiro"], lt["melhor"])
-        velho = not ant or time.time() - (ant[4] or 0) > (120 if viva else 6 * 3600)
+        atencao = any(f in lt["fase"].upper() for f in FASES_ATENCAO)
+        velho = not ant or time.time() - (ant[4] or 0) > (120 if viva else 600 if atencao else 6 * 3600)
         if "CANCELAD" in lt["fase"].upper() or not (mudou or velho or diag):
             continue
         if not page.evaluate(JS_ABRIR_REGISTRO, lt["lote"]):
@@ -824,9 +869,13 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
         for _ in range(20):
             page.wait_for_timeout(500)
             if page.evaluate("""() => [...document.querySelectorAll('.modal')].some(m =>
-                  m.getClientRects().length > 0 && /registros da sess/i.test(m.innerText) && m.querySelector('table'))"""):
-                page.wait_for_timeout(800)
+                  m.getClientRects().length > 0 && /registros da sess/i.test(m.innerText))"""):
+                page.wait_for_timeout(1200)
                 dados = page.evaluate(JS_LER_MODAL)
+                try:
+                    dados["texto_livre"] = page.evaluate(JS_TEXTO_MODAL_SEM_TABELA)
+                except Exception:
+                    dados["texto_livre"] = ""
                 break
         if not page.evaluate(JS_FECHAR_MODAL):
             page.keyboard.press("Escape")
@@ -842,6 +891,18 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
             if any("MOVIMENTO" in c for c in t["cab"]):
                 linhas += t["linhas"]
         ranking = montar_ranking(linhas, lt["melhor"], lt["primeiro"])
+        # eventos do lote (recurso, contrarrazões, desclassificação...) viram mensagens com alerta
+        for ev in eventos_registro(dados, dados.get("texto_livre", "")):
+            mid = hash_msg(p["processo"], p["promotor"], f"L{lt['lote']} registro", ev["horario"], ev["autor"], ev["texto"])
+            if db.execute("SELECT 1 FROM mensagens WHERE id=?", (mid,)).fetchone():
+                continue
+            avisar = bool(ant) and not primeira_vez  # 1ª leitura do lote: só registra o que já existia
+            db.execute("INSERT INTO mensagens VALUES(?,?,?,?,?,?,?,?,?)",
+                       (mid, p["processo"], p["promotor"], f"L{lt['lote']} – registro do lote", ev["horario"],
+                        ev["autor"], ev["texto"], agora, 0 if avisar else 1))
+            if avisar:
+                novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": f"L{lt['lote']} – registro do lote",
+                              "horario": ev["horario"], "autor": ev["autor"], "texto": ev["texto"], "id": mid})
         nossa = next((r for r in ranking if eh_nossa(r["nome"])), None)
         pos = nossa["pos"] if nossa else None
         db.execute("INSERT OR REPLACE INTO classificacao VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
