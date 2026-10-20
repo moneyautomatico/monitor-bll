@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import analise
+import backup
 import urgencia
 import buscas
 
@@ -674,6 +675,18 @@ def pg_config(aviso=""):
 <label>Situações ignoradas <small>(separadas por vírgula)</small></label>
 <input class="campo" name="SITUACOES_IGNORADAS" value="{g('SITUACOES_IGNORADAS', 'HOMOLOGADO,CANCELADO,REVOGADO,ANULADO,FRACASSADO,DESERTO')}">
 <div class="acoes"><button>Salvar e reiniciar monitores</button></div></form></div>
+<h2 style="margin-top:22px">Backup</h2><div class="form">
+<p class="sub">Todo dia às {g('BACKUP_HORA', '3')}h o painel guarda uma cópia no servidor (últimos 7 dias) e manda outra,
+<b>criptografada</b>, para o Telegram geral (fica fora do servidor). Inclui cadastros, senhas das plataformas,
+mensagens, processos, classificações, buscas e análises.</p>
+<form method="post" action="/config/backup"><input type="hidden" name="csrf" value="{CSRF}">
+<label>Senha do backup <small>({"definida; " if c.get("BACKUP_SENHA") else "<b style='color:var(--erro)'>não definida</b> – sem ela a cópia não vai para o Telegram; "}deixe vazio para manter. Guarde-a: sem ela não dá para abrir o backup)</small></label>
+<input class="campo" type="password" name="BACKUP_SENHA" autocomplete="new-password" minlength="8">
+<label>Horário do backup diário (0–23)</label><input class="campo" type="number" min="0" max="23" name="BACKUP_HORA" value="{g('BACKUP_HORA', '3')}">
+<div class="acoes"><button name="acao" value="salvar">Salvar</button><button class="sec" name="acao" value="agora">Salvar e fazer backup agora</button></div></form>
+<h3>Cópias no servidor</h3>
+<table><tr><th>Arquivo</th><th>Tamanho</th><th>Data</th></tr>{"".join(f'<tr><td><a href="/backup/{e(n)}">{e(n)}</a></td><td>{t / 1024 / 1024:.1f} MB</td><td>{d:%d/%m/%Y %H:%M}</td></tr>' for n, t, d in backup.listar()) or '<tr><td colspan="3">Nenhum ainda.</td></tr>'}</table>
+<p class="sub">Para abrir a cópia do Telegram: <code>openssl enc -d -aes-256-cbc -pbkdf2 -in ARQUIVO.enc -out backup.tar.gz</code> (pede a senha).</p></div>
 <h2 style="margin-top:22px">Descobrir conversas do Telegram</h2><div class="form">
 <p class="sub">Mande uma mensagem ao bot (ou num grupo onde ele está) e clique abaixo para ver o chat_id.</p>
 <form method="post" action="/telegram"><input type="hidden" name="csrf" value="{CSRF}">
@@ -1136,6 +1149,16 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_config(AVISOS.get(q.get("ok", ""), "")))
             if p == "/buscar":
                 return self.enviar(pg_buscar(urllib.parse.parse_qs(url.query), AVISOS.get(q.get("ok", ""), "")))
+            m = re.fullmatch(r"/backup/(licitatudo-[0-9_-]+\.tar\.gz)", p)
+            if m and (backup.DIR / m.group(1)).exists():
+                dados = (backup.DIR / m.group(1)).read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/gzip")
+                self.send_header("Content-Disposition", f'attachment; filename="{m.group(1)}"')
+                self.send_header("Content-Length", str(len(dados)))
+                self.end_headers()
+                self.wfile.write(dados)
+                return
             if p == "/editais":
                 return self.enviar(pg_editais(AVISOS.get(q.get("ok", ""), "")))
             m = re.fullmatch(r"/analise/([a-z0-9-]+)", p)
@@ -1273,6 +1296,20 @@ class Painel(BaseHTTPRequestHandler):
                     return self.redirecionar("/buscar?ok=busca_rodando")
                 buscas.alterar_busca(m.group(1), m.group(2))
                 return self.redirecionar("/buscar?ok=feito")
+            if p == "/config/backup":
+                v = {"BACKUP_HORA": re.sub(r"\D", "", f.get("BACKUP_HORA", "3")) or "3"}
+                if f.get("BACKUP_SENHA", "").strip():
+                    if len(f["BACKUP_SENHA"].strip()) < 8:
+                        return self.enviar(pg_config("A senha do backup precisa ter pelo menos 8 caracteres."))
+                    v["BACKUP_SENHA"] = f["BACKUP_SENHA"].strip()
+                gravar_env(CONFIG, v)
+                if f.get("acao") == "agora":
+                    try:
+                        res = backup.executar(CFG_ATUAL(), telegram_geral)
+                    except Exception as ex:  # noqa: BLE001
+                        res = f"Backup falhou: {ex}"
+                    return self.enviar(pg_config(e(res)))
+                return self.redirecionar("/config?ok=config")
             if p == "/telegram":
                 return self.enviar(pagina("Telegram", "<h2>Conversas encontradas</h2>" + descobrir(f.get("token", "").strip()) +
                                           '<p><a class="btn sec" href="/config">Voltar</a></p>', "/config"))
@@ -1309,4 +1346,5 @@ if __name__ == "__main__":
     print(f"Painel em http://0.0.0.0:{PORTA}")
     threading.Thread(target=buscas.ciclo, args=(telegram_geral, minutos_busca), daemon=True).start()
     threading.Thread(target=vigiar, daemon=True).start()
+    threading.Thread(target=backup.ciclo, args=(CFG_ATUAL, telegram_geral), daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORTA), Painel).serve_forever()
