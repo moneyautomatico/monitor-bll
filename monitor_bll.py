@@ -937,6 +937,79 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
     return novas
 
 
+# ----------------------------------------------------------------- diligências (só leitura)
+JS_ABRIR_DILIGENCIAS = """
+() => {
+  const b = [...document.querySelectorAll('button, a')].find(x => x.getClientRects().length > 0 &&
+      /^\\s*dilig[êe]ncias?\\s*$/i.test(x.innerText || ''));
+  if (!b) return false;
+  b.click(); return true;
+}
+"""
+
+
+def ler_diligencias(db, page, p, primeira_vez, diag=False):
+    """Abre o botão 'Diligências' da sala de disputa e transforma cada item novo em alerta urgente."""
+    url_antes = page.url
+    if not page.evaluate(JS_ABRIR_DILIGENCIAS):
+        return []
+    dados, texto = None, ""
+    for _ in range(16):
+        page.wait_for_timeout(500)
+        if page.url != url_antes:  # abriu em outra página
+            page.wait_for_timeout(1500)
+            texto = page.inner_text("body")
+            dados = {"tabelas": avaliar(page, JS_TABELAS) or []}
+            break
+        if page.evaluate("""() => [...document.querySelectorAll('.modal')].some(m =>
+              m.getClientRects().length > 0 && /dilig/i.test(m.innerText))"""):
+            page.wait_for_timeout(1000)
+            dados = page.evaluate(JS_LER_MODAL)
+            texto = page.evaluate(JS_TEXTO_MODAL_SEM_TABELA)
+            break
+    if page.url != url_antes:
+        ir(page, url_antes)
+    else:
+        if not page.evaluate(JS_FECHAR_MODAL):
+            page.keyboard.press("Escape")
+    page.wait_for_timeout(500)
+    if diag:
+        (DIAG / f"06_diligencias_{p['processo'].replace('/', '-')}.json").write_text(
+            json.dumps({"dados": dados, "texto": texto}, ensure_ascii=False, indent=1), encoding="utf-8")
+    if not dados:
+        return []
+    itens = []
+    for t in dados.get("tabelas", []) if isinstance(dados.get("tabelas"), list) else []:
+        linhas = t.get("linhas") if isinstance(t, dict) else None
+        for c in linhas or []:
+            c = c.get("cel", []) if isinstance(c, dict) else c
+            txt = " | ".join(x for x in c if x)
+            if txt and not re.search(r"nenhum|sem registro", txt, re.I):
+                data = RE_DATA_BLOCO.search(txt) or re.search(r"\d{2}/\d{2}/\d{4}[ \d:]*", txt)
+                itens.append({"horario": data.group(0) if data else "", "autor": "Pregoeiro", "texto": txt})
+    for ev in eventos_registro({"tabelas": []}, texto):
+        itens.append(ev)
+    k = "diligencias_" + hash_msg(p["processo"], p["promotor"])
+    ja_lia = bool(estado(db, k))
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    novas = []
+    for it in itens:
+        mid = hash_msg(p["processo"], p["promotor"], "Diligência", it["horario"], it["texto"])
+        if db.execute("SELECT 1 FROM mensagens WHERE id=?", (mid,)).fetchone():
+            continue
+        avisar = ja_lia and not primeira_vez
+        db.execute("INSERT INTO mensagens VALUES(?,?,?,?,?,?,?,?,?)",
+                   (mid, p["processo"], p["promotor"], "Diligência", it["horario"], it["autor"], it["texto"],
+                    agora, 0 if avisar else 1))
+        if avisar:
+            novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": "Diligência",
+                          "horario": it["horario"], "autor": it["autor"], "texto": it["texto"], "id": mid})
+    if not ja_lia:
+        estado(db, k, agora)
+    db.commit()
+    return novas
+
+
 # ----------------------------------------------------------------- ciclo
 def processar(db, page, primeira_vez, diag=False):
     procs = ler_processos(page, diag)
@@ -1010,6 +1083,10 @@ def processar(db, page, primeira_vez, diag=False):
             novas += ler_classificacao(db, page, p, primeira_vez, diag)
         except Exception as ex:  # a classificação nunca pode atrapalhar as mensagens
             log(f"{p['processo']}: não consegui ler a classificação ({ex}).")
+        try:
+            novas += ler_diligencias(db, page, p, primeira_vez, diag)
+        except Exception as ex:
+            log(f"{p['processo']}: não consegui ler as diligências ({ex}).")
 
     # histórico: classificação final dos processos já encerrados (lida uma única vez, poucos por ciclo)
     lidos_hist = 0
