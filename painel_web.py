@@ -78,6 +78,94 @@ USUARIO = CFG.get("PAINEL_USUARIO", "bll")
 SENHA = CFG.get("PAINEL_SENHA", "")
 PORTA = int(CFG.get("PAINEL_PORTA", "8080"))
 ESPERADO = "Basic " + base64.b64encode(f"{USUARIO}:{SENHA}".encode()).decode()
+ARQ_SESSOES = PASTA / "sessoes.json"
+TENTATIVAS = {}   # ip -> [horários de erro]
+
+
+def _sessoes():
+    try:
+        d = json.loads(ARQ_SESSOES.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        d = {}
+    agora = datetime.now().timestamp()
+    return {k: v for k, v in d.items() if v > agora}
+
+
+def criar_sessao(dias):
+    tok = secrets.token_urlsafe(32)
+    d = _sessoes()
+    d[tok] = datetime.now().timestamp() + dias * 86400
+    ARQ_SESSOES.write_text(json.dumps(d), encoding="utf-8")
+    os.chmod(ARQ_SESSOES, 0o600)
+    return tok
+
+
+def sessao_valida(tok):
+    return bool(tok) and tok in _sessoes()
+
+
+def encerrar_sessao(tok):
+    d = _sessoes()
+    d.pop(tok, None)
+    ARQ_SESSOES.write_text(json.dumps(d), encoding="utf-8")
+
+
+def pg_login(erro="", destino="/"):
+    return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar – Licitatudo</title>
+<style>
+*{{box-sizing:border-box}}html,body{{height:100%;margin:0}}
+body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#17241c;display:grid;grid-template-columns:1.1fr 1fr;background:#f3f5f4}}
+.arte{{position:relative;overflow:hidden;background:radial-gradient(1200px 600px at -10% -10%,#2f8a5b 0,transparent 60%),
+ radial-gradient(900px 500px at 110% 110%,#0e2a1d 0,transparent 55%),linear-gradient(135deg,#173f2c,#0f2b1f);color:#fff;
+ display:flex;flex-direction:column;justify-content:space-between;padding:48px}}
+.arte:after{{content:"";position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.05) 1px,transparent 1px),
+ linear-gradient(90deg,rgba(255,255,255,.05) 1px,transparent 1px);background-size:44px 44px;mask-image:linear-gradient(180deg,#000,transparent)}}
+.marca{{display:flex;align-items:center;gap:12px;font-weight:800;font-size:22px;letter-spacing:.3px;position:relative;z-index:1}}
+.logo{{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#7fd3a5,#2f8a5b);display:grid;place-items:center;
+ box-shadow:0 8px 24px rgba(0,0,0,.25)}}
+.chamada{{position:relative;z-index:1;max-width:460px}}.chamada h1{{font-size:38px;line-height:1.12;margin:0 0 14px}}
+.chamada p{{color:#cfe3d7;font-size:16px;line-height:1.5;margin:0}}
+.chips{{display:flex;gap:8px;flex-wrap:wrap;margin-top:22px}}.chip{{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);
+ padding:7px 12px;border-radius:999px;font-size:13px;backdrop-filter:blur(4px)}}
+.rodape{{position:relative;z-index:1;color:#9fbfae;font-size:12px}}
+.lado{{display:grid;place-items:center;padding:32px}}
+.cartao{{width:100%;max-width:380px}}
+.cartao h2{{font-size:26px;margin:0 0 6px}}.cartao .sub{{color:#5f6d65;margin:0 0 26px}}
+label{{display:block;font-size:13px;font-weight:600;margin:14px 0 6px}}
+.campo{{position:relative}}.campo input{{width:100%;font:inherit;padding:13px 14px 13px 42px;border:1.5px solid #dfe5e1;border-radius:12px;
+ background:#fff;outline:none;transition:.15s}}.campo input:focus{{border-color:#2f8a5b;box-shadow:0 0 0 4px rgba(47,138,91,.15)}}
+.campo svg{{position:absolute;left:13px;top:50%;transform:translateY(-50%);width:18px;height:18px;color:#8a9a91}}
+.olho{{position:absolute;right:8px;top:50%;transform:translateY(-50%);border:0;background:none;cursor:pointer;color:#5f6d65;padding:6px;font-size:13px}}
+.linha{{display:flex;justify-content:space-between;align-items:center;margin:16px 0 22px;font-size:13px;color:#5f6d65}}
+.linha label{{display:flex;gap:8px;align-items:center;margin:0;font-weight:500}}input[type=checkbox]{{accent-color:#2f8a5b;width:16px;height:16px}}
+button.entrar{{width:100%;font:inherit;font-weight:700;font-size:15px;color:#fff;border:0;border-radius:12px;padding:14px;cursor:pointer;
+ background:linear-gradient(135deg,#2f8a5b,#1f5c3f);box-shadow:0 10px 24px rgba(31,92,63,.3);transition:.15s}}
+button.entrar:hover{{transform:translateY(-1px);box-shadow:0 14px 28px rgba(31,92,63,.35)}}
+.erro{{background:#fde8e6;color:#b3261e;border-radius:10px;padding:10px 12px;font-size:13.5px;margin-bottom:6px}}
+.seg{{display:flex;gap:6px;align-items:center;justify-content:center;color:#8a9a91;font-size:12px;margin-top:22px}}
+@media (prefers-color-scheme:dark){{body{{background:#101512;color:#e5ebe7}}.campo input{{background:#1a211d;border-color:#2a332e;color:#e5ebe7}}
+ .cartao .sub,.linha{{color:#97a59d}}}}
+@media (max-width:860px){{body{{grid-template-columns:1fr}}.arte{{padding:28px;min-height:auto}}.chamada h1{{font-size:26px}}.chips,.rodape{{display:none}}}}
+</style></head><body>
+<section class="arte"><div class="marca"><div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>Licitatudo</div>
+<div class="chamada"><h1>Todas as suas licitações, num só lugar.</h1>
+<p>Mensagens do pregoeiro, classificação dos lotes, recursos e diligências da BLL, BNC e Portal de Compras — com alerta na hora.</p>
+<div class="chips"><span class="chip">🔔 Alertas em tempo real</span><span class="chip">📊 Classificação por lote</span><span class="chip">🤖 Análise de editais</span></div></div>
+<div class="rodape">© {datetime.now().year} Licitatudo · acesso restrito</div></section>
+<section class="lado"><form class="cartao" method="post" action="/login">
+<h2>Bem-vindo de volta</h2><p class="sub">Entre para acessar o painel.</p>
+{f'<div class="erro">{e(erro)}</div>' if erro else ''}
+<input type="hidden" name="destino" value="{e(destino)}">
+<label for="u">Usuário</label><div class="campo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+<input id="u" name="usuario" autocomplete="username" required autofocus></div>
+<label for="s">Senha</label><div class="campo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+<input id="s" name="senha" type="password" autocomplete="current-password" required>
+<button type="button" class="olho" onclick="const i=document.getElementById('s');i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'Mostrar':'Ocultar'">Mostrar</button></div>
+<div class="linha"><label><input type="checkbox" name="lembrar" value="1" checked> Manter conectado por 30 dias</label></div>
+<button class="entrar">Entrar</button>
+<div class="seg">🔒 Conexão protegida por senha · use apenas em dispositivos confiáveis</div>
+</form></section></body></html>"""
 
 
 # ------------------------------------------------------------------ sistema
@@ -279,6 +367,7 @@ ESTILO = """
 header{background:#173f2c;color:#fff;padding:0 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
 header b{font-size:17px;padding:14px 0}nav{display:flex;gap:2px;flex-wrap:wrap}
 nav a{color:#cfe3d7;text-decoration:none;padding:16px 12px;font-size:14px;border-bottom:3px solid transparent}
+header .sair{margin-left:auto;color:#cfe3d7;text-decoration:none;font-size:13px;border:1px solid rgba(255,255,255,.25);padding:6px 12px;border-radius:8px}header .sair:hover{background:rgba(255,255,255,.1)}
 nav a.on{color:#fff;border-bottom-color:#7fd3a5}main{max-width:1250px;margin:auto;padding:18px 16px 60px}
 h2{font-size:19px;margin:6px 0 14px}h3{font-size:15px;margin:18px 0 8px}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:16px}
@@ -379,7 +468,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
-<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav></header><main>{msg}{corpo}</main></body></html>"""
+<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main></body></html>"""
 
 
 def tag_status(emp):
@@ -1519,13 +1608,48 @@ def descobrir(token):
 
 # ------------------------------------------------------------------ servidor
 class Painel(BaseHTTPRequestHandler):
+    def cookie(self, nome):
+        for parte in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = parte.strip().partition("=")
+            if k == nome:
+                return v
+        return ""
+
     def autorizado(self):
-        if SENHA and hmac.compare_digest(self.headers.get("Authorization", ""), ESPERADO):
+        if SENHA and (sessao_valida(self.cookie("lt_sessao")) or
+                      hmac.compare_digest(self.headers.get("Authorization", ""), ESPERADO)):
             return True
+        if self.command == "GET" and not self.path.startswith(("/mensagens/processo", "/mensagens/busca")):
+            return self.redirecionar("/login?destino=" + urllib.parse.quote(self.path)) and False
         self.send_response(401)
-        self.send_header("WWW-Authenticate", 'Basic realm="Licitatudo"')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
+        self.wfile.write("Sessão expirada. Recarregue a página e entre de novo.".encode())
         return False
+
+    def login(self):
+        ip = self.client_address[0]
+        agora = datetime.now().timestamp()
+        TENTATIVAS[ip] = [t for t in TENTATIVAS.get(ip, []) if agora - t < 600]
+        tam = int(self.headers.get("Content-Length", "0") or 0)
+        f = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(min(tam, 5000)).decode("utf-8"), keep_blank_values=True).items()}
+        destino = f.get("destino", "/")
+        if not destino.startswith("/") or destino.startswith("//") or destino.startswith("/login"):
+            destino = "/"
+        if len(TENTATIVAS[ip]) >= 5:
+            return self.enviar(pg_login("Muitas tentativas. Aguarde 10 minutos e tente de novo.", destino), 429)
+        ok = bool(SENHA) and hmac.compare_digest(f.get("usuario", "").strip(), USUARIO) and hmac.compare_digest(f.get("senha", ""), SENHA)
+        if not ok:
+            TENTATIVAS[ip].append(agora)
+            return self.enviar(pg_login("Usuário ou senha incorretos.", destino), 401)
+        TENTATIVAS.pop(ip, None)
+        dias = 30 if f.get("lembrar") else 1
+        tok = criar_sessao(dias)
+        self.send_response(303)
+        validade = f"; Max-Age={dias * 86400}" if f.get("lembrar") else ""
+        self.send_header("Set-Cookie", f"lt_sessao={tok}; Path=/; HttpOnly; SameSite=Lax{validade}")
+        self.send_header("Location", destino)
+        self.end_headers()
 
     def enviar(self, corpo, codigo=200):
         dados = corpo.encode("utf-8")
@@ -1542,6 +1666,17 @@ class Painel(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        caminho = urllib.parse.urlparse(self.path).path.rstrip("/")
+        if caminho == "/login":
+            q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
+            return self.enviar(pg_login("", q0.get("destino", "/")))
+        if caminho == "/sair":
+            encerrar_sessao(self.cookie("lt_sessao"))
+            self.send_response(303)
+            self.send_header("Set-Cookie", "lt_sessao=; Path=/; Max-Age=0")
+            self.send_header("Location", "/login")
+            self.end_headers()
+            return
         if not self.autorizado():
             return
         url = urllib.parse.urlparse(self.path)
@@ -1599,6 +1734,8 @@ class Painel(BaseHTTPRequestHandler):
             self.enviar(pagina("Erro", f"<h2>Erro</h2><pre>{e(repr(ex))}</pre>"), 500)
 
     def do_POST(self):
+        if urllib.parse.urlparse(self.path).path.rstrip("/") == "/login":
+            return self.login()
         if not self.autorizado():
             return
         tam = int(self.headers.get("Content-Length", "0") or 0)
