@@ -474,7 +474,7 @@ def ler_processos(page, diag=False):
     """Lista em Processos > Propostas, com o link da Disputa de cada um."""
     ir(page, URL_PROPOSTAS)
     if "errorview" in page.url.lower():  # perfil errado (ex.: Representante Legal)
-        log("BLL recusou a página de processos para este perfil; trocando de perfil...")
+        log(f"{plataforma_nome()} recusou a página de processos para este perfil; trocando de perfil...")
         if not trocar_perfil(page):
             # plano B: sai da sessão e entra de novo, escolhendo o perfil certo no login
             log("Refazendo o login para escolher o perfil certo...")
