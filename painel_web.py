@@ -617,7 +617,6 @@ def barra_msgs(valor=""):
             f'<span class="nav-busca"><span id="pesq-pos" class="sub">0/0</span>'
             f'<button type="button" class="sec" title="Anterior (Shift+Enter)" onclick="irPara(-1)">▲</button>'
             f'<button type="button" class="sec" title="Próxima (Enter)" onclick="irPara(1)">▼</button></span>'
-            f'<button type="button" title="Procurar a palavra em todos os processos" onclick="pesquisar()">Buscar em todos</button>'
             f'<button type="button" class="sec" title="Marcar todas as mensagens como lidas" onclick="marcarTodas()">✔✔ Marcar todas como lidas</button>'
             f'<button type="button" class="sec" title="Atualizar agora" onclick="location.reload()">⟳ Atualizar</button>'
             f'<span id="pesq-info" class="sub"></span></form>')
