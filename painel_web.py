@@ -523,7 +523,7 @@ def pg_busca_msgs(q):
     """Resultados da pesquisa em todas as mensagens (para o painel da direita)."""
     termo = (q.get("q") or "").strip()
     if len(termo) < 2:
-        return '<div class="cv-vazio">Digite pelo menos 2 letras.</div>'
+        return barra_msgs(termo) + '<div class="cv-vazio">Digite pelo menos 2 letras.</div>'
     achados = sorted(mensagens("", termo), key=lambda m: (data_msg(m), para_data(m["visto"])), reverse=True)
     itens = ""
     for m in achados[:300]:
@@ -535,7 +535,7 @@ def pg_busca_msgs(q):
                   f'{e(grupo_escopo(m["escopo"]))}</span><span class="sub cm-hora">{e(m["horario"] or m["visto"])}</span></div>'
                   f'<div class="cm-txt">{txt}</div></a>')
     return (f'<div class="cv-cab"><div class="cv-num">🔍 “{e(termo)}”</div><div class="sub">{len(achados)} mensagem(ns) encontrada(s)'
-            f'{" – mostrando 300" if len(achados) > 300 else ""}. Clique para abrir o processo.</div></div>'
+            f'{" – mostrando 300" if len(achados) > 300 else ""}. Clique para abrir o processo.</div></div>' + barra_msgs(termo) +
             f'<div class="cv-lista">{itens or "<div class=sub>Nada encontrado.</div>"}</div>')
 
 
@@ -581,6 +581,14 @@ def titulo_msg(m):
     return f"{(m['autor'] or 'MENSAGEM').upper()} · {g}"
 
 
+def barra_msgs(valor=""):
+    """Pesquisa + marcar todas como lidas, dentro do painel das mensagens."""
+    return (f'<form class="pesq" onsubmit="return pesquisar()">'
+            f'<input id="pesq-txt" value="{e(valor)}" placeholder="🔍 Pesquisar mensagem… (Enter = buscar em todos os processos)" '
+            f'oninput="buscaConversa(this)"><button>Buscar</button>'
+            f'<button type="button" class="sec" title="Marcar todas as mensagens como lidas" onclick="marcarTodas()">✔✔ Marcar todas como lidas</button></form>')
+
+
 def html_conversa(g, cfg_chat):
     grupos = sorted({grupo_escopo(m["escopo"]) for m in g["msgs"]},
                     key=lambda x: (not (x.startswith("L") and x[1:].isdigit()), int(x[1:]) if x[1:].isdigit() else 0, x))
@@ -599,7 +607,7 @@ def html_conversa(g, cfg_chat):
             f'<div><b>Órgão:</b> {e(g["promotor"])}</div><div class="sub"><b>Empresa:</b> {e(g["nome"])} · '
             f'{len(g["msgs"])} mensagem(ns)</div></div></div>'
             f'<div class="cv-filtro"><b>Mensagens do chat</b><select onchange="filtrarLote(this)">'
-            f'<option value="">Todos os lotes ({len(g["msgs"])})</option>{ops}</select></div>'
+            f'<option value="">Todos os lotes ({len(g["msgs"])})</option>{ops}</select></div>' + barra_msgs() +
             f'<div class="cv-lista">{itens or "<div class=sub>Sem mensagens.</div>"}</div>')
 
 
@@ -632,7 +640,7 @@ def pg_chat(q):
                   f'<div class="it-org">{e(g["promotor"])}</div>'
                   f'<div class="it-l3">{selo_plat(g["plat"])}<span class="sub">{e(g["nome"])}</span>'
                   f'{"<span class=it-urg>🚨</span>" if urg else ""}</div></a>')
-    direita = '<div class="cv-vazio">Selecione um processo à esquerda para ver as mensagens.</div>'
+    direita = barra_msgs() + '<div class="cv-vazio">Selecione um processo à esquerda para ver as mensagens.</div>'
     if sel and sel in procs:
         direita = html_conversa(procs[sel], cfg_chat)
         marcar_lido(chave_proc(procs[sel]))
@@ -645,10 +653,7 @@ def pg_chat(q):
 <input class="mc-busca" placeholder="Buscar pregão, órgão ou empresa…" oninput="filtrar()">
 <div class="abas">{abas}</div>
 <div class="mc-lista" id="lista">{itens or '<div class="sub" style="padding:14px">Nenhuma mensagem ainda.</div>'}</div></aside>
-<section class="mc-dir"><form class="pesq" onsubmit="return pesquisar()">
-<input id="pesq-txt" placeholder="🔍 Pesquisar mensagens… (filtra a conversa aberta; Enter busca em todos os processos)" oninput="buscaConversa(this)">
-<button>Buscar em todos</button>
-<button type="button" class="sec" title="Marcar todas as mensagens como lidas" onclick="marcarTodas()">✔✔ Marcar todas como lidas</button></form><div id="conversa">{direita}</div></section></div>
+<section class="mc-dir"><div id="conversa">{direita}</div></section></div>
 <script>
 let filtroAba='todos';
 function filtrar(){{const t=document.querySelector('.mc-busca').value.toLowerCase();
