@@ -246,11 +246,11 @@ def abrir_banco():
     db.execute("""CREATE TABLE IF NOT EXISTS classificacao(
         chave TEXT PRIMARY KEY, processo TEXT, promotor TEXT, lote TEXT, descricao TEXT, fase TEXT,
         primeiro TEXT, melhor TEXT, ranking TEXT, nossa_pos INTEGER, nosso_lance TEXT, lido_em REAL, atualizado TEXT)""")
-    if not db.execute("SELECT 1 FROM estado WHERE chave='dilig_versao' AND valor='4'").fetchone():
+    if not db.execute("SELECT 1 FROM estado WHERE chave='dilig_versao' AND valor='5'").fetchone():
         # a leitura antiga às vezes gravava as mensagens do lote como diligências: apaga e relê em silêncio
         db.execute("DELETE FROM mensagens WHERE escopo='Diligência'")
         db.execute("DELETE FROM estado WHERE chave LIKE 'diligencias_%'")
-        db.execute("INSERT OR REPLACE INTO estado VALUES('dilig_versao','4')")
+        db.execute("INSERT OR REPLACE INTO estado VALUES('dilig_versao','5')")
         lixo = [r[0] for r in db.execute("SELECT id, autor, texto FROM mensagens").fetchall() if eh_copia_chat(r[1], r[2])]
         db.executemany("DELETE FROM mensagens WHERE id=?", [(x,) for x in lixo])
         db.commit()
@@ -976,9 +976,12 @@ JS_TEM_MODAL_DILIG = """
    !/mensage|registros da sess|chat/i.test((m.querySelector('.modal-title, .modal-header') || {}).innerText || ''))
 """
 _JS_TABELAS_DE = """
-  const tabs = raiz => [...raiz.querySelectorAll('table')].map(t => {
-    const cab = [...t.querySelectorAll('th')].map(x => x.innerText.trim().toUpperCase());
-    const linhas = [...t.querySelectorAll('tbody tr')].map(tr => [...tr.querySelectorAll('td')].map(td => td.innerText.trim())).filter(c => c.length > 1);
+  // só tabelas "folha" (sem outra tabela dentro) e só células da própria linha: uma tabela que embrulha a outra
+  // gerava uma linha com todas as diligências emendadas
+  const tabs = raiz => [...raiz.querySelectorAll('table')].filter(t => !t.querySelector('table')).map(t => {
+    const cab = [...t.querySelectorAll('th')].filter(x => x.closest('table') === t).map(x => x.innerText.trim().toUpperCase());
+    const linhas = [...t.querySelectorAll('tr')].filter(tr => tr.closest('table') === t && !tr.querySelector('th'))
+      .map(tr => [...tr.children].filter(x => x.tagName === 'TD').map(td => td.innerText.trim())).filter(c => c.length > 1);
     return {cab, linhas};
   });
   const semTab = raiz => { const c = raiz.cloneNode(true);
@@ -1055,6 +1058,8 @@ def ler_diligencias(db, page, p, primeira_vez, diag=False):
             col = {}
             if len(cab) == len(c):
                 col = dict(zip(cab, c))
+            elif cab and len(c) > len(cab):
+                continue  # linha com várias diligências emendadas
             def pega(*chaves):
                 for k_, v in col.items():
                     if any(x in k_ for x in chaves):
