@@ -718,7 +718,8 @@ RE_EVENTO = re.compile(r"RECURS|CONTRARRAZ|DESCLASSIF|INABILIT|HABILIT|ACEIT|REC
 RE_DATA_BLOCO = re.compile(r"(\d{2}/\d{2}/\d{4})\s*\|?\s*(\d{2}:\d{2}(?::\d{2})?)")
 JS_TEXTO_MODAL_SEM_TABELA = """
 () => {
-  const modal = [...document.querySelectorAll('.modal')].find(m => m.getClientRects().length > 0);
+  const vis = [...document.querySelectorAll('.modal')].filter(m => m.getClientRects().length > 0);
+  const modal = vis.find(m => /registros da sess/i.test((m.querySelector('.modal-title, .modal-header') || m).innerText)) || vis[0];
   if (!modal) return '';
   const c = modal.cloneNode(true);
   c.querySelectorAll('table, .modal-header, script, style').forEach(x => x.remove());
@@ -738,7 +739,7 @@ def eventos_registro(dados, texto_livre):
             if len(c) < 4 or c[1].strip().upper() in ("LANCE", "MENSAGEM"):  # mensagens já vêm pelo chat
                 continue
             if RE_EVENTO.search(_norm(f"{c[1]} {c[3]}")):
-                out.append({"horario": c[0], "autor": c[2] or plataforma_nome(), "texto": f"{c[1]} {c[3]}".strip()})
+                out.append({"horario": c[0], "autor": c[2] or plataforma_nome(), "texto": f"{c[1]} {c[3]}".strip(), "da_tabela": True})
     # blocos "EMPRESA  dd/mm/aaaa | hh:mm" + texto (ex.: RECURSO REGISTRADO Peça recursal anexada)
     linhas = [l.strip() for l in (texto_livre or "").splitlines() if l.strip()]
     atual = None
@@ -755,7 +756,9 @@ def eventos_registro(dados, texto_livre):
             atual["texto"] = (atual["texto"] + " " + l).strip()
     if atual and atual["texto"]:
         out.append(atual)
-    return out
+    # só eventos de verdade: curtos, com palavra de evento, sem cópia de tabela de mensagens
+    return [x for x in out if len(x["texto"]) <= 600 and not re.search(r"hor[áa]rio\s+autor\s+mensagem", x["texto"], re.I)
+            and (x in out[:0] or RE_EVENTO.search(_norm(x["texto"])) or x.get("da_tabela"))]
 RE_PART = re.compile(r"^(.*?)\s*\(PARTICIPANTE\s*(\d+)\)\s*$", re.I)
 
 

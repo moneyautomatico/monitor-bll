@@ -226,7 +226,8 @@ def mensagens(filtro_emp="", busca="", limite=None):
         prim = con.execute("SELECT visto_em FROM mensagens ORDER BY rowid LIMIT 1").fetchone()
         prim = prim[0] if prim else ""
         for r in con.execute("SELECT processo, promotor, escopo, horario, autor, texto, visto_em FROM mensagens "
-                             "WHERE NOT (texto LIKE '%Limite 500 caracteres%' OR autor LIKE 'Você é o:%') "
+                             "WHERE NOT (texto LIKE '%Limite 500 caracteres%' OR autor LIKE 'Você é o:%' "
+                             "OR texto LIKE '%Horário Autor Mensagem%' OR texto LIKE '%Horario Autor Mensagem%') "
                              "ORDER BY rowid DESC LIMIT ?", (limite * 4 if limite else -1,)):
             if busca and not (pat_busca and pat_busca.search(" ".join(str(x) for x in r))):
                 continue
@@ -329,7 +330,7 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .cm{padding:10px 0;border-bottom:1px solid var(--borda)}.cm.urg{border-left:4px solid var(--erro);padding-left:10px}
 .cm-cab{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;letter-spacing:.2px}.cm-hora{margin-left:auto}
 .cm-txt{white-space:pre-wrap;font-size:14px;margin-top:4px}
-mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado{background:#fff176;outline:2px solid #fbc02d}.cm.achou{background:#fffde7}
+mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado{background:#ffeb3b;color:#000;font-weight:700;outline:2px solid #e65100;outline-offset:0;box-shadow:0 0 0 3px #ffe0b2}.cm.achou{background:#fffde7}
 .pesq{flex-wrap:wrap}#pesq-info{align-self:center}
 @media (max-width:900px){.mc{grid-template-columns:1fr;height:auto}.mc-lista{max-height:55vh}.cv-lista{max-height:none}}
 .pl{margin-bottom:16px;background:var(--card);border:1px solid var(--borda);border-radius:10px;overflow:hidden}
