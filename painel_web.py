@@ -311,7 +311,8 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .cm{padding:10px 0;border-bottom:1px solid var(--borda)}.cm.urg{border-left:4px solid var(--erro);padding-left:10px}
 .cm-cab{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;letter-spacing:.2px}.cm-hora{margin-left:auto}
 .cm-txt{white-space:pre-wrap;font-size:14px;margin-top:4px}
-mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}
+mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado{background:#fff176;outline:2px solid #fbc02d}.cm.achou{background:#fffde7}
+.pesq{flex-wrap:wrap}#pesq-info{align-self:center}
 @media (max-width:900px){.mc{grid-template-columns:1fr;height:auto}.mc-lista{max-height:55vh}.cv-lista{max-height:none}}
 .pl{margin-bottom:16px;background:var(--card);border:1px solid var(--borda);border-radius:10px;overflow:hidden}
 .pl-cab{background:#173f2c;color:#fff;font-weight:700;padding:10px 14px;letter-spacing:.3px}.pl-cab .sub{color:#cfe3d7}
@@ -530,7 +531,7 @@ def pg_busca_msgs(q):
     for m in achados[:300]:
         url = "/mensagens/processo?" + urllib.parse.urlencode({"eid": m["eid"], "processo": m["processo"], "promotor": m["promotor"]})
         txt = e(m["texto"])
-        txt = re.sub("(?i)(" + re.escape(e(termo)) + ")", r"<mark>\1</mark>", txt)
+        txt = re.sub("(?i)(" + re.escape(e(termo)) + ")", r'<mark class="achado">\1</mark>', txt)
         itens += (f'<a class="cm res" href="#" data-url="{e(url)}" onclick="return abrirUrl(this.dataset.url)">'
                   f'<div class="cm-cab"><b>{e(m["processo"])}</b>{selo_plat(m["plat"])}<span class="sub">{e(m["promotor"][:40])} · '
                   f'{e(grupo_escopo(m["escopo"]))}</span><span class="sub cm-hora">{e(m["horario"] or m["visto"])}</span></div>'
@@ -588,7 +589,8 @@ def barra_msgs(valor=""):
             f'<input id="pesq-txt" value="{e(valor)}" placeholder="🔍 Pesquisar mensagem… (Enter = buscar em todos os processos)" '
             f'oninput="buscaConversa(this)"><button>Buscar</button>'
             f'<button type="button" class="sec" title="Marcar todas as mensagens como lidas" onclick="marcarTodas()">✔✔ Marcar todas como lidas</button>'
-            f'<button type="button" class="sec" title="Atualizar agora" onclick="location.reload()">⟳ Atualizar</button></form>')
+            f'<button type="button" class="sec" title="Atualizar agora" onclick="location.reload()">⟳ Atualizar</button>'
+            f'<span id="pesq-info" class="sub"></span></form>')
 
 
 def html_conversa(g, cfg_chat):
@@ -683,9 +685,24 @@ function pesquisar(){{const t=document.getElementById('pesq-txt').value.trim();c
  fetch('/mensagens/busca?q='+encodeURIComponent(t),{{credentials:'same-origin'}}).then(r=>r.text()).then(h=>{{c.innerHTML=h;}});return false;}}
 let tBusca=null;
 function buscaConversa(i){{clearTimeout(tBusca);tBusca=setTimeout(()=>aplicarBusca(i),250);}}
-function aplicarBusca(i){{const t=(i&&i.value||'').toLowerCase();const s=document.querySelector('#conversa select');const v=s?s.value:'';
+function grifar(el,t){{  // grifa o termo pesquisado dentro do texto da mensagem
+ if(el.dataset.h===undefined)el.dataset.h=el.innerHTML; else if(el.dataset.g)el.innerHTML=el.dataset.h;
+ el.dataset.g=''; if(!t)return;
+ const w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT); const nos=[]; while(w.nextNode())nos.push(w.currentNode);
+ nos.forEach(n=>{{const tx=n.nodeValue, low=tx.toLowerCase(); let i=low.indexOf(t); if(i<0)return;
+  const f=document.createDocumentFragment(); let ult=0;
+  while(i>=0){{f.appendChild(document.createTextNode(tx.slice(ult,i))); const mk=document.createElement('mark'); mk.className='achado';
+   mk.textContent=tx.slice(i,i+t.length); f.appendChild(mk); ult=i+t.length; i=low.indexOf(t,ult);}}
+  f.appendChild(document.createTextNode(tx.slice(ult))); n.parentNode.replaceChild(f,n);}});
+ el.dataset.g='1';}}
+function aplicarBusca(i){{const t=(i&&i.value||'').trim().toLowerCase();const s=document.querySelector('#conversa select');const v=s?s.value:'';
+ let primeiro=null, n=0;
  document.querySelectorAll('#conversa .cm').forEach(m=>{{if(m.dataset.t===undefined)m.dataset.t=m.textContent.toLowerCase();
-  const ok=(!v||m.dataset.lote===v)&&(!t||m.dataset.t.includes(t)); if((m.style.display!=='none')!==ok)m.style.display=ok?'':'none';}});}}
+  const ok=(!v||m.dataset.lote===v)&&(!t||m.dataset.t.includes(t)); if((m.style.display!=='none')!==ok)m.style.display=ok?'':'none';
+  const tx=m.querySelector('.cm-txt'); if(tx&&(ok||tx.dataset.g))grifar(tx, ok?t:'');
+  m.classList.toggle('achou', ok&&!!t); if(ok&&t){{n++; if(!primeiro)primeiro=m;}}}});
+ const info=document.getElementById('pesq-info'); if(info)info.textContent=t?(n+' mensagem(ns) com “'+t+'”'):'';
+ if(primeiro)primeiro.scrollIntoView({{block:'nearest'}});}}
 // atualização automática só quando você não está digitando
 setInterval(()=>{{const a=document.activeElement; if(!a||!['INPUT','SELECT','TEXTAREA'].includes(a.tagName))location.reload();}},60000);
 function filtrarLote(s){{aplicarBusca(document.getElementById('pesq-txt'));
