@@ -586,7 +586,8 @@ def barra_msgs(valor=""):
     return (f'<form class="pesq" onsubmit="return pesquisar()">'
             f'<input id="pesq-txt" value="{e(valor)}" placeholder="🔍 Pesquisar mensagem… (Enter = buscar em todos os processos)" '
             f'oninput="buscaConversa(this)"><button>Buscar</button>'
-            f'<button type="button" class="sec" title="Marcar todas as mensagens como lidas" onclick="marcarTodas()">✔✔ Marcar todas como lidas</button></form>')
+            f'<button type="button" class="sec" title="Marcar todas as mensagens como lidas" onclick="marcarTodas()">✔✔ Marcar todas como lidas</button>'
+            f'<button type="button" class="sec" title="Atualizar agora" onclick="location.reload()">⟳ Atualizar</button></form>')
 
 
 def html_conversa(g, cfg_chat):
@@ -647,7 +648,6 @@ def pg_chat(q):
     corpo = f"""<div class="mc">
 <aside class="mc-esq"><div class="mc-topo"><h2 style="margin:0">Monitorar chat</h2>
 <div class="ferr">
-<button class="sec" title="Atualizar agora" onclick="location.reload()">⟳</button>
 <a class="btn sec" href="/mensagens?vista=lista" title="Ver todas as mensagens em tabela">☰</a></div></div>
 
 <input class="mc-busca" placeholder="Buscar pregão, órgão ou empresa…" oninput="filtrar()">
