@@ -528,7 +528,7 @@ def ler_notificacoes(page):
 JS_ABRIR_CHAT = """
 () => {
   const cands = [...document.querySelectorAll('button, a')].filter(b =>
-      (b.getClientRects().length > 0) && b.querySelector('[class*="comment"]') &&
+      (b.getClientRects().length > 0) && b.querySelector('[class*="comment"], [class*="message-square"], [class*="message-circle"]') &&
       (b.className.includes('dropdown-toggle') || b.getAttribute('data-toggle') === 'dropdown'));
   if (!cands.length) return false;
   cands[0].click();
@@ -542,7 +542,7 @@ JS_ITENS_CHAT = """
   if (!menu) return null;
   const itens = [];
   menu.querySelectorAll('button, a').forEach((b, i) => {
-    if (!b.querySelector('[class*="comment"]')) return;
+    if (!b.querySelector('[class*="comment"], [class*="message-square"], [class*="message-circle"]')) return;
     const linha = b.closest('li, tr, div') || b.parentElement;
     let rotulo = (linha.innerText || '').replace(b.innerText, '').trim().split('\\n')[0].trim();
     itens.push({rotulo, qtd: parseInt((b.innerText || '0').trim()) || 0});
@@ -565,7 +565,7 @@ JS_CLICAR_ITEM = """
   const menu = [...document.querySelectorAll('.dropdown-menu')].find(m => (m.getClientRects().length > 0));
   if (!menu) return false;
   for (const b of menu.querySelectorAll('button, a')) {
-    if (!b.querySelector('[class*="comment"]')) continue;
+    if (!b.querySelector('[class*="comment"], [class*="message-square"], [class*="message-circle"]')) continue;
     const linha = b.closest('li, tr, div') || b.parentElement;
     const r = (linha.innerText || '').replace(b.innerText, '').trim().split('\\n')[0].trim();
     if (r === rotulo) { b.click(); return true; }
@@ -587,6 +587,11 @@ JS_LER_MODAL = """
   return {titulo: titulo.trim(), tabelas};
 }
 """
+
+JS_LER_MODAL_REGISTRO = JS_LER_MODAL.replace(
+    "const modal = [...document.querySelectorAll('.modal')].find(",
+    "const vis_ = [...document.querySelectorAll('.modal')].filter(m => m.getClientRects().length > 0);\n"
+    "  const modal = vis_.find(m => /registros? d[ao] (sess|lote)/i.test(m.innerText)) || [...document.querySelectorAll('.modal')].find(", 1)
 
 JS_FECHAR_MODAL = """
 () => {
@@ -720,7 +725,12 @@ JS_ABRIR_REGISTRO = """
       if (!td[iL] || td[iL].innerText.trim() !== lote) continue;
       const bs = [...tr.querySelectorAll('button, a')].filter(b => b.getClientRects().length);
       if (!bs.length) return false;
-      bs[bs.length - 1].click();   // último botão da linha = "Registros da sessão do lote"
+      const dica = b => [b.title, b.getAttribute('aria-label'), b.getAttribute('data-original-title'),
+                         b.getAttribute('data-bs-original-title'), b.innerText].join(' ');
+      // prefere o botão cuja dica fala em "registro"; senão o último da linha (BLL); nunca o do chat
+      const alvo = bs.find(b => /registro|hist[oó]ric/i.test(dica(b))) ||
+                   [...bs].reverse().find(b => !b.querySelector('[class*="comment"], [class*="message"]')) || bs[bs.length - 1];
+      alvo.click();
       return true;
     }
   }
@@ -891,14 +901,16 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
         for _ in range(20):
             page.wait_for_timeout(500)
             if page.evaluate("""() => [...document.querySelectorAll('.modal')].some(m =>
-                  m.getClientRects().length > 0 && /registros da sess/i.test(m.innerText))"""):
+                  m.getClientRects().length > 0 && /registros? d[ao] (sess|lote)/i.test(m.innerText))"""):
                 page.wait_for_timeout(1200)
-                dados = page.evaluate(JS_LER_MODAL)
+                dados = page.evaluate(JS_LER_MODAL_REGISTRO)
                 try:
                     dados["texto_livre"] = page.evaluate(JS_TEXTO_MODAL_SEM_TABELA)
                 except Exception:
                     dados["texto_livre"] = ""
                 break
+        if not dados and diag:
+            salvar_diag(page, f"03_registro_falhou_{p['processo'].replace('/', '-')}_lote{lt['lote']}")
         if not page.evaluate(JS_FECHAR_MODAL):
             page.keyboard.press("Escape")
         page.wait_for_timeout(500)

@@ -16,10 +16,11 @@ class Botoes(HTMLParser):
         a = dict(a)
         if tag in ("button", "a"):
             self.pilha.append({"tag": tag, "cls": a.get("class", ""), "txt": "", "icones": [],
-                               "extra": a.get("data-toggle") or a.get("title") or ""})
+                               "extra": " ".join(x for x in (a.get("data-toggle"), a.get("title"), a.get("aria-label"),
+                                                         a.get("data-original-title")) if x)})
         elif tag in ("i", "span", "svg") and self.pilha and re.search(r"fa-|icon|glyph", a.get("class", "")):
             self.pilha[-1]["icones"].append(a.get("class", ""))
-        if tag in ("h1", "h2", "h3", "h4", "h5", "legend") or "modal-title" in a.get("class", ""):
+        if tag in ("h1", "h2", "h3", "h4", "h5", "legend", "th") or "modal-title" in a.get("class", ""):
             self.em_tit = ""
 
     def handle_endtag(self, tag):
@@ -28,7 +29,7 @@ class Botoes(HTMLParser):
             txt = " ".join(b["txt"].split())[:60]
             if txt or b["icones"]:
                 self.out.append(f'{b["tag"]:6} | {txt:60} | ícone: {" ".join(b["icones"])[:50]} | {b["extra"][:30]}')
-        if tag in ("h1", "h2", "h3", "h4", "h5", "legend") and self.em_tit is not None:
+        if tag in ("h1", "h2", "h3", "h4", "h5", "legend", "th") and self.em_tit is not None:
             t = " ".join(self.em_tit.split())
             if t:
                 self.titulos.append(t[:100])
