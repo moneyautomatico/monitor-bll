@@ -1702,7 +1702,66 @@ def pcp_url_publica(db, page, p):
     return url
 
 
-def pcp_baixar_ranking(page, url, chave):
+JS_PCP_ANDAMENTO = r"""
+() => {
+  const re = /\d{2}\/\d{2}\/\d{4}\s*(?:às|-|\|)?\s*\d{2}:\d{2}(?::\d{2})?/;
+  const titulo = [...document.querySelectorAll('h1,h2,h3,h4,h5,h6,strong,b,span,div,p')]
+      .find(x => /^\s*andamento(s)? do processo\s*$/i.test(x.textContent || ''));
+  if (!titulo) return [];
+  let sec = titulo.parentElement;
+  for (let i = 0; i < 6 && sec && (sec.textContent.match(new RegExp(re.source, 'g')) || []).length < 1; i++) sec = sec.parentElement;
+  if (!sec) return [];
+  // menores elementos que contêm UMA data e algum texto além dela
+  const cands = [...sec.querySelectorAll('*')].filter(el => {
+    const t = (el.innerText || el.textContent || '').trim();
+    const n = (t.match(new RegExp(re.source, 'g')) || []).length;
+    return n === 1 && t.replace(re, '').trim().length > 8;
+  });
+  const folhas = cands.filter(el => !cands.some(o => o !== el && el.contains(o)));
+  return folhas.map(el => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim()).slice(0, 400);
+}
+"""
+RE_ITEM_PCP = re.compile(r"\bitem\s*0*(\d+)", re.I)
+
+
+def pcp_andamento(db, page, p, primeira_vez):
+    """Lê o 'Andamento do processo' da página pública (já aberta) e devolve os eventos novos como alertas."""
+    try:
+        linhas = avaliar(page, JS_PCP_ANDAMENTO) or []
+    except Exception:
+        linhas = []
+    if not linhas:
+        return []
+    k = "pcp_andamento_" + p["chave"]
+    ja_lia = bool(estado(db, k))
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    novas = []
+    for txt in linhas:
+        m = RE_DATA_BLOCO.search(txt) or re.search(r"(\d{2}/\d{2}/\d{4})\D{0,6}(\d{2}:\d{2}(?::\d{2})?)", txt)
+        horario = f"{m.group(1)} {m.group(2)}" if m else ""
+        corpo = re.sub(r"\(?\s*\d{2}/\d{2}/\d{4}\D{0,6}\d{2}:\d{2}(?::\d{2})?\s*\)?", " ", txt).strip(" -|·")
+        corpo = " ".join(corpo.split())
+        if len(corpo) < 5:
+            continue
+        mi = RE_ITEM_PCP.search(corpo)
+        escopo = f"L{int(mi.group(1))} – andamento" if mi else "Andamento do processo"
+        mid = hash_msg("pcp-andamento", p["chave"], horario, corpo)
+        if db.execute("SELECT 1 FROM mensagens WHERE id=?", (mid,)).fetchone():
+            continue
+        avisar = ja_lia and not primeira_vez
+        db.execute("INSERT INTO mensagens VALUES(?,?,?,?,?,?,?,?,?)",
+                   (mid, p["processo"], p["promotor"], escopo, horario, plataforma_nome(), corpo, agora, 0 if avisar else 1))
+        if avisar:
+            novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": escopo, "horario": horario,
+                          "autor": plataforma_nome(), "texto": corpo, "id": mid})
+    if not ja_lia:
+        estado(db, k, agora)
+    db.commit()
+    log(f"PCP {p['processo']}: andamento lido ({len(linhas)} registro(s), {len(novas)} novo(s)).")
+    return novas
+
+
+def pcp_baixar_ranking(page, url, chave, ao_abrir=None):
     """Abre a página pública do processo (logado) e baixa o PDF 'Ranking nos Itens'. Só leitura."""
     ir(page, url)
     page.wait_for_timeout(8000)
@@ -1715,6 +1774,11 @@ def pcp_baixar_ranking(page, url, chave):
     for _ in range(2):  # fecha janelas de propaganda ("Aviso de licitações")
         page.keyboard.press("Escape")
         page.wait_for_timeout(500)
+    if ao_abrir:
+        try:
+            ao_abrir(page)
+        except Exception as ex:
+            log(f"PCP {chave}: erro ao ler o andamento ({ex}).")
     card = page.locator(".step-card", has_text="Ranking nos Itens").first
     if not card.count():
         log(f"PCP {chave}: sem 'Ranking nos Itens' na página pública ainda ({page.url}).")
@@ -1798,20 +1862,22 @@ def pcp_classificacao(db, page, p, primeira_vez):
     url = pcp_url_publica(db, page, p)
     if not url:
         return None
+    eventos_andamento = []
     aba = page.context.new_page()  # aba própria: se algo der errado, não afeta a janela principal
     try:
-        dados = pcp_baixar_ranking(aba, url, p["chave"])
+        dados = pcp_baixar_ranking(aba, url, p["chave"],
+                                   lambda pg: eventos_andamento.extend(pcp_andamento(db, pg, p, primeira_vez)))
     finally:
         try:
             aba.close()
         except Exception:
             pass
     if not dados:
-        return None
+        return eventos_andamento or None
     itens = pcp_ranking.classificar(pcp_ranking.ranking_pdf(dados),
                                     CFG.get("CLASSIFICACAO_NOME") or CFG.get("EMPRESA_NOME", ""), CFG.get("EMPRESA_CNPJ", ""))
     agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    novas = []
+    novas = list(eventos_andamento)
     for n, it in itens.items():
         chave = f"pcp|{p['processo']}|{p['promotor']}|{n}"
         ant = db.execute("SELECT nossa_pos, nosso_lance FROM classificacao WHERE chave=?", (chave,)).fetchone()
@@ -1896,9 +1962,9 @@ def processar_pcp(db, page, primeira_vez, diag=False):
             continue
         k = f"pcp_ranking_{p['chave']}"
         ultimo = float(estado(db, k) or 0)
-        if time.time() - ultimo < 30 * 60 and not diag:
-            continue
         encerrado = re.search(r"finaliz|homolog|encerrad|fracass|desert|revog|anulad|cancel", (p.get("situacao") or "").lower())
+        if time.time() - ultimo < (30 if encerrado else 10) * 60 and not diag:
+            continue
         ja_lido = db.execute("SELECT 1 FROM classificacao WHERE processo=? AND promotor=? LIMIT 1",
                              (p["processo"], p["promotor"])).fetchone()
         if encerrado and ja_lido and not diag:  # processo encerrado: a classificação final já está guardada
@@ -1909,8 +1975,8 @@ def processar_pcp(db, page, primeira_vez, diag=False):
         except Exception as ex:  # nunca atrapalha mensagens/documentos
             log(f"PCP {p['processo']}: erro ao ler classificação ({ex}).")
         novas += r or []
-        # deu certo: próxima leitura em 30 min; falhou: tenta de novo em 10 min
-        estado(db, k, str(time.time() if r is not None else time.time() - 20 * 60))
+        # próxima leitura: 10 min (em andamento) / 30 min (encerrado); falhou: tenta de novo no próximo intervalo
+        estado(db, k, str(time.time()))
     return notificar(db, novas, primeira_vez, len(procs), agora)
 
 
