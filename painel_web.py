@@ -288,7 +288,8 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .mc{display:grid;grid-template-columns:380px 1fr;gap:14px;height:calc(100vh - 110px);min-height:480px}
 .mc-esq{background:var(--card);border:1px solid var(--borda);border-radius:12px;display:flex;flex-direction:column;min-height:0}
 .mc-topo{display:flex;justify-content:space-between;align-items:center;padding:14px 14px 8px}
-.mc-busca{margin:0 14px 8px}.abas{display:flex;gap:6px;flex-wrap:wrap;padding:0 14px 10px;border-bottom:1px solid var(--borda)}
+.mc-busca{margin:0 14px 8px}.ferr{display:flex;gap:4px}.ferr button,.ferr .btn{padding:6px 9px;font-size:14px}
+.pesq{display:flex;gap:6px;padding:0 14px 8px}.pesq input{flex:1}.cv-busca{margin-left:auto;min-width:180px}a.res{display:block;color:var(--txt);text-decoration:none}a.res:hover{background:var(--bg)}.abas{display:flex;gap:6px;flex-wrap:wrap;padding:0 14px 10px;border-bottom:1px solid var(--borda)}
 .aba{background:var(--card);color:var(--verde);border:1px solid var(--verde);padding:5px 10px;border-radius:7px;font-size:12px}
 .aba.on{background:var(--verde);color:#fff}
 .mc-lista{overflow-y:auto;flex:1;min-height:0}
@@ -509,6 +510,34 @@ def marcar_lido(chave):
         pass
 
 
+def marcar_todos_lidos():
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    d = lidos()
+    for g in agrupar_processos().values():
+        d[chave_proc(g)] = agora
+    ARQ_LIDOS.write_text(json.dumps(d), encoding="utf-8")
+
+
+def pg_busca_msgs(q):
+    """Resultados da pesquisa em todas as mensagens (para o painel da direita)."""
+    termo = (q.get("q") or "").strip()
+    if len(termo) < 2:
+        return '<div class="cv-vazio">Digite pelo menos 2 letras.</div>'
+    achados = sorted(mensagens("", termo), key=lambda m: (data_msg(m), para_data(m["visto"])), reverse=True)
+    itens = ""
+    for m in achados[:300]:
+        url = "/mensagens/processo?" + urllib.parse.urlencode({"eid": m["eid"], "processo": m["processo"], "promotor": m["promotor"]})
+        txt = e(m["texto"])
+        txt = re.sub("(?i)(" + re.escape(e(termo)) + ")", r"<mark>\1</mark>", txt)
+        itens += (f'<a class="cm res" href="#" data-url="{e(url)}" onclick="return abrirUrl(this.dataset.url)">'
+                  f'<div class="cm-cab"><b>{e(m["processo"])}</b>{selo_plat(m["plat"])}<span class="sub">{e(m["promotor"][:40])} · '
+                  f'{e(grupo_escopo(m["escopo"]))}</span><span class="sub cm-hora">{e(m["horario"] or m["visto"])}</span></div>'
+                  f'<div class="cm-txt">{txt}</div></a>')
+    return (f'<div class="cv-cab"><div class="cv-num">🔍 “{e(termo)}”</div><div class="sub">{len(achados)} mensagem(ns) encontrada(s)'
+            f'{" – mostrando 300" if len(achados) > 300 else ""}. Clique para abrir o processo.</div></div>'
+            f'<div class="cv-lista">{itens or "<div class=sub>Nada encontrado.</div>"}</div>')
+
+
 def chave_proc(g):
     return f'{g["eid"]}|{g["processo"]}|{g["promotor"]}'
 
@@ -569,7 +598,8 @@ def html_conversa(g, cfg_chat):
             f'<div><b>Órgão:</b> {e(g["promotor"])}</div><div class="sub"><b>Empresa:</b> {e(g["nome"])} · '
             f'{len(g["msgs"])} mensagem(ns)</div></div></div>'
             f'<div class="cv-filtro"><b>Mensagens do chat</b><select onchange="filtrarLote(this)">'
-            f'<option value="">Todos os lotes ({len(g["msgs"])})</option>{ops}</select></div>'
+            f'<option value="">Todos os lotes ({len(g["msgs"])})</option>{ops}</select>'
+            f'<input class="cv-busca" placeholder="Buscar nesta conversa…" oninput="buscaConversa(this)"></div>'
             f'<div class="cv-lista">{itens or "<div class=sub>Sem mensagens.</div>"}</div>')
 
 
@@ -608,7 +638,13 @@ def pg_chat(q):
         marcar_lido(chave_proc(procs[sel]))
     corpo = f"""<div class="mc">
 <aside class="mc-esq"><div class="mc-topo"><h2 style="margin:0">Monitorar chat</h2>
-<a class="btn sec" href="/mensagens?vista=lista" title="Ver todas as mensagens em tabela">Lista</a></div>
+<div class="ferr">
+<button class="sec" title="Marcar todas como lidas" onclick="marcarTodas()">✔✔</button>
+<button class="sec" title="Atualizar agora" onclick="location.reload()">⟳</button>
+<button class="sec" title="Pesquisar nas mensagens" onclick="abrirPesquisa()">🔍</button>
+<a class="btn sec" href="/mensagens?vista=lista" title="Ver todas as mensagens em tabela">☰</a></div></div>
+<form class="pesq" id="pesq" hidden onsubmit="return pesquisar()"><input id="pesq-txt" placeholder="Pesquisar texto em todas as mensagens…">
+<button>Buscar</button></form>
 <input class="mc-busca" placeholder="Buscar pregão, órgão ou empresa…" oninput="filtrar()">
 <div class="abas">{abas}</div>
 <div class="mc-lista" id="lista">{itens or '<div class="sub" style="padding:14px">Nenhuma mensagem ainda.</div>'}</div></aside>
@@ -630,6 +666,18 @@ function abrir(a){{document.querySelectorAll('#lista .it').forEach(x=>x.classLis
   history.replaceState(null,'','/mensagens?'+a.dataset.url.split('?')[1]);
   if(window.innerWidth<900)c.scrollIntoView({{behavior:'smooth'}});}}).catch(()=>{{c.innerHTML='<div class="cv-vazio">Não consegui carregar.</div>';}});
  return false;}}
+function abrirUrl(u){{const a=[...document.querySelectorAll('#lista .it')].find(x=>x.dataset.url===u);
+ if(a){{a.style.display='';return abrir(a);}} location.href='/mensagens?'+u.split('?')[1]; return false;}}
+function marcarTodas(){{fetch('/mensagens/lidas',{{method:'POST',credentials:'same-origin',
+  headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:'csrf={CSRF}'}}).then(r=>{{if(r.ok){{
+  document.querySelectorAll('#lista .it').forEach(a=>{{a.dataset.nl='0';const p=a.querySelector('.ponto');if(p)p.hidden=true;}});filtrar();}}}});}}
+function abrirPesquisa(){{const f=document.getElementById('pesq');f.hidden=!f.hidden;if(!f.hidden)document.getElementById('pesq-txt').focus();}}
+function pesquisar(){{const t=document.getElementById('pesq-txt').value.trim();const c=document.getElementById('conversa');
+ document.querySelectorAll('#lista .it').forEach(x=>x.classList.remove('on'));
+ c.innerHTML='<div class="cv-vazio">Pesquisando…</div>';
+ fetch('/mensagens/busca?q='+encodeURIComponent(t),{{credentials:'same-origin'}}).then(r=>r.text()).then(h=>{{c.innerHTML=h;}});return false;}}
+function buscaConversa(i){{const t=i.value.toLowerCase();const s=document.querySelector('#conversa select');const v=s?s.value:'';
+ document.querySelectorAll('#conversa .cm').forEach(m=>{{m.style.display=((!v||m.dataset.lote===v)&&(!t||m.innerText.toLowerCase().includes(t)))?'':'none';}});}}
 function filtrarLote(s){{const v=s.value;document.querySelectorAll('#conversa .cm').forEach(m=>{{m.style.display=(!v||m.dataset.lote===v)?'':'none';}});
  const a=document.querySelector('#lista .it.on'); try{{if(a)sessionStorage.setItem('lote|'+a.dataset.url,v);}}catch(e){{}}}}
 try{{const f=sessionStorage.getItem('aba'); if(f){{const b=document.querySelector('.aba[data-f="'+f+'"]'); if(b)aba(b);}}}}catch(e){{}}
@@ -1424,6 +1472,8 @@ class Painel(BaseHTTPRequestHandler):
         try:
             if p == "/":
                 return self.enviar(pg_visao())
+            if p == "/mensagens/busca":
+                return self.enviar(pg_busca_msgs(q))
             if p == "/mensagens/processo":
                 return self.enviar(pg_proc_mensagens(q))
             if p == "/mensagens":
@@ -1563,6 +1613,9 @@ class Painel(BaseHTTPRequestHandler):
                             return self.enviar(pg_editais("Os arquivos desta análise não estão mais guardados. Envie de novo.", True))
                     analise.iniciar(ch, CFG_ATUAL(), o)
                 return self.redirecionar(f"/analise/{ch}")
+            if p == "/mensagens/lidas":
+                marcar_todos_lidos()
+                return self.enviar("ok")
             if p == "/editais/ia":
                 if f.get("acao") == "padrao":
                     analise.salvar_config_ia("", f.get("empresa", ""))
