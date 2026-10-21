@@ -208,6 +208,7 @@ def mensagens(filtro_emp="", busca="", limite=None):
         prim = con.execute("SELECT visto_em FROM mensagens ORDER BY rowid LIMIT 1").fetchone()
         prim = prim[0] if prim else ""
         for r in con.execute("SELECT processo, promotor, escopo, horario, autor, texto, visto_em FROM mensagens "
+                             "WHERE NOT (texto LIKE '%Limite 500 caracteres%' OR autor LIKE 'Você é o:%') "
                              "ORDER BY rowid DESC LIMIT ?", (limite * 4 if limite else -1,)):
             if busca and busca.lower() not in " ".join(str(x) for x in r).lower():
                 continue
@@ -680,15 +681,20 @@ function pesquisar(){{const t=document.getElementById('pesq-txt').value.trim();c
  document.querySelectorAll('#lista .it').forEach(x=>x.classList.remove('on'));
  c.innerHTML='<div class="cv-vazio">Pesquisando…</div>';
  fetch('/mensagens/busca?q='+encodeURIComponent(t),{{credentials:'same-origin'}}).then(r=>r.text()).then(h=>{{c.innerHTML=h;}});return false;}}
-function buscaConversa(i){{const t=(i&&i.value||'').toLowerCase();const s=document.querySelector('#conversa select');const v=s?s.value:'';
- document.querySelectorAll('#conversa .cm').forEach(m=>{{m.style.display=((!v||m.dataset.lote===v)&&(!t||m.innerText.toLowerCase().includes(t)))?'':'none';}});}}
-function filtrarLote(s){{buscaConversa(document.getElementById('pesq-txt'));
+let tBusca=null;
+function buscaConversa(i){{clearTimeout(tBusca);tBusca=setTimeout(()=>aplicarBusca(i),250);}}
+function aplicarBusca(i){{const t=(i&&i.value||'').toLowerCase();const s=document.querySelector('#conversa select');const v=s?s.value:'';
+ document.querySelectorAll('#conversa .cm').forEach(m=>{{if(m.dataset.t===undefined)m.dataset.t=m.textContent.toLowerCase();
+  const ok=(!v||m.dataset.lote===v)&&(!t||m.dataset.t.includes(t)); if((m.style.display!=='none')!==ok)m.style.display=ok?'':'none';}});}}
+// atualização automática só quando você não está digitando
+setInterval(()=>{{const a=document.activeElement; if(!a||!['INPUT','SELECT','TEXTAREA'].includes(a.tagName))location.reload();}},60000);
+function filtrarLote(s){{aplicarBusca(document.getElementById('pesq-txt'));
  const a=document.querySelector('#lista .it.on'); try{{if(a)sessionStorage.setItem('lote|'+a.dataset.url,v);}}catch(e){{}}}}
 try{{const f=sessionStorage.getItem('aba'); if(f){{const b=document.querySelector('.aba[data-f="'+f+'"]'); if(b)aba(b);}}}}catch(e){{}}
 (function(){{const a=document.querySelector('#lista .it.on'); if(a){{a.scrollIntoView({{block:'center'}});
  try{{const v=sessionStorage.getItem('lote|'+a.dataset.url); const s=document.querySelector('#conversa select'); if(v&&s){{s.value=v;filtrarLote(s);}}}}catch(e){{}}}}}})();
 </script>"""
-    return pagina("Mensagens", corpo, "/mensagens", recarregar=True)
+    return pagina("Mensagens", corpo, "/mensagens", recarregar=False)
 
 
 def pg_proc_mensagens(q):
