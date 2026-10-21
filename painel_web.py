@@ -196,8 +196,26 @@ def empresas():
     return out
 
 
+_ACENTO_RE = {"a": "[aáàâãä]", "e": "[eéèêë]", "i": "[iíìîï]", "o": "[oóòôõö]", "u": "[uúùûü]", "c": "[cç]", "n": "[nñ]"}
+
+
+def regex_busca(termo):
+    """Busca tolerante: ignora acentos, maiúsculas e trata espaço/hífen/quebra de linha como iguais."""
+    termo = unicodedata.normalize("NFKD", termo or "").encode("ascii", "ignore").decode().lower().strip()
+    partes = []
+    for ch in termo:
+        if ch in " -_‐‑–—":
+            partes.append(r"[\s\-‐‑‒–—_]+")
+        else:
+            partes.append(_ACENTO_RE.get(ch, re.escape(ch)))
+    padrao = "".join(partes)
+    padrao = re.sub(r"(\[\\s\\-‐‑‒–—_\]\+)+", lambda m: r"[\s\-‐‑‒–—_]+", padrao)
+    return re.compile(padrao, re.I) if padrao else None
+
+
 def mensagens(filtro_emp="", busca="", limite=None):
     out = []
+    pat_busca = regex_busca(busca) if busca else None
     for emp in empresas():
         if filtro_emp and emp["id"] != filtro_emp:
             continue
@@ -210,7 +228,7 @@ def mensagens(filtro_emp="", busca="", limite=None):
         for r in con.execute("SELECT processo, promotor, escopo, horario, autor, texto, visto_em FROM mensagens "
                              "WHERE NOT (texto LIKE '%Limite 500 caracteres%' OR autor LIKE 'Você é o:%') "
                              "ORDER BY rowid DESC LIMIT ?", (limite * 4 if limite else -1,)):
-            if busca and busca.lower() not in " ".join(str(x) for x in r).lower():
+            if busca and not (pat_busca and pat_busca.search(" ".join(str(x) for x in r))):
                 continue
             out.append({"emp": f'{emp["nome"]} · {emp["plat"]}', "nome": emp["nome"], "plat": emp["plat"], "eid": emp["id"], "processo": r[0], "promotor": r[1], "escopo": r[2],
                         "horario": r[3], "autor": r[4], "texto": r[5], "visto": r[6], "nova": r[6] != prim})
@@ -531,7 +549,9 @@ def pg_busca_msgs(q):
     for m in achados[:300]:
         url = "/mensagens/processo?" + urllib.parse.urlencode({"eid": m["eid"], "processo": m["processo"], "promotor": m["promotor"]})
         txt = e(m["texto"])
-        txt = re.sub("(?i)(" + re.escape(e(termo)) + ")", r'<mark class="achado">\1</mark>', txt)
+        pat = regex_busca(termo)
+        txt = e(pat.sub(lambda x: "\x00" + x.group(0) + "\x01", m["texto"])) if pat else txt
+        txt = txt.replace("\x00", '<mark class="achado">').replace("\x01", "</mark>")
         itens += (f'<a class="cm res" href="#" data-url="{e(url)}" onclick="return abrirUrl(this.dataset.url)">'
                   f'<div class="cm-cab"><b>{e(m["processo"])}</b>{selo_plat(m["plat"])}<span class="sub">{e(m["promotor"][:40])} · '
                   f'{e(grupo_escopo(m["escopo"]))}</span><span class="sub cm-hora">{e(m["horario"] or m["visto"])}</span></div>'
@@ -685,26 +705,36 @@ function pesquisar(){{const t=document.getElementById('pesq-txt').value.trim();c
  fetch('/mensagens/busca?q='+encodeURIComponent(t),{{credentials:'same-origin'}}).then(r=>r.text()).then(h=>{{c.innerHTML=h;}});return false;}}
 let tBusca=null;
 function buscaConversa(i){{clearTimeout(tBusca);tBusca=setTimeout(()=>aplicarBusca(i),250);}}
+function padraoBusca(t){{const sem=t.normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().trim(); if(!sem)return null;
+ const ac={{a:'[aáàâãä]',e:'[eéèêë]',i:'[iíìîï]',o:'[oóòôõö]',u:'[uúùûü]',c:'[cç]',n:'[nñ]'}};
+ let p=''; for(const ch of sem){{ if(/[\\s\\-_‐-―]/.test(ch)){{ if(!p.endsWith(']+'))p+='[\\\\s\\\\-_\\\\u2010-\\\\u2015]+'; }}
+  else p+=ac[ch]||ch.replace(/[.*+?^${{}}()|[\\]\\\\]/g,'\\\\$&'); }}
+ return new RegExp(p,'gi');}}
 function grifar(el,t){{  // grifa o termo pesquisado dentro do texto da mensagem
  if(el.dataset.h===undefined)el.dataset.h=el.innerHTML; else if(el.dataset.g)el.innerHTML=el.dataset.h;
  el.dataset.g=''; if(!t)return;
  const w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT); const nos=[]; while(w.nextNode())nos.push(w.currentNode);
- nos.forEach(n=>{{const tx=n.nodeValue, low=tx.toLowerCase(); let i=low.indexOf(t); if(i<0)return;
+ const re=padraoBusca(t); if(!re)return;
+ nos.forEach(n=>{{const tx=n.nodeValue; re.lastIndex=0; let mt=re.exec(tx); if(!mt)return;
   const f=document.createDocumentFragment(); let ult=0;
-  while(i>=0){{f.appendChild(document.createTextNode(tx.slice(ult,i))); const mk=document.createElement('mark'); mk.className='achado';
-   mk.textContent=tx.slice(i,i+t.length); f.appendChild(mk); ult=i+t.length; i=low.indexOf(t,ult);}}
+  while(mt){{ if(!mt[0].length){{re.lastIndex++; mt=re.exec(tx); continue;}}
+   f.appendChild(document.createTextNode(tx.slice(ult,mt.index))); const mk=document.createElement('mark'); mk.className='achado';
+   mk.textContent=mt[0]; f.appendChild(mk); ult=mt.index+mt[0].length; mt=re.exec(tx);}}
   f.appendChild(document.createTextNode(tx.slice(ult))); n.parentNode.replaceChild(f,n);}});
  el.dataset.g='1';}}
-function aplicarBusca(i){{const t=(i&&i.value||'').trim().toLowerCase();const s=document.querySelector('#conversa select');const v=s?s.value:'';
- let primeiro=null, n=0;
- document.querySelectorAll('#conversa .cm').forEach(m=>{{if(m.dataset.t===undefined)m.dataset.t=m.textContent.toLowerCase();
-  const ok=(!v||m.dataset.lote===v)&&(!t||m.dataset.t.includes(t)); if((m.style.display!=='none')!==ok)m.style.display=ok?'':'none';
+function aplicarBusca(i){{const t=(i&&i.value||'').trim();const s=document.querySelector('#conversa select');const v=s?s.value:'';
+ let primeiro=null, n=0; const re=padraoBusca(t);
+ document.querySelectorAll('#conversa .cm').forEach(m=>{{if(m.dataset.t===undefined)m.dataset.t=m.textContent;
+  if(re)re.lastIndex=0; const ok=(!v||m.dataset.lote===v)&&(!re||re.test(m.dataset.t)); if((m.style.display!=='none')!==ok)m.style.display=ok?'':'none';
   const tx=m.querySelector('.cm-txt'); if(tx&&(ok||tx.dataset.g))grifar(tx, ok?t:'');
   m.classList.toggle('achou', ok&&!!t); if(ok&&t){{n++; if(!primeiro)primeiro=m;}}}});
  const info=document.getElementById('pesq-info'); if(info)info.textContent=t?(n+' mensagem(ns) com “'+t+'”'):'';
  if(primeiro)primeiro.scrollIntoView({{block:'nearest'}});}}
 // atualização automática só quando você não está digitando
-setInterval(()=>{{const a=document.activeElement; if(!a||!['INPUT','SELECT','TEXTAREA'].includes(a.tagName))location.reload();}},60000);
+setInterval(()=>{{const a=document.activeElement; const p=document.getElementById('pesq-txt');
+ if(p&&p.value.trim())return;              // pesquisa ativa: não recarrega
+ if(document.querySelector('#conversa a.res'))return;   // mostrando resultados da busca
+ if(!a||!['INPUT','SELECT','TEXTAREA'].includes(a.tagName))location.reload();}},60000);
 function filtrarLote(s){{aplicarBusca(document.getElementById('pesq-txt'));
  const a=document.querySelector('#lista .it.on'); try{{if(a)sessionStorage.setItem('lote|'+a.dataset.url,v);}}catch(e){{}}}}
 try{{const f=sessionStorage.getItem('aba'); if(f){{const b=document.querySelector('.aba[data-f="'+f+'"]'); if(b)aba(b);}}}}catch(e){{}}
