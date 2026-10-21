@@ -112,7 +112,7 @@ def encerrar_sessao(tok):
 
 def pg_login(erro="", destino="/"):
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar – Licitatudo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar – Licitatudo</title>{TEMA_JS}
 <style>
 *{{box-sizing:border-box}}html,body{{height:100%;margin:0}}
 body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#17241c;display:grid;grid-template-columns:1.1fr 1fr;background:#f3f5f4}}
@@ -144,8 +144,13 @@ button.entrar{{width:100%;font:inherit;font-weight:700;font-size:15px;color:#fff
 button.entrar:hover{{transform:translateY(-1px);box-shadow:0 14px 28px rgba(31,92,63,.35)}}
 .erro{{background:#fde8e6;color:#b3261e;border-radius:10px;padding:10px 12px;font-size:13.5px;margin-bottom:6px}}
 .seg{{display:flex;gap:6px;align-items:center;justify-content:center;color:#8a9a91;font-size:12px;margin-top:22px}}
-@media (prefers-color-scheme:dark){{body{{background:#101512;color:#e5ebe7}}.campo input{{background:#1a211d;border-color:#2a332e;color:#e5ebe7}}
- .cartao .sub,.linha{{color:#97a59d}}}}
+@media (prefers-color-scheme:dark){{:root:not([data-theme=light]) body{{background:#101512;color:#e5ebe7}}
+ :root:not([data-theme=light]) .campo input{{background:#1a211d;border-color:#2a332e;color:#e5ebe7}}
+ :root:not([data-theme=light]) .cartao .sub,:root:not([data-theme=light]) .linha{{color:#97a59d}}}}
+:root[data-theme=dark] body{{background:#101512;color:#e5ebe7}}:root[data-theme=dark] .campo input{{background:#1a211d;border-color:#2a332e;color:#e5ebe7}}
+:root[data-theme=dark] .cartao .sub,:root[data-theme=dark] .linha{{color:#97a59d}}
+.tema{{position:fixed;top:16px;right:16px;border:1px solid #dfe5e1;background:rgba(255,255,255,.7);border-radius:10px;padding:7px 11px;font-size:16px;cursor:pointer;z-index:5}}
+:root[data-theme=dark] .tema{{background:#1a211d;border-color:#2a332e}}
 @media (max-width:860px){{body{{grid-template-columns:1fr}}.arte{{padding:28px;min-height:auto}}.chamada h1{{font-size:26px}}.chips,.rodape{{display:none}}}}
 </style></head><body>
 <section class="arte"><div class="marca"><div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>Licitatudo</div>
@@ -153,6 +158,7 @@ button.entrar:hover{{transform:translateY(-1px);box-shadow:0 14px 28px rgba(31,9
 <p>Mensagens do pregoeiro, classificação dos lotes, recursos e diligências da BLL, BNC e Portal de Compras — com alerta na hora.</p>
 <div class="chips"><span class="chip">🔔 Alertas em tempo real</span><span class="chip">📊 Classificação por lote</span><span class="chip">🤖 Análise de editais</span></div></div>
 <div class="rodape">© {datetime.now().year} Licitatudo · acesso restrito</div></section>
+<button type="button" class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>
 <section class="lado"><form class="cartao" method="post" action="/login">
 <h2>Bem-vindo de volta</h2><p class="sub">Entre para acessar o painel.</p>
 {f'<div class="erro">{e(erro)}</div>' if erro else ''}
@@ -358,16 +364,22 @@ def CFG_ATUAL():
 
 
 # ------------------------------------------------------------------ HTML
+TEMA_JS = "<script>(function(){try{var t=localStorage.getItem('tema');if(t)document.documentElement.dataset.theme=t;}catch(e){}})();\nfunction trocarTema(){var r=document.documentElement,atual=r.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'),\nnovo=atual==='dark'?'light':'dark';r.dataset.theme=novo;try{localStorage.setItem('tema',novo);}catch(e){}\ndocument.querySelectorAll('.tema').forEach(function(b){b.textContent=novo==='dark'?'☀️':'🌙';b.title=novo==='dark'?'Modo claro':'Modo escuro';});}\ndocument.addEventListener('DOMContentLoaded',function(){var r=document.documentElement,d=(r.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))==='dark';\ndocument.querySelectorAll('.tema').forEach(function(b){b.textContent=d?'☀️':'🌙';b.title=d?'Modo claro':'Modo escuro';});});</script>"
 ESTILO = """
 :root{--bg:#f3f5f4;--card:#fff;--txt:#17241c;--sub:#5f6d65;--verde:#1f5c3f;--verde2:#e6f0ea;--aviso:#a85d00;
 --avisobg:#fff4e0;--erro:#b3261e;--errobg:#fde8e6;--borda:#dfe5e1;--nova:#fff7d6}
-@media (prefers-color-scheme:dark){:root{--bg:#101512;--card:#1a211d;--txt:#e5ebe7;--sub:#97a59d;--verde:#5fb88a;
---verde2:#1f3328;--aviso:#e3a14b;--avisobg:#3a2b12;--erro:#ff8a80;--errobg:#3b1715;--borda:#2a332e;--nova:#3a3418}}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#101512;--card:#1a211d;--txt:#e5ebe7;--sub:#97a59d;--verde:#5fb88a;
+--verde2:#1f3328;--aviso:#e3a14b;--avisobg:#3a2b12;--erro:#ff8a80;--errobg:#3b1715;--borda:#2a332e;--nova:#3a3418;--achou:#3a3418;color-scheme:dark}}
+:root[data-theme=dark]{--bg:#101512;--card:#1a211d;--txt:#e5ebe7;--sub:#97a59d;--verde:#5fb88a;
+--verde2:#1f3328;--aviso:#e3a14b;--avisobg:#3a2b12;--erro:#ff8a80;--errobg:#3b1715;--borda:#2a332e;--nova:#3a3418;--achou:#3a3418;color-scheme:dark}
+:root{--achou:#fffde7}
+.tema{background:none;border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:8px;padding:5px 10px;font-size:15px;cursor:pointer;margin-left:auto}
+.tema:hover{background:rgba(255,255,255,.1)}header .tema+.sair{margin-left:8px}
 *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--txt)}
 header{background:#173f2c;color:#fff;padding:0 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
 header b{font-size:17px;padding:14px 0}nav{display:flex;gap:2px;flex-wrap:wrap}
 nav a{color:#cfe3d7;text-decoration:none;padding:16px 12px;font-size:14px;border-bottom:3px solid transparent}
-header .sair{margin-left:auto;color:#cfe3d7;text-decoration:none;font-size:13px;border:1px solid rgba(255,255,255,.25);padding:6px 12px;border-radius:8px}header .sair:hover{background:rgba(255,255,255,.1)}
+header .sair{color:#cfe3d7;text-decoration:none;font-size:13px;border:1px solid rgba(255,255,255,.25);padding:6px 12px;border-radius:8px}header .sair:hover{background:rgba(255,255,255,.1)}
 nav a.on{color:#fff;border-bottom-color:#7fd3a5}main{max-width:1250px;margin:auto;padding:18px 16px 60px}
 h2{font-size:19px;margin:6px 0 14px}h3{font-size:15px;margin:18px 0 8px}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:16px}
@@ -424,7 +436,7 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .cm{padding:10px 0;border-bottom:1px solid var(--borda)}.cm.urg{border-left:4px solid var(--erro);padding-left:10px}
 .cm-cab{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;letter-spacing:.2px}.cm-hora{margin-left:auto}
 .cm-txt{white-space:pre-wrap;font-size:14px;margin-top:4px}
-mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.atual{background:#ff6d00;color:#fff;outline:3px solid #bf360c}.nav-busca{display:flex;gap:4px;align-items:center}.nav-busca button{padding:6px 10px}mark.achado{background:#ffeb3b;color:#000;font-weight:700;outline:2px solid #e65100;outline-offset:0;box-shadow:0 0 0 3px #ffe0b2}.cm.achou{background:#fffde7}
+mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.atual{background:#ff6d00;color:#fff;outline:3px solid #bf360c}.nav-busca{display:flex;gap:4px;align-items:center}.nav-busca button{padding:6px 10px}mark.achado{background:#ffeb3b;color:#000;font-weight:700;outline:2px solid #e65100;outline-offset:0;box-shadow:0 0 0 3px #ffe0b2}.cm.achou{background:var(--achou)}
 .pesq{flex-wrap:wrap}#pesq-info{align-self:center}
 @media (max-width:900px){.mc{grid-template-columns:1fr;height:auto}.mc-lista{max-height:55vh}.cv-lista{max-height:none}}
 .pl{margin-bottom:16px;background:var(--card);border:1px solid var(--borda);border-radius:10px;overflow:hidden}
@@ -468,7 +480,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
-<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main></body></html>"""
+{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main></body></html>"""
 
 
 def tag_status(emp):
