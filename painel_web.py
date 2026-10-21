@@ -210,7 +210,7 @@ def mensagens(filtro_emp="", busca="", limite=None):
                              "ORDER BY rowid DESC LIMIT ?", (limite * 4 if limite else -1,)):
             if busca and busca.lower() not in " ".join(str(x) for x in r).lower():
                 continue
-            out.append({"emp": f'{emp["nome"]} · {emp["plat"]}', "eid": emp["id"], "processo": r[0], "promotor": r[1], "escopo": r[2],
+            out.append({"emp": f'{emp["nome"]} · {emp["plat"]}', "nome": emp["nome"], "plat": emp["plat"], "eid": emp["id"], "processo": r[0], "promotor": r[1], "escopo": r[2],
                         "horario": r[3], "autor": r[4], "texto": r[5], "visto": r[6], "nova": r[6] != prim})
         con.close()
     out.sort(key=lambda m: (data_msg(m), para_data(m["visto"])), reverse=True)  # mais recentes primeiro
@@ -284,6 +284,22 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 @media print{header,.acoes,.msg{display:none}.analise{border:0}}
 .analise{background:var(--card);border:1px solid var(--borda);border-radius:10px;padding:6px 20px 16px;max-width:900px;line-height:1.5}
 .analise h3{border-bottom:1px solid var(--borda);padding-bottom:4px;margin-top:22px}.analise h4{margin:14px 0 4px;font-size:14px}
+.ch-barra{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.chat{display:grid;grid-template-columns:340px 1fr;gap:12px;height:calc(100vh - 170px);min-height:420px}
+.ch-lado{background:var(--card);border:1px solid var(--borda);border-radius:10px;overflow-y:auto}
+.ch-plat{position:sticky;top:0;background:var(--verde2);color:var(--verde);font-weight:700;font-size:12px;padding:8px 12px;text-transform:uppercase;letter-spacing:.5px;z-index:1}
+.ch-item{display:block;padding:10px 12px;border-bottom:1px solid var(--borda);color:var(--txt);text-decoration:none}
+.ch-item:hover{background:var(--bg)}.ch-item.on{background:var(--nova);border-left:4px solid var(--verde)}
+.ch-l1{display:flex;justify-content:space-between;gap:8px}.ch-org{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch-prev{font-size:12.5px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch-conv{background:var(--card);border:1px solid var(--borda);border-radius:10px;display:flex;flex-direction:column;min-width:0}
+.ch-topo{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--borda)}
+.ch-lista{overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.ch-msg{background:var(--verde2);border-radius:10px;padding:9px 12px;max-width:92%}
+.ch-msg.sis{background:var(--bg);border:1px dashed var(--borda)}.ch-msg.urg{border-left:4px solid var(--erro)}
+.ch-cab{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px;font-size:13px}.ch-hora{margin-left:auto}
+.ch-msg .txt{max-width:none;font-size:14px}
+@media (max-width:800px){.chat{grid-template-columns:1fr;height:auto}.ch-lado{max-height:260px}.ch-lista{max-height:none}}
 @media (max-width:700px){.ocultar{display:none}nav a{padding:12px 8px}}
 """
 
@@ -409,6 +425,90 @@ def urg_tag(m):
     return f'<span class="tag erro">🚨 {e(motivo)}</span><br>' if motivo else ""
 
 
+def grupo_escopo(esc):
+    """'Lote 1', 'LOTE 01', 'L1 – registro do lote' -> 'L1'; outros viram categorias."""
+    m = re.search(r"(?i)\b(?:lote|l)\s*0*(\d+)\b", esc or "")
+    if m:
+        return f"L{m.group(1)}"
+    n = unicodedata.normalize("NFKD", esc or "").encode("ascii", "ignore").decode().lower()
+    for chave, nome in (("situac", "Mudança de situação"), ("document", "Documentos"), ("notifica", "Notificações"),
+                        ("classifica", "Classificação"), ("dilig", "Diligências"), ("evento", "Processo (eventos)")):
+        if chave in n:
+            return nome
+    return esc or "Outros"
+
+
+def pg_chat(q):
+    """Mensagens em formato de chat: processos à esquerda (por plataforma), conversa à direita (filtro por lote)."""
+    busca = q.get("q", "")
+    todas = mensagens(q.get("empresa", ""), busca)
+    cfg_chat = CFG_ATUAL().get("CHAT_URGENTE", "1") != "0"
+    # agrupa por processo
+    procs = {}
+    for m in todas:
+        k = (m["eid"], m["processo"], m["promotor"])
+        g = procs.setdefault(k, {"eid": m["eid"], "nome": m["nome"], "plat": m["plat"], "processo": m["processo"],
+                                 "promotor": m["promotor"], "msgs": [], "ultima": datetime.min, "ult_msg": None})
+        g["msgs"].append(m)
+        d = data_msg(m)
+        if d >= g["ultima"]:
+            g["ultima"], g["ult_msg"] = d, m
+    sel = (q.get("eid", ""), q.get("processo", ""), q.get("promotor", ""))
+    if sel not in procs and procs:
+        sel = max(procs, key=lambda k: procs[k]["ultima"])
+    # barra lateral, agrupada por plataforma (plataforma com movimento mais recente primeiro)
+    por_plat = {}
+    for g in procs.values():
+        por_plat.setdefault(g["plat"], []).append(g)
+    ordem_plat = sorted(por_plat, key=lambda pl: max(x["ultima"] for x in por_plat[pl]), reverse=True)
+    lateral = ""
+    for pl in ordem_plat:
+        lateral += f'<div class="ch-plat">{e(pl)}</div>'
+        for g in sorted(por_plat[pl], key=lambda x: x["ultima"], reverse=True):
+            k = (g["eid"], g["processo"], g["promotor"])
+            um = g["ult_msg"] or {}
+            urg = urgencia.classificar(um.get("texto", ""), um.get("escopo", ""), um.get("autor", ""), chat_urgente=cfg_chat)
+            url = "/mensagens?" + urllib.parse.urlencode({"eid": g["eid"], "processo": g["processo"], "promotor": g["promotor"],
+                                                          "q": busca})
+            quando = g["ultima"].strftime("%d/%m %H:%M") if g["ultima"] != datetime.min else ""
+            lateral += (f'<a class="ch-item{" on" if k == sel else ""}" href="{e(url)}">'
+                        f'<div class="ch-l1"><b>{e(g["processo"])}</b><span class="sub">{e(quando)}</span></div>'
+                        f'<div class="sub ch-org">{e(g["nome"])} · {e(g["promotor"][:40])}</div>'
+                        f'<div class="ch-prev">{"🚨 " if urg else ""}{e((um.get("texto") or "")[:70])}</div></a>')
+    # conversa
+    direita = '<div class="sub" style="padding:20px">Nenhuma mensagem ainda.</div>'
+    if procs:
+        g = procs[sel]
+        grupos = sorted({grupo_escopo(m["escopo"]) for m in g["msgs"]},
+                        key=lambda x: (not x.startswith("L"), int(x[1:]) if x[1:].isdigit() else 0, x))
+        lote = q.get("lote", "")
+        msgs = [m for m in g["msgs"] if not lote or grupo_escopo(m["escopo"]) == lote]
+        msgs.sort(key=lambda m: (data_msg(m), para_data(m["visto"])), reverse=True)
+        ops = "".join(f'<option value="{e(x)}" {"selected" if x == lote else ""}>{e(x)}</option>' for x in grupos)
+        hid = "".join(f'<input type="hidden" name="{k}" value="{e(v)}">' for k, v in
+                      (("eid", g["eid"]), ("processo", g["processo"]), ("promotor", g["promotor"]), ("q", busca)))
+        bolhas = ""
+        for m in msgs:
+            urg = urgencia.classificar(m["texto"], m["escopo"], m["autor"], chat_urgente=cfg_chat)
+            sistema = not urgencia.eh_chat(m["escopo"], m["autor"])
+            tag_urg = f' <span class="tag erro">🚨 {e(urg)}</span>' if urg else ""
+            bolhas += (f'<div class="ch-msg{" sis" if sistema else ""}{" urg" if urg else ""}">'
+                       f'<div class="ch-cab"><b>{e(m["autor"] or "—")}</b> <span class="tag parado">{e(grupo_escopo(m["escopo"]))}</span>'
+                       f'{tag_urg}<span class="sub ch-hora">{e(m["horario"] or m["visto"])}</span></div>'
+                       f'<div class="txt">{e(m["texto"])}</div></div>')
+        direita = (f'<div class="ch-topo"><div><b>{e(g["processo"])}</b> · {e(g["nome"])} <span class="tag parado">{e(g["plat"])}</span>'
+                   f'<div class="sub">{e(g["promotor"])}</div></div>'
+                   f'<form method="get" action="/mensagens" style="margin:0">{hid}<select name="lote" onchange="this.form.submit()">'
+                   f'<option value="">Todos os lotes ({len(g["msgs"])})</option>{ops}</select></form></div>'
+                   f'<div class="ch-lista">{bolhas or "<div class=sub>Nada neste filtro.</div>"}</div>')
+    corpo = f"""<div class="ch-barra"><h2 style="margin:0">Mensagens</h2>
+<form method="get" action="/mensagens" class="linha" style="margin:0"><input name="q" value="{e(busca)}" placeholder="Buscar…">
+<button>Buscar</button><a class="btn sec" href="/mensagens?vista=lista">Ver em lista</a></form></div>
+<div class="chat"><aside class="ch-lado">{lateral or '<div class="sub" style="padding:12px">Sem processos com mensagens.</div>'}</aside>
+<section class="ch-conv">{direita}</section></div>"""
+    return pagina("Mensagens", corpo, "/mensagens", recarregar=True)
+
+
 def pg_mensagens(q):
     emp, busca, so_novas = q.get("empresa", ""), q.get("q", ""), q.get("novas", "")
     emps = empresas()
@@ -436,7 +536,7 @@ def pg_mensagens(q):
 <input name="q" value="{e(busca)}" placeholder="Buscar texto, processo, autor…">
 <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" name="novas" value="1" {"checked" if so_novas else ""}> só novas</label>
 <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" name="urgentes" value="1" {"checked" if q.get("urgentes") else ""}> só urgentes</label>
-<button>Filtrar</button></form>
+<input type="hidden" name="vista" value="lista"><button>Filtrar</button><a class="btn sec" href="/mensagens">Ver como chat</a></form>
 <p class="sub">{total} mensagem(ns) · página {pag} de {total_pag} · 300 por página · mais recentes primeiro</p>{nav}
 <table><tr><th>Empresa</th><th>Processo</th><th class="ocultar">Origem</th><th>Horário</th><th class="ocultar">Autor</th><th>Mensagem</th></tr>
 {linhas or '<tr><td colspan="6">Nenhuma mensagem.</td></tr>'}</table>{nav}
@@ -1186,7 +1286,7 @@ class Painel(BaseHTTPRequestHandler):
             if p == "/":
                 return self.enviar(pg_visao())
             if p == "/mensagens":
-                return self.enviar(pg_mensagens(q))
+                return self.enviar(pg_mensagens(q) if q.get("vista") == "lista" else pg_chat(q))
             if p == "/processos":
                 return self.enviar(pg_processos(q))
             if p == "/empresas":

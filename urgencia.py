@@ -7,6 +7,10 @@ ARQ = Path(__file__).resolve().parent / "urgente_palavras.txt"   # editável pel
 
 # Trechos (sem acento, minúsculos). Cada linha: trecho | motivo mostrado no alerta
 PADRAO = """
+recurso | Recurso
+desclassific | Desclassificação
+inabilit | Inabilitação
+recusad | Recusa
 convoc | Convocação
 anex | Pedido de anexo/documento
 proposta ajustada | Proposta ajustada
@@ -25,10 +29,6 @@ prazo | Prazo
 sob pena | Prazo com penalidade
 horas | Prazo em horas
 minutos | Prazo em minutos
-recurso | Recurso
-desclassific | Desclassificação
-inabilit | Inabilitação
-recusad | Recusa
 reabert | Sessão reaberta
 retomad | Sessão retomada
 caiu de 1 | Perdeu o 1º lugar
