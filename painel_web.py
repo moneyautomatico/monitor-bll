@@ -639,7 +639,6 @@ def pg_chat(q):
     corpo = f"""<div class="mc">
 <aside class="mc-esq"><div class="mc-topo"><h2 style="margin:0">Monitorar chat</h2>
 <div class="ferr">
-<button class="sec" title="Marcar todas como lidas" onclick="marcarTodas()">✔✔</button>
 <button class="sec" title="Atualizar agora" onclick="location.reload()">⟳</button>
 <a class="btn sec" href="/mensagens?vista=lista" title="Ver todas as mensagens em tabela">☰</a></div></div>
 
@@ -648,7 +647,8 @@ def pg_chat(q):
 <div class="mc-lista" id="lista">{itens or '<div class="sub" style="padding:14px">Nenhuma mensagem ainda.</div>'}</div></aside>
 <section class="mc-dir"><form class="pesq" onsubmit="return pesquisar()">
 <input id="pesq-txt" placeholder="🔍 Pesquisar mensagens… (filtra a conversa aberta; Enter busca em todos os processos)" oninput="buscaConversa(this)">
-<button>Buscar em todos</button></form><div id="conversa">{direita}</div></section></div>
+<button>Buscar em todos</button>
+<button type="button" class="sec" title="Marcar todas as mensagens como lidas" onclick="marcarTodas()">✔✔ Marcar todas como lidas</button></form><div id="conversa">{direita}</div></section></div>
 <script>
 let filtroAba='todos';
 function filtrar(){{const t=document.querySelector('.mc-busca').value.toLowerCase();
