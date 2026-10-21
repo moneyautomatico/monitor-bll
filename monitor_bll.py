@@ -246,6 +246,12 @@ def abrir_banco():
     db.execute("""CREATE TABLE IF NOT EXISTS classificacao(
         chave TEXT PRIMARY KEY, processo TEXT, promotor TEXT, lote TEXT, descricao TEXT, fase TEXT,
         primeiro TEXT, melhor TEXT, ranking TEXT, nossa_pos INTEGER, nosso_lance TEXT, lido_em REAL, atualizado TEXT)""")
+    if not db.execute("SELECT 1 FROM estado WHERE chave='dilig_versao' AND valor='2'").fetchone():
+        # a leitura antiga às vezes gravava as mensagens do lote como diligências: apaga e relê em silêncio
+        db.execute("DELETE FROM mensagens WHERE escopo='Diligência'")
+        db.execute("DELETE FROM estado WHERE chave LIKE 'diligencias_%'")
+        db.execute("INSERT OR REPLACE INTO estado VALUES('dilig_versao','2')")
+        db.commit()
     if (db.execute("SELECT valor FROM estado WHERE chave='classif_versao'").fetchone() or [""])[0] != "2":
         # nova regra de desclassificação: relê as classificações da BLL/BNC (inclusive o histórico)
         db.execute("UPDATE classificacao SET lido_em=0 WHERE chave NOT LIKE 'pcp|%'")
@@ -952,6 +958,45 @@ JS_ABRIR_DILIGENCIAS = """
 }
 """
 
+# Só a janela cujo TÍTULO é de diligências (antes pegava a 1ª janela aberta – às vezes a das mensagens do lote)
+JS_TEM_MODAL_DILIG = """
+() => [...document.querySelectorAll('.modal')].some(m => m.getClientRects().length > 0 &&
+   /dilig/i.test((m.querySelector('.modal-title, .modal-header') || {}).innerText || '') &&
+   !/mensage|registros da sess|chat/i.test((m.querySelector('.modal-title, .modal-header') || {}).innerText || ''))
+"""
+_JS_TABELAS_DE = """
+  const tabs = raiz => [...raiz.querySelectorAll('table')].map(t => {
+    const cab = [...t.querySelectorAll('th')].map(x => x.innerText.trim().toUpperCase());
+    const linhas = [...t.querySelectorAll('tbody tr')].map(tr => [...tr.querySelectorAll('td')].map(td => td.innerText.trim())).filter(c => c.length > 1);
+    return {cab, linhas};
+  });
+  const semTab = raiz => { const c = raiz.cloneNode(true);
+    c.querySelectorAll('table, .modal-header, .modal-footer, script, style, nav, header, footer').forEach(x => x.remove());
+    document.body.appendChild(c); c.style.display = 'block'; c.style.position = 'absolute'; c.style.left = '-9999px';
+    const t = c.innerText; c.remove(); return t || ''; };
+"""
+JS_LER_MODAL_DILIG = """
+() => {""" + _JS_TABELAS_DE + """
+  const modal = [...document.querySelectorAll('.modal')].find(m => m.getClientRects().length > 0 &&
+     /dilig/i.test((m.querySelector('.modal-title, .modal-header') || {}).innerText || ''));
+  if (!modal) return null;
+  const titulo = ((modal.querySelector('.modal-title, .modal-header') || {}).innerText || '').trim();
+  if (/mensage|registros da sess|chat/i.test(titulo)) return null;
+  const corpo = modal.querySelector('.modal-body') || modal;
+  return {titulo, tabelas: tabs(corpo), texto: semTab(corpo)};
+}
+"""
+JS_LER_PAGINA_DILIG = """
+() => {""" + _JS_TABELAS_DE + """
+  const tit = [...document.querySelectorAll('h1, h2, h3, h4, .card-title, .page-title, .title')]
+     .filter(x => x.getClientRects().length > 0).map(x => x.innerText.trim());
+  const t = tit.find(x => /dilig/i.test(x));
+  if (!t) return null;
+  const raiz = document.querySelector('main, .content, .container, .container-fluid') || document.body;
+  return {titulo: t, tabelas: tabs(raiz), texto: semTab(raiz)};
+}
+"""
+
 
 def ler_diligencias(db, page, p, primeira_vez, diag=False):
     """Abre o botão 'Diligências' da sala de disputa e transforma cada item novo em alerta urgente."""
@@ -961,16 +1006,15 @@ def ler_diligencias(db, page, p, primeira_vez, diag=False):
     dados, texto = None, ""
     for _ in range(16):
         page.wait_for_timeout(500)
-        if page.url != url_antes:  # abriu em outra página
+        if page.url != url_antes:  # abriu em outra página: só aceita se ela for mesmo de diligências
             page.wait_for_timeout(1500)
-            texto = page.inner_text("body")
-            dados = {"tabelas": avaliar(page, JS_TABELAS) or []}
+            dados = page.evaluate(JS_LER_PAGINA_DILIG)
+            texto = (dados or {}).get("texto", "")
             break
-        if page.evaluate("""() => [...document.querySelectorAll('.modal')].some(m =>
-              m.getClientRects().length > 0 && /dilig/i.test(m.innerText))"""):
+        if page.evaluate(JS_TEM_MODAL_DILIG):
             page.wait_for_timeout(1000)
-            dados = page.evaluate(JS_LER_MODAL)
-            texto = page.evaluate(JS_TEXTO_MODAL_SEM_TABELA)
+            dados = page.evaluate(JS_LER_MODAL_DILIG)
+            texto = (dados or {}).get("texto", "")
             break
     if page.url != url_antes:
         ir(page, url_antes)
@@ -984,12 +1028,23 @@ def ler_diligencias(db, page, p, primeira_vez, diag=False):
     if not dados:
         return []
     itens = []
+    chat = [_norm(r[0]) for r in db.execute(
+        "SELECT texto FROM mensagens WHERE processo=? AND promotor=? AND escopo<>'Diligência' AND length(texto)>=12",
+        (p["processo"], p["promotor"]))]
     for t in dados.get("tabelas", []) if isinstance(dados.get("tabelas"), list) else []:
         linhas = t.get("linhas") if isinstance(t, dict) else None
+        cab = " ".join(t.get("cab") or []) if isinstance(t, dict) else ""
+        if re.search(r"AUTOR", cab) and re.search(r"MENSAGEM", cab) and not re.search(r"DILIG", cab):
+            continue  # tabela de mensagens do chat, não de diligências
         for c in linhas or []:
             c = c.get("cel", []) if isinstance(c, dict) else c
             txt = " | ".join(x for x in c if x)
-            if txt and not re.search(r"nenhum|sem registro", txt, re.I):
+            tn = _norm(txt)
+            if not txt or re.search(r"horario\W+autor\W+mensagem|mensagens do lote", tn):
+                continue
+            if any(m in tn for m in chat):
+                continue  # é uma mensagem do chat que já temos
+            if not re.search(r"nenhum|sem registro", txt, re.I):
                 data = RE_DATA_BLOCO.search(txt) or re.search(r"\d{2}/\d{2}/\d{4}[ \d:]*", txt)
                 itens.append({"horario": data.group(0) if data else "", "autor": "Pregoeiro", "texto": txt})
     for ev in eventos_registro({"tabelas": []}, texto):

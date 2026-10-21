@@ -307,7 +307,7 @@ def regex_busca(termo):
     return re.compile(padrao, re.I) if padrao else None
 
 
-RE_COPIA_CHAT = re.compile(r"hor[aá]rio\W+autor\W+mensagem|mensagens\W+do\W+lote\W+hor", re.I)
+RE_COPIA_CHAT = re.compile(r"horario\W+autor\W+mensagem|mensagens\W+do\W+lote\W+(?:l\d+\W+)?hor", re.I)  # texto já normalizado
 
 
 def mensagens(filtro_emp="", busca="", limite=None):
@@ -326,7 +326,7 @@ def mensagens(filtro_emp="", busca="", limite=None):
                              "WHERE NOT (texto LIKE '%Limite 500 caracteres%' OR autor LIKE 'Você é o:%' "
                              "OR texto LIKE '%Horário Autor Mensagem%' OR texto LIKE '%Horario Autor Mensagem%') "
                              "ORDER BY rowid DESC LIMIT ?", (limite * 4 if limite else -1,)):
-            if RE_COPIA_CHAT.search(r[5] or "") or RE_COPIA_CHAT.search(r[4] or ""):
+            if any(RE_COPIA_CHAT.search(urgencia.norm(x)) for x in (r[5], r[4], r[2])):
                 continue  # cópia inteira do chat lida por engano como evento
             if busca and not (pat_busca and pat_busca.search(" ".join(str(x) for x in r))):
                 continue
@@ -745,7 +745,7 @@ def categoria_msg(m):
     n = urgencia.norm(f"{esc} {m.get('texto') or ''}")
     g = grupo_escopo(esc)
     eh_lote = g.startswith("L") and g[1:].isdigit()
-    if "dilig" in urgencia.norm(esc) or "diligenc" in n:
+    if "dilig" in urgencia.norm(esc):  # só o que veio da janela de diligências (chat que cita a palavra fica no lote)
         return "dilig", (g if eh_lote else "Processo")
     esc_n = urgencia.norm(esc)
     if "registro do lote" in esc_n:
