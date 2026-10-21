@@ -432,6 +432,14 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .cv-cab{background:#173f2c;color:#fff;padding:14px 18px;border-radius:12px 12px 0 0;font-size:13.5px}.cv-cab .sub{color:#cfe3d7}
 .cv-num{font-size:18px;font-weight:700;margin-bottom:4px;display:flex;gap:8px;align-items:center}
 .cv-filtro{display:flex;gap:10px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--borda)}.cv-filtro select{min-width:0;width:100%}.cv-filtro{flex-wrap:wrap}.fm-l{flex:1 1 200px;display:flex;flex-direction:column;gap:4px;margin:0;font-size:12px;font-weight:700;color:var(--sub)}
+@keyframes pulsar{0%,100%{box-shadow:0 0 0 0 rgba(229,57,53,.55)}50%{box-shadow:0 0 0 6px rgba(229,57,53,0)}}
+@keyframes piscar{0%,100%{opacity:1}50%{opacity:.35}}
+select.fm.tem-novas{border:2px solid #e53935;animation:pulsar 1.6s ease-in-out infinite}
+.selo-nova{font-style:normal;background:#e53935;color:#fff;font-size:10px;font-weight:800;padding:2px 6px;border-radius:4px;margin-left:4px;animation:piscar 1.2s ease-in-out 6}
+.faixa-novas{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 18px;background:rgba(229,57,53,.08);border-bottom:1px solid var(--borda);font-size:13px}
+.chip-nova{background:#e53935;color:#fff;border:0;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:700;cursor:pointer;animation:pulsar 1.6s ease-in-out infinite}
+.tag-nova{background:#e53935;color:#fff;font-size:10px;font-weight:800;padding:1px 6px;border-radius:4px}
+.cm.nova{box-shadow:inset 3px 0 0 #e53935}
 select.fm.ativo{border-color:var(--verde);box-shadow:0 0 0 3px var(--verde2);color:var(--txt);font-weight:600}
 .cv-lista{overflow-y:auto;flex:1;min-height:0;padding:6px 18px 18px}
 .cm{padding:10px 0;border-bottom:1px solid var(--borda)}.cm.urg{border-left:4px solid var(--erro);padding-left:10px}
@@ -639,9 +647,16 @@ def marcar_lido(chave):
         pass
 
 
+def marcar_lido_sub(chave_p, cat, sub):
+    d = lidos()
+    d[f"{chave_p}#{cat}#{sub}"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    ARQ_LIDOS.write_text(json.dumps(d), encoding="utf-8")
+
+
 def marcar_todos_lidos():
     agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     d = lidos()
+    d["_todas"] = agora
     for g in agrupar_processos().values():
         d[chave_proc(g)] = agora
     ARQ_LIDOS.write_text(json.dumps(d), encoding="utf-8")
@@ -750,39 +765,70 @@ def _rot_sub(x):
     return "Lote " + x[1:] if x.startswith("L") and x[1:].isdigit() else x
 
 
-def html_conversa(g, cfg_chat):
+def html_conversa(g, cfg_chat, mapa=None):
+    mapa = lidos() if mapa is None else mapa
+    cp = chave_proc(g)
+    todas = para_data(mapa.get("_todas", "")) if mapa.get("_todas") else datetime.min
+    if not mapa.get("_inicio_sub"):   # a marcação por lote vale só para o que chegar depois de ligada
+        mapa["_inicio_sub"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        d = lidos()
+        d["_inicio_sub"] = mapa["_inicio_sub"]
+        ARQ_LIDOS.write_text(json.dumps(d), encoding="utf-8")
+    inicio = para_data(mapa["_inicio_sub"])
     cats = {"lote": {}, "dilig": {}, "evento": {}}
+    novas = {"lote": {}, "dilig": {}, "evento": {}}
     info = []
     for m in g["msgs"]:
         c, sub = categoria_msg(m)
         cats[c][sub] = cats[c].get(sub, 0) + 1
-        info.append((m, c, sub))
+        rec = mapa.get(f"{cp}#{c}#{sub}")
+        lim = max(para_data(rec) if rec else datetime.min, todas, inicio)
+        nova = para_data(m["visto"]) > lim
+        if nova:
+            novas[c][sub] = novas[c].get(sub, 0) + 1
+        info.append((m, c, sub, nova))
     tot = {c: sum(v.values()) for c, v in cats.items()}
+    tot_n = {c: sum(v.values()) for c, v in novas.items()}
 
     def menu(cat, rotulo, todos, padrao=False):
-        ops = "".join(f'<option value="{e(x)}">{e(_rot_sub(x))} ({cats[cat][x]})</option>' for x in sorted(cats[cat], key=_ordem_sub))
-        vazio = f'<option value="">{rotulo} ({tot[cat]})</option>'
+        def op(x):
+            n = novas[cat].get(x, 0)
+            extra = f' 🔴 {n} NOVA{"S" if n > 1 else ""}' if n else ""
+            estilo = ' style="color:#c62828;font-weight:700"' if n else ""
+            return f'<option value="{e(x)}" data-novas="{n}"{estilo}>{e(_rot_sub(x))} ({cats[cat][x]}){extra}</option>'
+        ops = "".join(op(x) for x in sorted(cats[cat], key=_ordem_sub))
+        nt = tot_n[cat]
+        sufixo = f" · 🔴 {nt} nova{'s' if nt > 1 else ''}" if nt else ""
+        vazio = f'<option value="">{rotulo} ({tot[cat]}){sufixo}</option>'
         sel_todos = ' selected' if padrao else ''
-        return (f'<label class="fm-l"><span>{rotulo}</span><select class="fm{" ativo" if padrao else ""}" data-cat="{cat}" '
-                f'onchange="escolherMenu(this)">{vazio}<option value="todos"{sel_todos}>{todos} ({tot[cat]})</option>{ops}</select></label>')
+        selo = f'<em class="selo-nova">NOVA MENSAGEM</em>' if nt else ""
+        return (f'<label class="fm-l"><span>{rotulo} {selo}</span><select class="fm{" ativo" if padrao else ""}{" tem-novas" if nt else ""}" data-cat="{cat}" '
+                f'onchange="escolherMenu(this)">{vazio}<option value="todos"{sel_todos}>{todos} ({tot[cat]}){sufixo}</option>{ops}</select></label>')
+
+    chips = "".join(
+        f'<button type="button" class="chip-nova" data-cat="{c}" data-sub="{e(x)}" onclick="irNovas(this)">'
+        f'{ {"lote": "", "dilig": "Diligência · ", "evento": "Evento · "}[c] }{e(_rot_sub(x))} · {n} nova{"s" if n > 1 else ""}</button>'
+        for c in ("lote", "dilig", "evento") for x, n in sorted(novas[c].items(), key=lambda t: _ordem_sub(t[0])))
+    faixa = f'<div class="faixa-novas">🔔 <b>Novidades:</b> {chips}</div>' if chips else ""
 
     msgs = sorted(info, key=lambda x: (data_msg(x[0]), para_data(x[0]["visto"])), reverse=True)
     itens = ""
-    for m, c, sub in msgs:
+    for m, c, sub, nova in msgs:
         urg = urgencia.classificar(m["texto"], m["escopo"], m["autor"], chat_urgente=cfg_chat)
         tag_urg = f' <span class="tag erro">🚨 {e(urg)}</span>' if urg else ""
         oculto = "" if c == "lote" else ' style="display:none"'
-        itens += (f'<div class="cm{" urg" if urg else ""}" data-cat="{c}" data-sub="{e(sub)}"{oculto}>'
-                  f'<div class="cm-cab"><b>{e(titulo_msg(m))}</b>{tag_urg}<span class="sub cm-hora">{e(m["horario"] or m["visto"])}</span></div>'
+        tag_nova = '<span class="tag-nova">NOVA</span>' if nova else ""
+        itens += (f'<div class="cm{" urg" if urg else ""}{" nova" if nova else ""}" data-cat="{c}" data-sub="{e(sub)}"{oculto}>'
+                  f'<div class="cm-cab"><b>{e(titulo_msg(m))}</b>{tag_nova}{tag_urg}<span class="sub cm-hora">{e(m["horario"] or m["visto"])}</span></div>'
                   f'<div class="cm-txt">{destacar(e(m["texto"]))}</div></div>')
-    return (f'<div class="cv-cab"><div><div class="cv-num">{e(g["processo"])} {selo_plat(g["plat"])}</div>'
+    return (f'<div class="cv-cab" data-proc="{e(cp)}"><div><div class="cv-num">{e(g["processo"])} {selo_plat(g["plat"])}</div>'
             f'<div><b>Órgão:</b> {e(g["promotor"])}</div><div class="sub"><b>Empresa:</b> {e(g["nome"])} · '
             f'{len(g["msgs"])} movimentação(ões)</div></div></div>'
             f'<div class="cv-filtro">'
             + menu("lote", "Lotes (mensagens)", "Todos os lotes", padrao=True)
             + menu("dilig", "Diligências", "Todas as diligências")
             + menu("evento", "Processo (eventos)", "Todos os eventos")
-            + '</div>' + barra_msgs() +
+            + '</div>' + faixa + barra_msgs() +
             f'<div class="cv-lista">{itens or "<div class=sub>Sem mensagens.</div>"}</div>')
 
 
@@ -817,7 +863,7 @@ def pg_chat(q):
                   f'{"<span class=it-urg>🚨</span>" if urg else ""}</div></a>')
     direita = barra_msgs() + '<div class="cv-vazio">Selecione um processo à esquerda para ver as mensagens.</div>'
     if sel and sel in procs:
-        direita = html_conversa(procs[sel], cfg_chat)
+        direita = html_conversa(procs[sel], cfg_chat, mapa)
         marcar_lido(chave_proc(procs[sel]))
     corpo = f"""<div class="mc">
 <aside class="mc-esq"><div class="mc-topo"><h2 style="margin:0">Monitorar chat</h2>
@@ -903,8 +949,22 @@ setInterval(()=>{{const a=document.activeElement; const p=document.getElementByI
 function escolherMenu(sel){{const todos=[...document.querySelectorAll('#conversa select.fm')];
  if(sel.value===''){{const l=todos.find(x=>x.dataset.cat==='lote'); if(l){{sel=l; l.value='todos';}}}}
  todos.forEach(x=>{{if(x!==sel)x.value=''; x.classList.toggle('ativo',x===sel);}});
- aplicarBusca(document.getElementById('pesq-txt'));
+ aplicarBusca(document.getElementById('pesq-txt')); lerSub(sel);
  const a=document.querySelector('#lista .it.on'); try{{if(a)sessionStorage.setItem('filtro|'+a.dataset.url,sel.dataset.cat+'|'+sel.value);}}catch(e){{}}}}
+function lerSub(sel){{  // marca como lidas as mensagens do lote/menu escolhido
+ const cab=document.querySelector('#conversa .cv-cab'); if(!cab||!sel.value)return;
+ const subs=sel.value==='todos'?[...sel.options].filter(o=>o.value&&o.value!=='todos').map(o=>o.value):[sel.value];
+ const lidas=subs.filter(v=>{{const o=[...sel.options].find(x=>x.value===v);return o&&+o.dataset.novas>0;}});
+ if(!lidas.length)return;
+ const corpo='csrf={CSRF}&proc='+encodeURIComponent(cab.dataset.proc)+'&subs='+encodeURIComponent(lidas.map(v=>sel.dataset.cat+'|'+v).join('||'));
+ fetch('/mensagens/lidas',{{method:'POST',credentials:'same-origin',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:corpo}});
+ setTimeout(()=>{{lidas.forEach(v=>{{const o=[...sel.options].find(x=>x.value===v); if(o){{o.dataset.novas=0;o.style.color='';o.style.fontWeight='';o.textContent=o.textContent.replace(/ 🔴.*$/,'');}}
+   document.querySelectorAll('#conversa .chip-nova[data-cat="'+sel.dataset.cat+'"][data-sub="'+v+'"]').forEach(x=>x.remove());}});
+  if(![...sel.options].some(o=>+o.dataset.novas>0)){{sel.classList.remove('tem-novas');const sl=sel.parentElement.querySelector('.selo-nova');if(sl)sl.remove();
+   [...sel.options].forEach(o=>{{o.textContent=o.textContent.replace(/ · 🔴.*$/,'');}});}}
+  const fx=document.querySelector('#conversa .faixa-novas'); if(fx&&!fx.querySelector('.chip-nova'))fx.remove();}},4000);}}
+function irNovas(b){{const s=document.querySelector('#conversa select.fm[data-cat="'+b.dataset.cat+'"]'); if(!s)return; s.value=b.dataset.sub; escolherMenu(s);
+ const n=document.querySelector('#conversa .cm.nova[data-cat="'+b.dataset.cat+'"][data-sub="'+b.dataset.sub+'"]'); if(n)n.scrollIntoView({{block:'center',behavior:'smooth'}});}}
 function restaurarFiltro(c,url){{try{{const r=sessionStorage.getItem('filtro|'+url); if(!r)return; const [cat,v]=r.split('|');
  const s=c.querySelector('select.fm[data-cat="'+cat+'"]'); if(s&&[...s.options].some(o=>o.value===v)){{s.value=v; escolherMenu(s);}}}}catch(e){{}}}}
 try{{const f=sessionStorage.getItem('aba'); if(f){{const b=document.querySelector('.aba[data-f="'+f+'"]'); if(b)aba(b);}}}}catch(e){{}}
@@ -919,8 +979,9 @@ def pg_proc_mensagens(q):
     g = procs.get((q.get("eid", ""), q.get("processo", ""), q.get("promotor", "")))
     if not g:
         return '<div class="cv-vazio">Sem mensagens.</div>'
+    h = html_conversa(g, CFG_ATUAL().get("CHAT_URGENTE", "1") != "0")
     marcar_lido(chave_proc(g))
-    return html_conversa(g, CFG_ATUAL().get("CHAT_URGENTE", "1") != "0")
+    return h
 
 
 def pg_mensagens(q):
@@ -1889,7 +1950,13 @@ class Painel(BaseHTTPRequestHandler):
                     analise.iniciar(ch, CFG_ATUAL(), o)
                 return self.redirecionar(f"/analise/{ch}")
             if p == "/mensagens/lidas":
-                marcar_todos_lidos()
+                if f.get("proc"):
+                    for cat_sub in f.get("subs", "").split("||"):
+                        cat, _, sub = cat_sub.partition("|")
+                        if cat in ("lote", "dilig", "evento") and sub:
+                            marcar_lido_sub(f["proc"], cat, sub)
+                else:
+                    marcar_todos_lidos()
                 return self.enviar("ok")
             if p == "/editais/ia":
                 if f.get("acao") == "padrao":

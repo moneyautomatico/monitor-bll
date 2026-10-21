@@ -645,7 +645,7 @@ def extrair_mensagens(dados, rotulo):
         for c in t["linhas"]:
             if len(c) <= i_m:
                 continue
-            if re.search(r"limite \d+ caracteres|^voc[êe] [ée] o:", " ".join(c), re.I):
+            if re.search(r"limite \d+ caracteres|^voc[êe] [ée] o:|hor[áa]rio\W+autor\W+mensagem", " ".join(c), re.I):
                 continue  # área de digitação do chat, não é mensagem
             out.append({
                 "escopo": escopo,
