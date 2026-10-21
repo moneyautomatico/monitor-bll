@@ -204,13 +204,16 @@ def regex_busca(termo):
     termo = unicodedata.normalize("NFKD", termo or "").encode("ascii", "ignore").decode().lower().strip()
     partes = []
     for ch in termo:
-        if ch in " -_‐‑–—":
-            partes.append(r"[\s\-‐‑‒–—_]+")
+        if not ch.isalnum():
+            partes.append(r"[\W_]+")
         else:
             partes.append(_ACENTO_RE.get(ch, re.escape(ch)))
     padrao = "".join(partes)
-    padrao = re.sub(r"(\[\\s\\-‐‑‒–—_\]\+)+", lambda m: r"[\s\-‐‑‒–—_]+", padrao)
+    padrao = re.sub(r"(\[\\W_\]\+)+", lambda m: r"[\W_]+", padrao).strip()
     return re.compile(padrao, re.I) if padrao else None
+
+
+RE_COPIA_CHAT = re.compile(r"hor[aá]rio\W+autor\W+mensagem|mensagens\W+do\W+lote\W+hor", re.I)
 
 
 def mensagens(filtro_emp="", busca="", limite=None):
@@ -229,6 +232,8 @@ def mensagens(filtro_emp="", busca="", limite=None):
                              "WHERE NOT (texto LIKE '%Limite 500 caracteres%' OR autor LIKE 'Você é o:%' "
                              "OR texto LIKE '%Horário Autor Mensagem%' OR texto LIKE '%Horario Autor Mensagem%') "
                              "ORDER BY rowid DESC LIMIT ?", (limite * 4 if limite else -1,)):
+            if RE_COPIA_CHAT.search(r[5] or "") or RE_COPIA_CHAT.search(r[4] or ""):
+                continue  # cópia inteira do chat lida por engano como evento
             if busca and not (pat_busca and pat_busca.search(" ".join(str(x) for x in r))):
                 continue
             out.append({"emp": f'{emp["nome"]} · {emp["plat"]}', "nome": emp["nome"], "plat": emp["plat"], "eid": emp["id"], "processo": r[0], "promotor": r[1], "escopo": r[2],
@@ -703,13 +708,14 @@ function marcarTodas(){{fetch('/mensagens/lidas',{{method:'POST',credentials:'sa
 function pesquisar(){{const t=document.getElementById('pesq-txt').value.trim();const c=document.getElementById('conversa');
  document.querySelectorAll('#lista .it').forEach(x=>x.classList.remove('on'));
  c.innerHTML='<div class="cv-vazio">Pesquisando…</div>';
- fetch('/mensagens/busca?q='+encodeURIComponent(t),{{credentials:'same-origin'}}).then(r=>r.text()).then(h=>{{c.innerHTML=h;}});return false;}}
+ fetch('/mensagens/busca?q='+encodeURIComponent(t),{{credentials:'same-origin'}}).then(r=>r.text()).then(h=>{{c.innerHTML=h;
+  const mk=c.querySelector('mark.achado'); if(mk)mk.scrollIntoView({{block:'center'}});}});return false;}}
 let tBusca=null;
 function buscaConversa(i){{clearTimeout(tBusca);tBusca=setTimeout(()=>aplicarBusca(i),250);}}
 function padraoBusca(t){{const sem=t.normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().trim(); if(!sem)return null;
  const ac={{a:'[aáàâãä]',e:'[eéèêë]',i:'[iíìîï]',o:'[oóòôõö]',u:'[uúùûü]',c:'[cç]',n:'[nñ]'}};
- let p=''; for(const ch of sem){{ if(/[\\s\\-_‐-―]/.test(ch)){{ if(!p.endsWith(']+'))p+='[\\\\s\\\\-_\\\\u2010-\\\\u2015]+'; }}
-  else p+=ac[ch]||ch.replace(/[.*+?^${{}}()|[\\]\\\\]/g,'\\\\$&'); }}
+ let p=''; for(const ch of sem){{ if(!/[0-9a-z]/.test(ch)){{ if(!p.endsWith(')+'))p+='(?:[^0-9A-Za-zÀ-ÿ])+'; }}
+  else p+=ac[ch]||ch; }}
  return new RegExp(p,'gi');}}
 function grifar(el,t){{  // grifa o termo pesquisado dentro do texto da mensagem
  if(el.dataset.h===undefined)el.dataset.h=el.innerHTML; else if(el.dataset.g)el.innerHTML=el.dataset.h;
