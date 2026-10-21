@@ -27,6 +27,7 @@ import analise
 import backup
 import urgencia
 import buscas
+import oportunidades
 
 PASTA = Path(__file__).resolve().parent
 EMPRESAS = PASTA / "empresas"
@@ -39,7 +40,9 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "config": "Configurações salvas e monitores reiniciados.",
           "ia": "Instruções da IA salvas. Valem para as próximas análises.",
           "busca_salva": "Busca salva. Vou mandar no Telegram um resumo agora e, depois, só as licitações novas.",
-          "busca_rodando": "Verificando agora. Se houver novidades, chegam no Telegram em instantes."}
+          "busca_rodando": "Verificando agora. Se houver novidades, chegam no Telegram em instantes.",
+          "op_rodando": "Atualizando as oportunidades no PNCP. Leva 1 a 3 minutos; recarregue a página depois.",
+          "op_cfg": "Perfil salvo. Atualizando as oportunidades com as novas regras (1 a 3 minutos)."}
 e = html.escape
 
 
@@ -482,7 +485,7 @@ mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.a
 """
 
 ABAS = [("/", "Visão geral"), ("/mensagens", "Mensagens"), ("/processos", "Processos"),
-        ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/empresas", "Empresas"), ("/config", "Configurações")]
+        ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/empresas", "Empresas"), ("/config", "Configurações")]
 
 
 def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
@@ -1423,6 +1426,125 @@ def pg_buscar(qs, aviso=""):
     return pagina("Buscar", corpo, "/buscar", aviso)
 
 
+# ------------------------------------------------------------------ oportunidades
+ROT_NIVEL = {"alto": ("🎯 Encaixe alto", "#2e7d32"), "medio": ("Encaixe médio", "#e3a14b"), "baixo": ("Encaixe baixo", "#8a958f")}
+
+
+def pg_oportunidades(q, aviso=""):
+    d = oportunidades.ler()
+    cfg = d["cfg"]
+    filtro = q.get("f", "boas")
+    emp_f = q.get("emp", "")
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    todas = [r for r in d["itens"].values() if not r.get("descartado")]
+    descartadas = [r for r in d["itens"].values() if r.get("descartado")]
+    lista = descartadas if filtro == "descartadas" else todas
+    if filtro == "novas":
+        lista = [r for r in lista if r.get("achada_em", "")[:10] == hoje]
+    elif filtro == "alto":
+        lista = [r for r in lista if r.get("nivel") == "alto"]
+    elif filtro == "boas":
+        lista = [r for r in lista if r.get("nivel") in ("alto", "medio")]
+    if emp_f:
+        lista = [r for r in lista if emp_f in r.get("empresas", [])]
+    lista.sort(key=lambda r: (r.get("achada_em", "")[:10] == hoje, r.get("pontos", 0), r.get("publicada", "")), reverse=True)
+    pag = max(1, int(re.sub(r"\D", "", q.get("pagina", "1")) or 1))
+    total_pag = max(1, (len(lista) + 39) // 40)
+    pag = min(pag, total_pag)
+    trecho = lista[(pag - 1) * 40: pag * 40]
+
+    def link(**k):
+        base = {"f": filtro, "emp": emp_f}
+        base.update(k)
+        return "/oportunidades?" + urllib.parse.urlencode({a: b for a, b in base.items() if b})
+
+    n_novas = sum(1 for r in todas if r.get("achada_em", "")[:10] == hoje)
+    n_alto = sum(1 for r in todas if r.get("nivel") == "alto")
+    n_boas = sum(1 for r in todas if r.get("nivel") in ("alto", "medio"))
+    abas = "".join(
+        f'<a class="btn {"" if filtro == k else "sec"}" href="{link(f=k, pagina="")}">{rot} ({n})</a>'
+        for k, rot, n in (("boas", "Alto + médio", n_boas), ("alto", "🎯 Encaixe alto", n_alto), ("novas", "🆕 Novas hoje", n_novas),
+                          ("todas", "Todas", len(todas)), ("descartadas", "Descartadas", len(descartadas))))
+    nomes = sorted(d.get("perfis", {}))
+    sel_emp = ""
+    if len(nomes) > 1:
+        sel_emp = ('<select class="campo" style="max-width:260px" onchange="location.href=this.value">'
+                   f'<option value="{link(emp="", pagina="")}">Todas as empresas</option>' +
+                   "".join(f'<option value="{link(emp=n, pagina="")}" {"selected" if n == emp_f else ""}>{e(n)}</option>' for n in nomes) +
+                   "</select>")
+    cards = ""
+    for r in trecho:
+        rot, cor = ROT_NIVEL.get(r.get("nivel"), ROT_NIVEL["baixo"])
+        nova = r.get("achada_em", "")[:10] == hoje
+        acao_desc = (botao(f"/oportunidades/{r['id']}/voltar", "Restaurar", "sec") if r.get("descartado")
+                     else botao(f"/oportunidades/{r['id']}/descartar", "Descartar", "sec"))
+        origem = r.get("origem") or ""
+        cards += f"""<div class="card" style="border-left-color:{cor}">
+<div class="sub"><b style="color:{cor}">{rot}</b> · {r.get('pontos', 0)} pts {'<span class="tag-nova">NOVA</span>' if nova else ''}
+· {e(r.get('modalidade') or '')} · {e(r.get('titulo') or '')}</div>
+<div class="nome" style="margin:4px 0">{e(r.get('orgao') or '')}</div>
+<div class="sub"><b>{e(r.get('municipio') or '')}/{e(r.get('uf') or '')}</b> · publicada {e(buscas.data_br(r.get('publicada')))}</div>
+<p style="margin:8px 0;font-size:14px">{e(r.get('objeto') or '')}</p>
+<div class="sub">Combina com: <b>{e(', '.join(r.get('termos') or []))}</b>{(' · ' + e(r['motivo'])) if r.get('motivo') else ''}</div>
+<div class="sub">Perfil de: {e(', '.join(r.get('empresas') or []))}</div>
+<div class="sub" style="margin-top:4px">Valor estimado: <b>{e(buscas.moeda(r.get('valor')))}</b>
+{f" · Propostas até: <b>{e(buscas.data_br(r.get('fim')))}</b>" if r.get('fim') else ''}</div>
+<div class="acoes"><a class="btn" target="_blank" rel="noopener" href="{e(r.get('link') or '')}">Ver edital (PNCP)</a>
+<a class="btn sec" href="/buscar/itens?cnpj={e(str(r.get('cnpj')))}&ano={e(str(r.get('ano')))}&seq={e(str(r.get('seq')))}">Itens</a>
+{botao_analisar(r.get('cnpj'), r.get('ano'), r.get('seq'), f"{r.get('orgao')} – {r.get('titulo')} – {r.get('municipio')}/{r.get('uf')}")}
+{f'<a class="btn sec" target="_blank" rel="noopener" href="{e(origem)}">Sistema de origem</a>' if origem.startswith("http") else ''}
+{acao_desc}</div></div>"""
+    nav = ""
+    if total_pag > 1:
+        nav = ('<div class="acoes">' + (f'<a class="btn sec" href="{link(pagina=pag - 1)}">← Anterior</a>' if pag > 1 else "") +
+               f'<span class="sub" style="align-self:center">Página {pag} de {total_pag}</span>' +
+               (f'<a class="btn sec" href="{link(pagina=pag + 1)}">Próxima →</a>' if pag < total_pag else "") + "</div>")
+    # perfil
+    blocos = ""
+    for nome, pf in d.get("perfis", {}).items():
+        cats = "".join(f'<span class="chip-perfil">{e(c)} <small>{n}</small></span>' for c, n in pf.get("cats", {}).items())
+        prods = "".join(f'<span class="chip-perfil">{e(c)} <small>{n}</small></span>' for c, n in pf.get("produtos", {}).items())
+        blocos += (f'<div class="card"><div class="nome">{e(nome)}</div><div class="sub">{pf.get("processos", 0)} processo(s) analisados · '
+                   f'{pf.get("orgaos", 0)} órgão(s)</div>'
+                   f'<div class="sub" style="margin-top:8px">Categorias que a empresa disputa:</div><div class="chips-perfil">{cats or "—"}</div>'
+                   f'<div class="sub" style="margin-top:8px">Produtos mais frequentes (nº de processos):</div><div class="chips-perfil">{prods or "—"}</div>'
+                   f'<div class="sub" style="margin-top:8px">Municípios: {e(", ".join(pf.get("municipios", [])) or "—")}</div></div>')
+    ufs = "".join(f'<label class="uf"><input type="checkbox" name="uf" value="{u}" {"checked" if u in cfg["ufs"] else ""}>{u}</label>'
+                  for u in buscas.UFS)
+    auto = ", ".join(d.get("ufs_auto") or []) or "nenhum descoberto ainda"
+    estado = (f'Última atualização: <b>{e(d.get("ultima") or "ainda não rodou")}</b> · atualiza sozinho a cada 3 horas (6h às 22h)'
+              + (' · <b>atualizando agora…</b>' if oportunidades.RODANDO.is_set() else ""))
+    corpo = f"""<style>.chips-perfil{{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}}
+.chip-perfil{{background:var(--bg);border:1px solid var(--borda);border-radius:999px;padding:3px 10px;font-size:13px}}
+.chip-perfil small{{color:var(--sub);margin-left:3px}}</style>
+<h2>Oportunidades para você</h2>
+<p class="sub">Licitações <b>abertas</b> no PNCP que combinam com o que cada empresa já disputou (produtos dos lotes, categorias e
+órgãos lidos pelo monitor). {estado}</p>
+{f'<div class="msg erro">{e(d["erro"])}</div>' if d.get("erro") else ''}
+<div class="acoes">{abas}{sel_emp}{botao("/oportunidades/atualizar", "⟳ Atualizar agora", "sec")}</div>
+<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr));margin-top:12px">{cards or '<p>Nada por aqui ainda. Clique em “Atualizar agora” (leva 1 a 3 minutos).</p>'}</div>
+{nav}
+<details class="op-perfil" style="margin-top:24px;border:1px solid var(--borda);border-radius:10px;background:var(--card)">
+<summary style="display:block;cursor:pointer;padding:12px 14px">⚙️ <b>Perfil e ajustes</b> – o que o sistema aprendeu e como afinar</summary>
+<div style="padding:12px">
+<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr))">{blocos or '<p class="sub">O perfil aparece depois da primeira atualização.</p>'}</div>
+<form method="post" action="/oportunidades/config" class="form" style="max-width:none;margin-top:14px">
+<input type="hidden" name="csrf" value="{CSRF}">
+<label>Acrescentar termos <small>(separe por vírgula – ex.: kit merenda, papel toalha interfolha)</small></label>
+<input class="campo" name="extra" value="{e(cfg.get('extra', ''))}">
+<label>Ignorar estes termos do perfil <small>(produtos ou categorias aprendidos que não interessam)</small></label>
+<input class="campo" name="desligados" value="{e(', '.join(cfg.get('desligados') or []))}">
+<label>Excluir licitações que tenham <small>(ex.: obra, serviço de engenharia, locação)</small></label>
+<input class="campo" name="excluir" value="{e(cfg.get('excluir', ''))}">
+<label>Estados <small>(nenhum marcado = os descobertos pelos órgãos onde já disputou: {e(auto)})</small></label>
+<div class="ufs">{ufs}</div>
+<label style="margin-top:10px"><input type="checkbox" name="alertar" value="1" {"checked" if cfg.get("alertar") else ""}>
+Avisar no Telegram geral as novas com encaixe alto</label>
+<div class="acoes"><button>Salvar e atualizar</button></div></form></div></details>
+<p class="sub" style="margin-top:18px">Fonte: PNCP – Portal Nacional de Contratações Públicas. Só leitura.</p>"""
+    return pagina("Oportunidades", corpo, "/oportunidades", aviso)
+
+
 def busca_para_qs(b):
     return {"q": b.get("q", ""), "excluir": b.get("excluir", ""), "uf": b.get("ufs", []), "municipio": b.get("municipio", ""),
             "modalidade": b.get("modalidade", ""), "status": "recebendo_proposta", "vmin": b.get("vmin", ""),
@@ -1822,6 +1944,8 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(form_empresa())
             if p == "/config":
                 return self.enviar(pg_config(AVISOS.get(q.get("ok", ""), "")))
+            if p == "/oportunidades":
+                return self.enviar(pg_oportunidades(q, AVISOS.get(q.get("ok", ""), "")))
             if p == "/buscar":
                 return self.enviar(pg_buscar(urllib.parse.parse_qs(url.query), AVISOS.get(q.get("ok", ""), "")))
             m = re.fullmatch(r"/backup/(licitatudo-[0-9_-]+\.tar\.gz)", p)
@@ -1894,8 +2018,8 @@ class Painel(BaseHTTPRequestHandler):
             analise.iniciar(ch, CFG_ATUAL(), {"tipo": "upload", "arquivos": arqs, "titulo": titulo,
                                               "extra": campos.get("extra", "").strip()[:2000]})
             return self.redirecionar(f"/analise/{ch}")
-        f = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(min(tam, 100000)).decode("utf-8"),
-                                                        keep_blank_values=True).items()}
+        multi = urllib.parse.parse_qs(self.rfile.read(min(tam, 100000)).decode("utf-8"), keep_blank_values=True)
+        f = {k: v[0] for k, v in multi.items()}
         if not hmac.compare_digest(f.get("csrf", ""), CSRF):
             return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
         p = urllib.parse.urlparse(self.path).path.rstrip("/")
@@ -1966,6 +2090,18 @@ class Painel(BaseHTTPRequestHandler):
                 else:
                     analise.salvar_config_ia(f.get("instrucoes", ""), f.get("empresa", ""))
                 return self.redirecionar("/editais?ok=ia")
+            if p == "/oportunidades/atualizar":
+                threading.Thread(target=oportunidades.atualizar, args=(telegram_geral,), daemon=True).start()
+                return self.redirecionar("/oportunidades?ok=op_rodando")
+            if p == "/oportunidades/config":
+                oportunidades.salvar_cfg(f.get("extra", ""), f.get("excluir", ""), multi.get("uf", []),
+                                         f.get("alertar") == "1", f.get("desligados", "").split(","))
+                threading.Thread(target=oportunidades.atualizar, args=(telegram_geral,), daemon=True).start()
+                return self.redirecionar("/oportunidades?ok=op_cfg")
+            m = re.fullmatch(r"/oportunidades/([\w.-]+)/(descartar|voltar)", p)
+            if m:
+                oportunidades.descartar(m.group(1), m.group(2) == "voltar")
+                return self.redirecionar(self.headers.get("Referer") or "/oportunidades")
             if p == "/buscas/salvar":
                 try:
                     filtros = json.loads(f.get("filtros", "{}"))
@@ -2033,4 +2169,5 @@ if __name__ == "__main__":
     threading.Thread(target=buscas.ciclo, args=(telegram_geral, minutos_busca), daemon=True).start()
     threading.Thread(target=vigiar, daemon=True).start()
     threading.Thread(target=backup.ciclo, args=(CFG_ATUAL, telegram_geral), daemon=True).start()
+    threading.Thread(target=oportunidades.ciclo, args=(telegram_geral,), daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORTA), Painel).serve_forever()
