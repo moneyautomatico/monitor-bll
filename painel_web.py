@@ -431,7 +431,8 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .cv-vazio{padding:40px;text-align:center;color:var(--sub)}
 .cv-cab{background:#173f2c;color:#fff;padding:14px 18px;border-radius:12px 12px 0 0;font-size:13.5px}.cv-cab .sub{color:#cfe3d7}
 .cv-num{font-size:18px;font-weight:700;margin-bottom:4px;display:flex;gap:8px;align-items:center}
-.cv-filtro{display:flex;gap:10px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--borda)}.cv-filtro select{min-width:200px}
+.cv-filtro{display:flex;gap:10px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--borda)}.cv-filtro select{min-width:0;width:100%}.cv-filtro{flex-wrap:wrap}.fm-l{flex:1 1 200px;display:flex;flex-direction:column;gap:4px;margin:0;font-size:12px;font-weight:700;color:var(--sub)}
+select.fm.ativo{border-color:var(--verde);box-shadow:0 0 0 3px var(--verde2);color:var(--txt);font-weight:600}
 .cv-lista{overflow-y:auto;flex:1;min-height:0;padding:6px 18px 18px}
 .cm{padding:10px 0;border-bottom:1px solid var(--borda)}.cm.urg{border-left:4px solid var(--erro);padding-left:10px}
 .cm-cab{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;letter-spacing:.2px}.cm-hora{margin-left:auto}
@@ -723,25 +724,65 @@ def barra_msgs(valor=""):
             f'<span id="pesq-info" class="sub"></span></form>')
 
 
+def categoria_msg(m):
+    """('lote'|'dilig'|'evento', subgrupo) – separa chat dos lotes, diligências e eventos do processo."""
+    esc = m.get("escopo") or ""
+    n = urgencia.norm(f"{esc} {m.get('texto') or ''}")
+    g = grupo_escopo(esc)
+    eh_lote = g.startswith("L") and g[1:].isdigit()
+    if "dilig" in urgencia.norm(esc) or "diligenc" in n:
+        return "dilig", (g if eh_lote else "Processo")
+    esc_n = urgencia.norm(esc)
+    if "registro do lote" in esc_n:
+        return "evento", "Registros do lote"
+    if "andamento" in esc_n:
+        return "evento", "Andamento do processo"
+    if not urgencia.eh_chat(esc, m.get("autor") or "") or not eh_lote:
+        return "evento", (g if not eh_lote else "Outros")
+    return "lote", g
+
+
+def _ordem_sub(x):
+    return (not (x.startswith("L") and x[1:].isdigit()), int(x[1:]) if x[1:].isdigit() else 0, x)
+
+
+def _rot_sub(x):
+    return "Lote " + x[1:] if x.startswith("L") and x[1:].isdigit() else x
+
+
 def html_conversa(g, cfg_chat):
-    grupos = sorted({grupo_escopo(m["escopo"]) for m in g["msgs"]},
-                    key=lambda x: (not (x.startswith("L") and x[1:].isdigit()), int(x[1:]) if x[1:].isdigit() else 0, x))
-    contagem = {x: sum(1 for m in g["msgs"] if grupo_escopo(m["escopo"]) == x) for x in grupos}
-    ops = "".join(f'<option value="{e(x)}">{"Lote " + x[1:] if x.startswith("L") and x[1:].isdigit() else e(x)} ({contagem[x]})</option>'
-                  for x in grupos)
-    msgs = sorted(g["msgs"], key=lambda m: (data_msg(m), para_data(m["visto"])), reverse=True)
+    cats = {"lote": {}, "dilig": {}, "evento": {}}
+    info = []
+    for m in g["msgs"]:
+        c, sub = categoria_msg(m)
+        cats[c][sub] = cats[c].get(sub, 0) + 1
+        info.append((m, c, sub))
+    tot = {c: sum(v.values()) for c, v in cats.items()}
+
+    def menu(cat, rotulo, todos, padrao=False):
+        ops = "".join(f'<option value="{e(x)}">{e(_rot_sub(x))} ({cats[cat][x]})</option>' for x in sorted(cats[cat], key=_ordem_sub))
+        vazio = f'<option value="">{rotulo} ({tot[cat]})</option>'
+        sel_todos = ' selected' if padrao else ''
+        return (f'<label class="fm-l"><span>{rotulo}</span><select class="fm{" ativo" if padrao else ""}" data-cat="{cat}" '
+                f'onchange="escolherMenu(this)">{vazio}<option value="todos"{sel_todos}>{todos} ({tot[cat]})</option>{ops}</select></label>')
+
+    msgs = sorted(info, key=lambda x: (data_msg(x[0]), para_data(x[0]["visto"])), reverse=True)
     itens = ""
-    for m in msgs:
+    for m, c, sub in msgs:
         urg = urgencia.classificar(m["texto"], m["escopo"], m["autor"], chat_urgente=cfg_chat)
         tag_urg = f' <span class="tag erro">🚨 {e(urg)}</span>' if urg else ""
-        itens += (f'<div class="cm{" urg" if urg else ""}" data-lote="{e(grupo_escopo(m["escopo"]))}">'
+        oculto = "" if c == "lote" else ' style="display:none"'
+        itens += (f'<div class="cm{" urg" if urg else ""}" data-cat="{c}" data-sub="{e(sub)}"{oculto}>'
                   f'<div class="cm-cab"><b>{e(titulo_msg(m))}</b>{tag_urg}<span class="sub cm-hora">{e(m["horario"] or m["visto"])}</span></div>'
                   f'<div class="cm-txt">{destacar(e(m["texto"]))}</div></div>')
     return (f'<div class="cv-cab"><div><div class="cv-num">{e(g["processo"])} {selo_plat(g["plat"])}</div>'
             f'<div><b>Órgão:</b> {e(g["promotor"])}</div><div class="sub"><b>Empresa:</b> {e(g["nome"])} · '
-            f'{len(g["msgs"])} mensagem(ns)</div></div></div>'
-            f'<div class="cv-filtro"><b>Mensagens do chat</b><select onchange="filtrarLote(this)">'
-            f'<option value="">Todos os lotes ({len(g["msgs"])})</option>{ops}</select></div>' + barra_msgs() +
+            f'{len(g["msgs"])} movimentação(ões)</div></div></div>'
+            f'<div class="cv-filtro">'
+            + menu("lote", "Lotes (mensagens)", "Todos os lotes", padrao=True)
+            + menu("dilig", "Diligências", "Todas as diligências")
+            + menu("evento", "Processo (eventos)", "Todos os eventos")
+            + '</div>' + barra_msgs() +
             f'<div class="cv-lista">{itens or "<div class=sub>Sem mensagens.</div>"}</div>')
 
 
@@ -800,7 +841,7 @@ function abrir(a){{document.querySelectorAll('#lista .it').forEach(x=>x.classLis
  const c=document.getElementById('conversa');c.innerHTML='<div class="cv-vazio">Carregando…</div>';
  fetch(a.dataset.url,{{credentials:'same-origin'}}).then(r=>r.text()).then(h=>{{c.innerHTML=h;a.dataset.nl='0';
   const p=a.querySelector('.ponto'); if(p)p.hidden=true;
-  try{{const v=sessionStorage.getItem('lote|'+a.dataset.url); if(v){{const s=c.querySelector('select'); s.value=v; filtrarLote(s);}}}}catch(e){{}}
+  restaurarFiltro(c,a.dataset.url);
   history.replaceState(null,'','/mensagens?'+a.dataset.url.split('?')[1]);
   if(window.innerWidth<900)c.scrollIntoView({{behavior:'smooth'}});}}).catch(()=>{{c.innerHTML='<div class="cv-vazio">Não consegui carregar.</div>';}});
  return false;}}
@@ -835,10 +876,12 @@ function grifar(el,t){{  // grifa o termo pesquisado dentro do texto da mensagem
  el.dataset.g='1';}}
 // Localizar (como Ctrl+F): grifa tudo, ▲ ▼ navegam entre as ocorrências, sem esconder mensagens
 let achados=[], atual=-1;
-function aplicarBusca(i){{const t=(i&&i.value||'').trim();const s=document.querySelector('#conversa select');const v=s?s.value:'';
+function filtroAtual(){{const s=[...document.querySelectorAll('#conversa select.fm')].find(x=>x.value!=='');
+ return s?{{cat:s.dataset.cat,v:s.value}}:null;}}
+function aplicarBusca(i){{const t=(i&&i.value||'').trim(); const f=filtroAtual();
  const re=padraoBusca(t);
  document.querySelectorAll('#conversa .cm').forEach(m=>{{if(m.dataset.t===undefined)m.dataset.t=m.textContent;
-  const vis=(!v||m.dataset.lote===v); if((m.style.display!=='none')!==vis)m.style.display=vis?'':'none';
+  const vis=!m.dataset.cat||(f?(m.dataset.cat===f.cat&&(f.v==='todos'||m.dataset.sub===f.v)):true); if((m.style.display!=='none')!==vis)m.style.display=vis?'':'none';
   if(re)re.lastIndex=0; const tem=vis&&re&&re.test(m.dataset.t);
   const tx=m.querySelector('.cm-txt'); if(tx&&(tem||tx.dataset.g))grifar(tx, tem?t:'');
   m.classList.toggle('achou', !!tem);}});
@@ -857,11 +900,16 @@ setInterval(()=>{{const a=document.activeElement; const p=document.getElementByI
  if(p&&p.value.trim())return;              // pesquisa ativa: não recarrega
  if(document.querySelector('#conversa a.res'))return;   // mostrando resultados da busca
  if(!a||!['INPUT','SELECT','TEXTAREA'].includes(a.tagName))location.reload();}},60000);
-function filtrarLote(s){{aplicarBusca(document.getElementById('pesq-txt'));
- const a=document.querySelector('#lista .it.on'); try{{if(a)sessionStorage.setItem('lote|'+a.dataset.url,v);}}catch(e){{}}}}
+function escolherMenu(sel){{const todos=[...document.querySelectorAll('#conversa select.fm')];
+ if(sel.value===''){{const l=todos.find(x=>x.dataset.cat==='lote'); if(l){{sel=l; l.value='todos';}}}}
+ todos.forEach(x=>{{if(x!==sel)x.value=''; x.classList.toggle('ativo',x===sel);}});
+ aplicarBusca(document.getElementById('pesq-txt'));
+ const a=document.querySelector('#lista .it.on'); try{{if(a)sessionStorage.setItem('filtro|'+a.dataset.url,sel.dataset.cat+'|'+sel.value);}}catch(e){{}}}}
+function restaurarFiltro(c,url){{try{{const r=sessionStorage.getItem('filtro|'+url); if(!r)return; const [cat,v]=r.split('|');
+ const s=c.querySelector('select.fm[data-cat="'+cat+'"]'); if(s&&[...s.options].some(o=>o.value===v)){{s.value=v; escolherMenu(s);}}}}catch(e){{}}}}
 try{{const f=sessionStorage.getItem('aba'); if(f){{const b=document.querySelector('.aba[data-f="'+f+'"]'); if(b)aba(b);}}}}catch(e){{}}
 (function(){{const a=document.querySelector('#lista .it.on'); if(a){{a.scrollIntoView({{block:'center'}});
- try{{const v=sessionStorage.getItem('lote|'+a.dataset.url); const s=document.querySelector('#conversa select'); if(v&&s){{s.value=v;filtrarLote(s);}}}}catch(e){{}}}}}})();
+ restaurarFiltro(document.getElementById('conversa'),a.dataset.url);}}}})();
 </script>"""
     return pagina("Mensagens", corpo, "/mensagens", recarregar=False)
 
