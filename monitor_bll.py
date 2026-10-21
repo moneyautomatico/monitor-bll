@@ -1031,7 +1031,7 @@ def processar(db, page, primeira_vez, diag=False):
         if (antiga and antiga[0] != p["situacao"] and valida(antiga[0]) and valida(p["situacao"])
                 and not primeira_vez):
             novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": "Mudança de situação",
-                          "horario": p["atualizada"], "autor": "BLL",
+                          "horario": p["atualizada"], "autor": plataforma_nome(),
                           "texto": f"{antiga[0]} → {p['situacao']}", "id": None})
         db.execute("INSERT OR REPLACE INTO processos VALUES(?,?,?,?,?,?,?)",
                    (p["processo"], p["promotor"], p["situacao"], p["disputa"],
@@ -1123,10 +1123,10 @@ def processar(db, page, primeira_vez, diag=False):
             continue
         db.execute("INSERT INTO mensagens VALUES(?,?,?,?,?,?,?,?,?)",
                    (mid, n.get("PROCESSO", ""), n.get("CIDADE", ""), "Notificação",
-                    n.get("DATA", ""), "BLL", n.get("MENSAGEM", ""), agora, 0 if not primeira_vez else 1))
+                    n.get("DATA", ""), plataforma_nome(), n.get("MENSAGEM", ""), agora, 0 if not primeira_vez else 1))
         if not primeira_vez:
             novas.append({"processo": n.get("PROCESSO", ""), "promotor": n.get("CIDADE", ""),
-                          "escopo": "Notificação", "horario": n.get("DATA", ""), "autor": "BLL",
+                          "escopo": "Notificação", "horario": n.get("DATA", ""), "autor": plataforma_nome(),
                           "texto": n.get("MENSAGEM", ""), "id": mid})
     db.commit()
 
