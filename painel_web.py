@@ -326,7 +326,9 @@ def mensagens(filtro_emp="", busca="", limite=None):
                              "WHERE NOT (texto LIKE '%Limite 500 caracteres%' OR autor LIKE 'Você é o:%' "
                              "OR texto LIKE '%Horário Autor Mensagem%' OR texto LIKE '%Horario Autor Mensagem%') "
                              "ORDER BY rowid DESC LIMIT ?", (limite * 4 if limite else -1,)):
-            if any(RE_COPIA_CHAT.search(urgencia.norm(x)) for x in (r[5], r[4], r[2])):
+            if any(RE_COPIA_CHAT.search(urgencia.norm(x)) for x in (r[5], r[4], r[2])) or any(
+                    "horarioautormensagem" in re.sub(r"[^a-z]", "", urgencia.norm(x)) or
+                    re.sub(r"[^a-z]", "", urgencia.norm(x)).startswith("mensagensdolote") for x in (r[5], r[4])):
                 continue  # cópia inteira do chat lida por engano como evento
             if busca and not (pat_busca and pat_busca.search(" ".join(str(x) for x in r))):
                 continue

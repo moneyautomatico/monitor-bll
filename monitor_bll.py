@@ -246,11 +246,13 @@ def abrir_banco():
     db.execute("""CREATE TABLE IF NOT EXISTS classificacao(
         chave TEXT PRIMARY KEY, processo TEXT, promotor TEXT, lote TEXT, descricao TEXT, fase TEXT,
         primeiro TEXT, melhor TEXT, ranking TEXT, nossa_pos INTEGER, nosso_lance TEXT, lido_em REAL, atualizado TEXT)""")
-    if not db.execute("SELECT 1 FROM estado WHERE chave='dilig_versao' AND valor='3'").fetchone():
+    if not db.execute("SELECT 1 FROM estado WHERE chave='dilig_versao' AND valor='4'").fetchone():
         # a leitura antiga às vezes gravava as mensagens do lote como diligências: apaga e relê em silêncio
         db.execute("DELETE FROM mensagens WHERE escopo='Diligência'")
         db.execute("DELETE FROM estado WHERE chave LIKE 'diligencias_%'")
-        db.execute("INSERT OR REPLACE INTO estado VALUES('dilig_versao','3')")
+        db.execute("INSERT OR REPLACE INTO estado VALUES('dilig_versao','4')")
+        lixo = [r[0] for r in db.execute("SELECT id, autor, texto FROM mensagens").fetchall() if eh_copia_chat(r[1], r[2])]
+        db.executemany("DELETE FROM mensagens WHERE id=?", [(x,) for x in lixo])
         db.commit()
     if (db.execute("SELECT valor FROM estado WHERE chave='classif_versao'").fetchone() or [""])[0] != "2":
         # nova regra de desclassificação: relê as classificações da BLL/BNC (inclusive o histórico)
@@ -637,6 +639,15 @@ def ler_chat_item(page, rotulo):
     return dados
 
 
+def eh_copia_chat(*textos):
+    """Bloco com a tabela inteira do chat copiada (cabeçalho 'Horário Autor Mensagem' dentro do texto)."""
+    for t in textos:
+        so_letras = re.sub(r"[^A-Z]", "", _norm(t or ""))
+        if "HORARIOAUTORMENSAGEM" in so_letras or so_letras.startswith("MENSAGENSDOLOTE"):
+            return True
+    return False
+
+
 def extrair_mensagens(dados, rotulo):
     """Separa 'Mensagens do lote' (com Autor) e 'Mensagens do processo'."""
     out = []
@@ -651,7 +662,7 @@ def extrair_mensagens(dados, rotulo):
         for c in t["linhas"]:
             if len(c) <= i_m:
                 continue
-            if re.search(r"limite \d+ caracteres|^voc[êe] [ée] o:|hor[áa]rio\W+autor\W+mensagem", " ".join(c), re.I):
+            if re.search(r"limite \d+ caracteres|^voc[êe] [ée] o:", " ".join(c), re.I) or eh_copia_chat(*c):
                 continue  # área de digitação do chat, não é mensagem
             out.append({
                 "escopo": escopo,
@@ -1064,8 +1075,8 @@ def ler_diligencias(db, page, p, primeira_vez, diag=False):
             data = RE_DATA_BLOCO.search(criado or txt) or re.search(r"\d{2}/\d{2}/\d{4}[ \d:]*", criado or txt)
             itens.append({"horario": (data.group(0) if data else criado).replace("\n", " ").strip(),
                           "autor": "Pregoeiro", "texto": texto_it, "chave": chave})
-    for ev in eventos_registro({"tabelas": []}, texto):
-        itens.append(ev)
+    if not dados.get("tabelas"):  # só quando a janela não tem tabela (formato em cartões)
+        itens += eventos_registro({"tabelas": []}, texto)
     k = "diligencias_" + hash_msg(p["processo"], p["promotor"])
     ja_lia = bool(estado(db, k))
     agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
