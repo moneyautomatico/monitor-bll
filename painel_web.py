@@ -5,6 +5,7 @@ Permite cadastrar/editar/pausar/remover empresas e ajustar os alertas sem usar o
 """
 import base64
 import getpass
+import hashlib
 import hmac
 import html
 import json
@@ -284,6 +285,18 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 @media print{header,.acoes,.msg{display:none}.analise{border:0}}
 .analise{background:var(--card);border:1px solid var(--borda);border-radius:10px;padding:6px 20px 16px;max-width:900px;line-height:1.5}
 .analise h3{border-bottom:1px solid var(--borda);padding-bottom:4px;margin-top:22px}.analise h4{margin:14px 0 4px;font-size:14px}
+.pl{margin-bottom:16px;background:var(--card);border:1px solid var(--borda);border-radius:10px;overflow:hidden}
+.pl-cab{background:#173f2c;color:#fff;font-weight:700;padding:10px 14px;letter-spacing:.3px}.pl-cab .sub{color:#cfe3d7}
+.pr-cab,.pr summary{display:grid;grid-template-columns:110px minmax(180px,1.3fr) 2fr 150px;gap:12px;align-items:center;padding:8px 14px}
+.pr-cab{background:var(--verde2);font-size:12px;font-weight:700}
+.pr{border-top:1px solid var(--borda)}.pr summary{cursor:pointer;list-style:none}.pr summary::-webkit-details-marker{display:none}
+.pr summary:hover{background:var(--bg)}.pr[open] summary{background:var(--nova)}
+.pr-num{font-weight:700;font-size:15px}.pr-num:before{content:'▸ ';color:var(--sub)}.pr[open] .pr-num:before{content:'▾ '}
+.pr-org{display:flex;flex-direction:column;min-width:0}.pr-org .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pr-prev{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pr-data{display:flex;flex-direction:column;text-align:right}
+.pr-corpo{padding:10px 14px 16px;border-top:1px dashed var(--borda)}.pr-ferr{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.pr-corpo .ch-lista{max-height:520px;overflow-y:auto;padding:0}
+@media (max-width:800px){.pr-cab{display:none}.pr summary{grid-template-columns:1fr auto}.pr-org{grid-column:1/-1;order:3}.pr-prev{grid-column:1/-1;order:4}}
 .ch-barra{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
 .chat{display:grid;grid-template-columns:340px 1fr;gap:12px;height:calc(100vh - 170px);min-height:420px}
 .ch-lado{background:var(--card);border:1px solid var(--borda);border-radius:10px;overflow-y:auto}
@@ -438,14 +451,9 @@ def grupo_escopo(esc):
     return esc or "Outros"
 
 
-def pg_chat(q):
-    """Mensagens em formato de chat: processos à esquerda (por plataforma), conversa à direita (filtro por lote)."""
-    busca = q.get("q", "")
-    todas = mensagens(q.get("empresa", ""), busca)
-    cfg_chat = CFG_ATUAL().get("CHAT_URGENTE", "1") != "0"
-    # agrupa por processo
+def agrupar_processos(busca="", empresa=""):
     procs = {}
-    for m in todas:
+    for m in mensagens(empresa, busca):
         k = (m["eid"], m["processo"], m["promotor"])
         g = procs.setdefault(k, {"eid": m["eid"], "nome": m["nome"], "plat": m["plat"], "processo": m["processo"],
                                  "promotor": m["promotor"], "msgs": [], "ultima": datetime.min, "ult_msg": None})
@@ -453,60 +461,83 @@ def pg_chat(q):
         d = data_msg(m)
         if d >= g["ultima"]:
             g["ultima"], g["ult_msg"] = d, m
-    sel = (q.get("eid", ""), q.get("processo", ""), q.get("promotor", ""))
-    if sel not in procs and procs:
-        sel = max(procs, key=lambda k: procs[k]["ultima"])
-    # barra lateral, agrupada por plataforma (plataforma com movimento mais recente primeiro)
+    return procs
+
+
+def html_conversa(g, cfg_chat):
+    """Menu de lotes + mensagens do processo (o filtro por lote é feito no navegador, sem recarregar)."""
+    grupos = sorted({grupo_escopo(m["escopo"]) for m in g["msgs"]},
+                    key=lambda x: (not (x.startswith("L") and x[1:].isdigit()), int(x[1:]) if x[1:].isdigit() else 0, x))
+    contagem = {x: sum(1 for m in g["msgs"] if grupo_escopo(m["escopo"]) == x) for x in grupos}
+    ops = "".join(f'<option value="{e(x)}">{e(x)} ({contagem[x]})</option>' for x in grupos)
+    msgs = sorted(g["msgs"], key=lambda m: (data_msg(m), para_data(m["visto"])), reverse=True)
+    bolhas = ""
+    for m in msgs:
+        urg = urgencia.classificar(m["texto"], m["escopo"], m["autor"], chat_urgente=cfg_chat)
+        sistema = not urgencia.eh_chat(m["escopo"], m["autor"])
+        tag_urg = f' <span class="tag erro">🚨 {e(urg)}</span>' if urg else ""
+        bolhas += (f'<div class="ch-msg{" sis" if sistema else ""}{" urg" if urg else ""}" data-lote="{e(grupo_escopo(m["escopo"]))}">'
+                   f'<div class="ch-cab"><b>{e(m["autor"] or "—")}</b> <span class="tag parado">{e(grupo_escopo(m["escopo"]))}</span>'
+                   f'{tag_urg}<span class="sub ch-hora">{e(m["horario"] or m["visto"])}</span></div>'
+                   f'<div class="txt">{e(m["texto"])}</div></div>')
+    return (f'<div class="pr-ferr"><label style="margin:0">Lote:</label>'
+            f'<select onchange="filtrarLote(this)"><option value="">Todos os lotes ({len(g["msgs"])})</option>{ops}</select></div>'
+            f'<div class="ch-lista">{bolhas}</div>')
+
+
+def pg_chat(q):
+    """Lista de processos por plataforma; cada processo abre com um menu de lotes e as mensagens."""
+    busca = q.get("q", "")
+    procs = agrupar_processos(busca)
+    cfg_chat = CFG_ATUAL().get("CHAT_URGENTE", "1") != "0"
     por_plat = {}
     for g in procs.values():
         por_plat.setdefault(g["plat"], []).append(g)
     ordem_plat = sorted(por_plat, key=lambda pl: max(x["ultima"] for x in por_plat[pl]), reverse=True)
-    lateral = ""
+    blocos = ""
     for pl in ordem_plat:
-        lateral += f'<div class="ch-plat">{e(pl)}</div>'
-        for g in sorted(por_plat[pl], key=lambda x: x["ultima"], reverse=True):
-            k = (g["eid"], g["processo"], g["promotor"])
+        itens = sorted(por_plat[pl], key=lambda x: x["ultima"], reverse=True)
+        linhas = ""
+        for g in itens:
             um = g["ult_msg"] or {}
             urg = urgencia.classificar(um.get("texto", ""), um.get("escopo", ""), um.get("autor", ""), chat_urgente=cfg_chat)
-            url = "/mensagens?" + urllib.parse.urlencode({"eid": g["eid"], "processo": g["processo"], "promotor": g["promotor"],
-                                                          "q": busca})
-            quando = g["ultima"].strftime("%d/%m %H:%M") if g["ultima"] != datetime.min else ""
-            lateral += (f'<a class="ch-item{" on" if k == sel else ""}" href="{e(url)}">'
-                        f'<div class="ch-l1"><b>{e(g["processo"])}</b><span class="sub">{e(quando)}</span></div>'
-                        f'<div class="sub ch-org">{e(g["nome"])} · {e(g["promotor"][:40])}</div>'
-                        f'<div class="ch-prev">{"🚨 " if urg else ""}{e((um.get("texto") or "")[:70])}</div></a>')
-    # conversa
-    direita = '<div class="sub" style="padding:20px">Nenhuma mensagem ainda.</div>'
-    if procs:
-        g = procs[sel]
-        grupos = sorted({grupo_escopo(m["escopo"]) for m in g["msgs"]},
-                        key=lambda x: (not x.startswith("L"), int(x[1:]) if x[1:].isdigit() else 0, x))
-        lote = q.get("lote", "")
-        msgs = [m for m in g["msgs"] if not lote or grupo_escopo(m["escopo"]) == lote]
-        msgs.sort(key=lambda m: (data_msg(m), para_data(m["visto"])), reverse=True)
-        ops = "".join(f'<option value="{e(x)}" {"selected" if x == lote else ""}>{e(x)}</option>' for x in grupos)
-        hid = "".join(f'<input type="hidden" name="{k}" value="{e(v)}">' for k, v in
-                      (("eid", g["eid"]), ("processo", g["processo"]), ("promotor", g["promotor"]), ("q", busca)))
-        bolhas = ""
-        for m in msgs:
-            urg = urgencia.classificar(m["texto"], m["escopo"], m["autor"], chat_urgente=cfg_chat)
-            sistema = not urgencia.eh_chat(m["escopo"], m["autor"])
-            tag_urg = f' <span class="tag erro">🚨 {e(urg)}</span>' if urg else ""
-            bolhas += (f'<div class="ch-msg{" sis" if sistema else ""}{" urg" if urg else ""}">'
-                       f'<div class="ch-cab"><b>{e(m["autor"] or "—")}</b> <span class="tag parado">{e(grupo_escopo(m["escopo"]))}</span>'
-                       f'{tag_urg}<span class="sub ch-hora">{e(m["horario"] or m["visto"])}</span></div>'
-                       f'<div class="txt">{e(m["texto"])}</div></div>')
-        direita = (f'<div class="ch-topo"><div><b>{e(g["processo"])}</b> · {e(g["nome"])} <span class="tag parado">{e(g["plat"])}</span>'
-                   f'<div class="sub">{e(g["promotor"])}</div></div>'
-                   f'<form method="get" action="/mensagens" style="margin:0">{hid}<select name="lote" onchange="this.form.submit()">'
-                   f'<option value="">Todos os lotes ({len(g["msgs"])})</option>{ops}</select></form></div>'
-                   f'<div class="ch-lista">{bolhas or "<div class=sub>Nada neste filtro.</div>"}</div>')
+            quando = g["ultima"].strftime("%d/%m/%Y %H:%M") if g["ultima"] != datetime.min else "—"
+            pid = "p" + hashlib.sha1(f'{g["eid"]}|{g["processo"]}|{g["promotor"]}'.encode()).hexdigest()[:10]
+            url = "/mensagens/processo?" + urllib.parse.urlencode({"eid": g["eid"], "processo": g["processo"], "promotor": g["promotor"]})
+            linhas += (f'<details class="pr" id="{pid}" data-url="{e(url)}" ontoggle="abrirProc(this)">'
+                       f'<summary><span class="pr-num">{e(g["processo"])}</span>'
+                       f'<span class="pr-org"><b>{e(g["nome"])}</b><span class="sub">{e(g["promotor"])}</span></span>'
+                       f'<span class="pr-prev">{"🚨 " if urg else ""}{e((um.get("texto") or "")[:90])}</span>'
+                       f'<span class="pr-data"><b>{e(quando)}</b><span class="sub">{len(g["msgs"])} mensagem(ns)</span></span></summary>'
+                       f'<div class="pr-corpo"><div class="sub">Carregando…</div></div></details>')
+        blocos += (f'<div class="pl"><div class="pl-cab">{e(pl)} <span class="sub">· {len(itens)} processo(s)</span></div>'
+                   f'<div class="pr-cab"><span>Pregão</span><span>Empresa / órgão</span><span class="ocultar">Última mensagem</span>'
+                   f'<span>Data e hora</span></div>{linhas}</div>')
     corpo = f"""<div class="ch-barra"><h2 style="margin:0">Mensagens</h2>
-<form method="get" action="/mensagens" class="linha" style="margin:0"><input name="q" value="{e(busca)}" placeholder="Buscar…">
+<form method="get" action="/mensagens" class="linha" style="margin:0"><input name="q" value="{e(busca)}" placeholder="Buscar processo, órgão, texto…">
 <button>Buscar</button><a class="btn sec" href="/mensagens?vista=lista">Ver em lista</a></form></div>
-<div class="chat"><aside class="ch-lado">{lateral or '<div class="sub" style="padding:12px">Sem processos com mensagens.</div>'}</aside>
-<section class="ch-conv">{direita}</section></div>"""
+{blocos or '<div class="msg">Nenhuma mensagem ainda.</div>'}
+<p class="sub">Clique no processo para abrir as mensagens e escolha o lote no menu. A página se atualiza a cada minuto e reabre os processos que estavam abertos.</p>
+<script>
+function guardar(){{try{{sessionStorage.setItem('abertos',JSON.stringify([...document.querySelectorAll('details.pr[open]')].map(d=>d.id)));}}catch(e){{}}}}
+function abrirProc(d){{guardar(); if(!d.open||d.dataset.ok) return; d.dataset.ok=1;
+ fetch(d.dataset.url,{{credentials:'same-origin'}}).then(r=>r.text()).then(h=>{{d.querySelector('.pr-corpo').innerHTML=h;
+  try{{const v=sessionStorage.getItem('lote_'+d.id); if(v){{const s=d.querySelector('select'); s.value=v; filtrarLote(s);}}}}catch(e){{}}}})
+ .catch(()=>{{d.querySelector('.pr-corpo').innerHTML='<div class=sub>Não consegui carregar. Recarregue a página.</div>';d.dataset.ok='';}});}}
+function filtrarLote(s){{const d=s.closest('details'); const v=s.value;
+ d.querySelectorAll('.ch-msg').forEach(m=>{{m.style.display=(!v||m.dataset.lote===v)?'':'none';}});
+ try{{sessionStorage.setItem('lote_'+d.id,v);}}catch(e){{}}}}
+try{{(JSON.parse(sessionStorage.getItem('abertos')||'[]')).forEach(id=>{{const d=document.getElementById(id); if(d) d.open=true;}});}}catch(e){{}}
+</script>"""
     return pagina("Mensagens", corpo, "/mensagens", recarregar=True)
+
+
+def pg_proc_mensagens(q):
+    procs = agrupar_processos()
+    g = procs.get((q.get("eid", ""), q.get("processo", ""), q.get("promotor", "")))
+    if not g:
+        return '<div class="sub">Sem mensagens.</div>'
+    return html_conversa(g, CFG_ATUAL().get("CHAT_URGENTE", "1") != "0")
 
 
 def pg_mensagens(q):
@@ -1285,6 +1316,8 @@ class Painel(BaseHTTPRequestHandler):
         try:
             if p == "/":
                 return self.enviar(pg_visao())
+            if p == "/mensagens/processo":
+                return self.enviar(pg_proc_mensagens(q))
             if p == "/mensagens":
                 return self.enviar(pg_mensagens(q) if q.get("vista") == "lista" else pg_chat(q))
             if p == "/processos":
