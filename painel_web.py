@@ -335,7 +335,7 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .cm{padding:10px 0;border-bottom:1px solid var(--borda)}.cm.urg{border-left:4px solid var(--erro);padding-left:10px}
 .cm-cab{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;letter-spacing:.2px}.cm-hora{margin-left:auto}
 .cm-txt{white-space:pre-wrap;font-size:14px;margin-top:4px}
-mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado{background:#ffeb3b;color:#000;font-weight:700;outline:2px solid #e65100;outline-offset:0;box-shadow:0 0 0 3px #ffe0b2}.cm.achou{background:#fffde7}
+mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.atual{background:#ff6d00;color:#fff;outline:3px solid #bf360c}.nav-busca{display:flex;gap:4px;align-items:center}.nav-busca button{padding:6px 10px}mark.achado{background:#ffeb3b;color:#000;font-weight:700;outline:2px solid #e65100;outline-offset:0;box-shadow:0 0 0 3px #ffe0b2}.cm.achou{background:#fffde7}
 .pesq{flex-wrap:wrap}#pesq-info{align-self:center}
 @media (max-width:900px){.mc{grid-template-columns:1fr;height:auto}.mc-lista{max-height:55vh}.cv-lista{max-height:none}}
 .pl{margin-bottom:16px;background:var(--card);border:1px solid var(--borda);border-radius:10px;overflow:hidden}
@@ -611,9 +611,13 @@ def titulo_msg(m):
 
 def barra_msgs(valor=""):
     """Pesquisa + marcar todas como lidas, dentro do painel das mensagens."""
-    return (f'<form class="pesq" onsubmit="return pesquisar()">'
-            f'<input id="pesq-txt" value="{e(valor)}" placeholder="🔍 Pesquisar mensagem… (Enter = buscar em todos os processos)" '
-            f'oninput="buscaConversa(this)"><button>Buscar</button>'
+    return (f'<form class="pesq" onsubmit="return proximo(event)">'
+            f'<input id="pesq-txt" value="{e(valor)}" placeholder="🔍 Localizar nas mensagens… (Enter = próxima)" '
+            f'oninput="buscaConversa(this)" onkeydown="teclaBusca(event)">'
+            f'<span class="nav-busca"><span id="pesq-pos" class="sub">0/0</span>'
+            f'<button type="button" class="sec" title="Anterior (Shift+Enter)" onclick="irPara(-1)">▲</button>'
+            f'<button type="button" class="sec" title="Próxima (Enter)" onclick="irPara(1)">▼</button></span>'
+            f'<button type="button" title="Procurar a palavra em todos os processos" onclick="pesquisar()">Buscar em todos</button>'
             f'<button type="button" class="sec" title="Marcar todas as mensagens como lidas" onclick="marcarTodas()">✔✔ Marcar todas como lidas</button>'
             f'<button type="button" class="sec" title="Atualizar agora" onclick="location.reload()">⟳ Atualizar</button>'
             f'<span id="pesq-info" class="sub"></span></form>')
@@ -729,14 +733,25 @@ function grifar(el,t){{  // grifa o termo pesquisado dentro do texto da mensagem
    mk.textContent=mt[0]; f.appendChild(mk); ult=mt.index+mt[0].length; mt=re.exec(tx);}}
   f.appendChild(document.createTextNode(tx.slice(ult))); n.parentNode.replaceChild(f,n);}});
  el.dataset.g='1';}}
+// Localizar (como Ctrl+F): grifa tudo, ▲ ▼ navegam entre as ocorrências, sem esconder mensagens
+let achados=[], atual=-1;
 function aplicarBusca(i){{const t=(i&&i.value||'').trim();const s=document.querySelector('#conversa select');const v=s?s.value:'';
- let primeiro=null, n=0; const re=padraoBusca(t);
+ const re=padraoBusca(t);
  document.querySelectorAll('#conversa .cm').forEach(m=>{{if(m.dataset.t===undefined)m.dataset.t=m.textContent;
-  if(re)re.lastIndex=0; const ok=(!v||m.dataset.lote===v)&&(!re||re.test(m.dataset.t)); if((m.style.display!=='none')!==ok)m.style.display=ok?'':'none';
-  const tx=m.querySelector('.cm-txt'); if(tx&&(ok||tx.dataset.g))grifar(tx, ok?t:'');
-  m.classList.toggle('achou', ok&&!!t); if(ok&&t){{n++; if(!primeiro)primeiro=m;}}}});
- const info=document.getElementById('pesq-info'); if(info)info.textContent=t?(n+' mensagem(ns) com “'+t+'”'):'';
- if(primeiro)primeiro.scrollIntoView({{block:'nearest'}});}}
+  const vis=(!v||m.dataset.lote===v); if((m.style.display!=='none')!==vis)m.style.display=vis?'':'none';
+  if(re)re.lastIndex=0; const tem=vis&&re&&re.test(m.dataset.t);
+  const tx=m.querySelector('.cm-txt'); if(tx&&(tem||tx.dataset.g))grifar(tx, tem?t:'');
+  m.classList.toggle('achou', !!tem);}});
+ achados=[...document.querySelectorAll('#conversa mark.achado')].filter(x=>x.offsetParent!==null);
+ atual=-1; if(achados.length)irPara(1); else posicao();}}
+function posicao(){{const el=document.getElementById('pesq-pos'); if(el)el.textContent=(achados.length?(atual+1):0)+'/'+achados.length;}}
+function irPara(d){{if(!achados.length){{aplicarBusca(document.getElementById('pesq-txt'));return;}}
+ if(atual>=0&&achados[atual])achados[atual].classList.remove('atual');
+ atual=(atual+d+achados.length)%achados.length; const mk=achados[atual]; mk.classList.add('atual');
+ mk.scrollIntoView({{block:'center',behavior:'smooth'}}); posicao();}}
+function teclaBusca(ev){{if(ev.key==='Enter'){{ev.preventDefault(); clearTimeout(tBusca);
+  if(!achados.length)aplicarBusca(ev.target); else irPara(ev.shiftKey?-1:1);}}}}
+function proximo(ev){{ev.preventDefault();return false;}}
 // atualização automática só quando você não está digitando
 setInterval(()=>{{const a=document.activeElement; const p=document.getElementById('pesq-txt');
  if(p&&p.value.trim())return;              // pesquisa ativa: não recarrega
