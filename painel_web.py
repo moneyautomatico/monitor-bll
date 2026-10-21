@@ -131,6 +131,24 @@ def gerar_id(nome):
     return re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:30] or "empresa"
 
 
+def data_msg(m):
+    """Data/hora da mensagem na plataforma (ou, se não der para ler, quando o monitor a viu)."""
+    x = re.search(r"(\d{2})/(\d{2})/(\d{4})\D*(\d{2}):(\d{2})(?::(\d{2}))?", m.get("horario") or "")
+    if x:
+        try:
+            d, mo, a, h, mi, se = x.groups()
+            return datetime(int(a), int(mo), int(d), int(h), int(mi), int(se or 0))
+        except ValueError:
+            pass
+    x = re.search(r"(\d{2})/(\d{2})/(\d{4})", m.get("horario") or "")
+    if x:
+        try:
+            return datetime(int(x.group(3)), int(x.group(2)), int(x.group(1)), 23, 59)
+        except ValueError:
+            pass
+    return para_data(m.get("visto") or "")
+
+
 def para_data(txt):
     for f in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
         try:
@@ -189,13 +207,13 @@ def mensagens(filtro_emp="", busca="", limite=300):
         prim = con.execute("SELECT visto_em FROM mensagens ORDER BY rowid LIMIT 1").fetchone()
         prim = prim[0] if prim else ""
         for r in con.execute("SELECT processo, promotor, escopo, horario, autor, texto, visto_em FROM mensagens "
-                             "ORDER BY rowid DESC LIMIT ?", (limite,)):
+                             "ORDER BY rowid DESC LIMIT ?", (limite * 4,)):
             if busca and busca.lower() not in " ".join(str(x) for x in r).lower():
                 continue
             out.append({"emp": f'{emp["nome"]} · {emp["plat"]}', "eid": emp["id"], "processo": r[0], "promotor": r[1], "escopo": r[2],
                         "horario": r[3], "autor": r[4], "texto": r[5], "visto": r[6], "nova": r[6] != prim})
         con.close()
-    out.sort(key=lambda m: (para_data(m["visto"]), para_data(m["horario"])), reverse=True)
+    out.sort(key=lambda m: (data_msg(m), para_data(m["visto"])), reverse=True)  # mais recentes primeiro
     return out[:limite]
 
 
