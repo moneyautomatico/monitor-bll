@@ -195,7 +195,7 @@ def empresas():
     return out
 
 
-def mensagens(filtro_emp="", busca="", limite=300):
+def mensagens(filtro_emp="", busca="", limite=None):
     out = []
     for emp in empresas():
         if filtro_emp and emp["id"] != filtro_emp:
@@ -207,14 +207,36 @@ def mensagens(filtro_emp="", busca="", limite=300):
         prim = con.execute("SELECT visto_em FROM mensagens ORDER BY rowid LIMIT 1").fetchone()
         prim = prim[0] if prim else ""
         for r in con.execute("SELECT processo, promotor, escopo, horario, autor, texto, visto_em FROM mensagens "
-                             "ORDER BY rowid DESC LIMIT ?", (limite * 4,)):
+                             "ORDER BY rowid DESC LIMIT ?", (limite * 4 if limite else -1,)):
             if busca and busca.lower() not in " ".join(str(x) for x in r).lower():
                 continue
             out.append({"emp": f'{emp["nome"]} · {emp["plat"]}', "eid": emp["id"], "processo": r[0], "promotor": r[1], "escopo": r[2],
                         "horario": r[3], "autor": r[4], "texto": r[5], "visto": r[6], "nova": r[6] != prim})
         con.close()
     out.sort(key=lambda m: (data_msg(m), para_data(m["visto"])), reverse=True)  # mais recentes primeiro
-    return out[:limite]
+    return out[:limite] if limite else out
+
+
+def paginacao(pag, total_pag, base):
+    """Links 1 2 3 … com anterior/próxima."""
+    if total_pag <= 1:
+        return ""
+    def link(n, txt=None):
+        if n == pag:
+            return f'<span class="btn">{n}</span>'
+        return f'<a class="btn sec" href="{base}&pagina={n}">{txt or n}</a>'
+    nums = sorted({1, total_pag, *range(max(1, pag - 3), min(total_pag, pag + 3) + 1)})
+    partes, ant = [], 0
+    for n in nums:
+        if n - ant > 1:
+            partes.append('<span class="sub" style="align-self:center">…</span>')
+        partes.append(link(n))
+        ant = n
+    if pag > 1:
+        partes.insert(0, link(pag - 1, "← Anterior"))
+    if pag < total_pag:
+        partes.append(link(pag + 1, "Próxima →"))
+    return f'<div class="acoes" style="margin:12px 0">{"".join(partes)}</div>'
 
 
 def CFG_ATUAL():
@@ -397,6 +419,13 @@ def pg_mensagens(q):
         msgs = [m for m in msgs if m["nova"]]
     if q.get("urgentes"):
         msgs = [m for m in msgs if urgencia.classificar(m["texto"], m["escopo"], m["autor"], chat_urgente=CFG_ATUAL().get("CHAT_URGENTE", "1") != "0")]
+    por_pag = 300
+    total = len(msgs)
+    total_pag = max(1, -(-total // por_pag))
+    pag = min(max(1, int(re.sub(r"\D", "", q.get("pagina", "1")) or 1)), total_pag)
+    msgs = msgs[(pag - 1) * por_pag: pag * por_pag]
+    base = "/mensagens?" + urllib.parse.urlencode({k: v for k, v in q.items() if k != "pagina"})
+    nav = paginacao(pag, total_pag, base)
     linhas = "".join(
         f'<tr class="{"nova" if m["nova"] and m["visto"].startswith(datetime.now().strftime("%d/%m/%Y")) else ""}">'
         f'<td>{e(m["emp"])}</td><td><b>{e(m["processo"])}</b><div class="sub ocultar">{e(m["promotor"])}</div></td>'
@@ -408,10 +437,11 @@ def pg_mensagens(q):
 <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" name="novas" value="1" {"checked" if so_novas else ""}> só novas</label>
 <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" name="urgentes" value="1" {"checked" if q.get("urgentes") else ""}> só urgentes</label>
 <button>Filtrar</button></form>
+<p class="sub">{total} mensagem(ns) · página {pag} de {total_pag} · 300 por página · mais recentes primeiro</p>{nav}
 <table><tr><th>Empresa</th><th>Processo</th><th class="ocultar">Origem</th><th>Horário</th><th class="ocultar">Autor</th><th>Mensagem</th></tr>
-{linhas or '<tr><td colspan="6">Nenhuma mensagem.</td></tr>'}</table>
-<p class="sub">Destaque amarelo = chegou hoje depois do cadastro. Mostrando até 300.</p>"""
-    return pagina("Mensagens", corpo, "/mensagens", recarregar=True)
+{linhas or '<tr><td colspan="6">Nenhuma mensagem.</td></tr>'}</table>{nav}
+<p class="sub">Destaque amarelo = chegou hoje depois do cadastro.</p>"""
+    return pagina("Mensagens", corpo, "/mensagens", recarregar=(pag == 1))
 
 
 def classif(eid, processo=None, promotor=None):
