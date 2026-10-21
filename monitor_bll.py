@@ -246,11 +246,11 @@ def abrir_banco():
     db.execute("""CREATE TABLE IF NOT EXISTS classificacao(
         chave TEXT PRIMARY KEY, processo TEXT, promotor TEXT, lote TEXT, descricao TEXT, fase TEXT,
         primeiro TEXT, melhor TEXT, ranking TEXT, nossa_pos INTEGER, nosso_lance TEXT, lido_em REAL, atualizado TEXT)""")
-    if not db.execute("SELECT 1 FROM estado WHERE chave='dilig_versao' AND valor='2'").fetchone():
+    if not db.execute("SELECT 1 FROM estado WHERE chave='dilig_versao' AND valor='3'").fetchone():
         # a leitura antiga às vezes gravava as mensagens do lote como diligências: apaga e relê em silêncio
         db.execute("DELETE FROM mensagens WHERE escopo='Diligência'")
         db.execute("DELETE FROM estado WHERE chave LIKE 'diligencias_%'")
-        db.execute("INSERT OR REPLACE INTO estado VALUES('dilig_versao','2')")
+        db.execute("INSERT OR REPLACE INTO estado VALUES('dilig_versao','3')")
         db.commit()
     if (db.execute("SELECT valor FROM estado WHERE chave='classif_versao'").fetchone() or [""])[0] != "2":
         # nova regra de desclassificação: relê as classificações da BLL/BNC (inclusive o histórico)
@@ -1028,25 +1028,42 @@ def ler_diligencias(db, page, p, primeira_vez, diag=False):
     if not dados:
         return []
     itens = []
-    chat = [_norm(r[0]) for r in db.execute(
-        "SELECT texto FROM mensagens WHERE processo=? AND promotor=? AND escopo<>'Diligência' AND length(texto)>=12",
-        (p["processo"], p["promotor"]))]
     for t in dados.get("tabelas", []) if isinstance(dados.get("tabelas"), list) else []:
         linhas = t.get("linhas") if isinstance(t, dict) else None
-        cab = " ".join(t.get("cab") or []) if isinstance(t, dict) else ""
-        if re.search(r"AUTOR", cab) and re.search(r"MENSAGEM", cab) and not re.search(r"DILIG", cab):
+        cab = [_norm(x) for x in (t.get("cab") or [])] if isinstance(t, dict) else []
+        cab_txt = " ".join(cab)
+        if "AUTOR" in cab_txt and "MENSAGEM" in cab_txt and "DILIG" not in cab_txt:
             continue  # tabela de mensagens do chat, não de diligências
         for c in linhas or []:
             c = c.get("cel", []) if isinstance(c, dict) else c
             txt = " | ".join(x for x in c if x)
-            tn = _norm(txt)
-            if not txt or re.search(r"horario\W+autor\W+mensagem|mensagens do lote", tn):
+            if not txt or re.search(r"horario\W+autor\W+mensagem|mensagens do lote", _norm(txt), re.I):
                 continue
-            if any(m in tn for m in chat):
-                continue  # é uma mensagem do chat que já temos
-            if not re.search(r"nenhum|sem registro", txt, re.I):
-                data = RE_DATA_BLOCO.search(txt) or re.search(r"\d{2}/\d{2}/\d{4}[ \d:]*", txt)
-                itens.append({"horario": data.group(0) if data else "", "autor": "Pregoeiro", "texto": txt})
+            if re.search(r"nenhum|sem registro", txt, re.I) and len(c) <= 2:
+                continue
+            col = {}
+            if len(cab) == len(c):
+                col = dict(zip(cab, c))
+            def pega(*chaves):
+                for k_, v in col.items():
+                    if any(x in k_ for x in chaves):
+                        return " ".join(v.split())
+                return ""
+            criado, prazo = pega("CRIADO"), pega("FINAL", "RESPOSTA")
+            part, prop, sit = pega("PARTICIPANTE"), pega("PROPOSTA"), pega("STATUS", "SITUA")
+            req = pega("REQUERIMENTO", "DESCRI", "TEXTO", "MOTIVO")
+            num = pega("NUMERO")
+            if req:
+                cabeca = " · ".join(x for x in (
+                    f"Nº {num}" if num else "", part, prop.title() if prop else "",
+                    f"prazo de resposta {prazo}" if prazo else "", sit) if x)
+                texto_it = f"{cabeca}\n{req}" if cabeca else req
+                chave = f"{num}|{criado}|{part}|{req}"
+            else:
+                texto_it, chave = txt, txt
+            data = RE_DATA_BLOCO.search(criado or txt) or re.search(r"\d{2}/\d{2}/\d{4}[ \d:]*", criado or txt)
+            itens.append({"horario": (data.group(0) if data else criado).replace("\n", " ").strip(),
+                          "autor": "Pregoeiro", "texto": texto_it, "chave": chave})
     for ev in eventos_registro({"tabelas": []}, texto):
         itens.append(ev)
     k = "diligencias_" + hash_msg(p["processo"], p["promotor"])
@@ -1054,8 +1071,10 @@ def ler_diligencias(db, page, p, primeira_vez, diag=False):
     agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     novas = []
     for it in itens:
-        mid = hash_msg(p["processo"], p["promotor"], "Diligência", it["horario"], it["texto"])
+        # a chave não inclui o status: quando muda (ex.: Concluída), só atualiza o texto
+        mid = hash_msg(p["processo"], p["promotor"], "Diligência", it["horario"], it.get("chave") or it["texto"])
         if db.execute("SELECT 1 FROM mensagens WHERE id=?", (mid,)).fetchone():
+            db.execute("UPDATE mensagens SET texto=? WHERE id=?", (it["texto"], mid))
             continue
         avisar = ja_lia and not primeira_vez
         db.execute("INSERT INTO mensagens VALUES(?,?,?,?,?,?,?,?,?)",
