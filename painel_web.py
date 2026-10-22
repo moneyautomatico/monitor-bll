@@ -485,6 +485,11 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .mc-dir{background:var(--card);border:1px solid var(--borda);border-radius:12px;display:flex;flex-direction:column;min-height:0;min-width:0}
 .cv-vazio{padding:40px;text-align:center;color:var(--sub)}
 .cv-cab{background:#173f2c;color:#fff;padding:14px 18px;border-radius:12px 12px 0 0;font-size:13.5px}.cv-cab .sub{color:#cfe3d7}
+.cv-classif{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;background:var(--nova);border-bottom:1px solid var(--borda)}
+.cl-tit{font-weight:800;margin-right:4px}.cl-chip{border-radius:999px;padding:4px 12px;font-size:14px;border:1px solid var(--borda);background:var(--card);cursor:default}
+.cl-chip.c-1{background:#2e7d32;color:#fff;border-color:#2e7d32}.cl-chip.c-23{background:#f9a825;color:#1b1b1b;border-color:#f9a825}
+.cl-chip.c-n{background:var(--card)}.cl-chip.c-x{background:#c62828;color:#fff;border-color:#c62828}.cl-chip.c-0{opacity:.6}
+.cl-ver{margin-left:auto;padding:6px 12px;font-size:13px}.cl-quando{font-size:12px}
 .cv-sit{background:rgba(255,255,255,.18);padding:1px 8px;border-radius:999px;font-weight:700;color:#fff}
 .cv-num{font-size:18px;font-weight:700;margin-bottom:4px;display:flex;gap:8px;align-items:center}
 .cv-filtro{display:flex;gap:10px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--borda)}.cv-filtro select{min-width:0;width:100%}.cv-filtro{flex-wrap:wrap}.fm-l{flex:1 1 200px;display:flex;flex-direction:column;gap:4px;margin:0;font-size:12px;font-weight:700;color:var(--sub)}
@@ -903,13 +908,40 @@ def html_conversa(g, cfg_chat, mapa=None):
     return (f'<div class="cv-cab" data-proc="{e(cp)}"><div><div class="cv-num">{e(g["processo"])} {selo_plat(g["plat"])}</div>'
             f'<div><b>Órgão:</b> {e(g["promotor"])}</div><div class="sub"><b>Empresa:</b> {e(g["nome"])} · '
             f'<b>Situação:</b> <span class="cv-sit">{e(situacao_proc(g["eid"], g["processo"], g["promotor"]) or "—")}</span>'
-            f'</div></div></div>'
+            f'</div></div></div>' + barra_classif(g) +
             f'<div class="cv-filtro">'
             + menu("lote", "Lotes (mensagens)", "Todos os lotes", padrao=True)
             + menu("dilig", "Diligências", "Todas as diligências")
             + menu("evento", "Processo (eventos)", "Todos os eventos")
             + '</div>' + faixa + barra_msgs() +
             f'<div class="cv-lista">{itens or "<div class=sub>Sem mensagens.</div>"}</div>')
+
+
+def barra_classif(g):
+    """Faixa bem visível com a nossa posição em cada lote (dados da classificação lida pelo monitor)."""
+    linhas = classif(g["eid"], g["processo"], g["promotor"])
+    if not linhas:
+        return ""
+    chips = ""
+    for r in linhas:
+        lote, fase, primeiro, melhor, pos, lance = nlote(r[2]), r[4] or "", r[5] or "", r[6] or "", r[8], r[9] or ""
+        if pos == 1:
+            cls, txt = "c-1", "🥇 1º"
+        elif pos in (2, 3):
+            cls, txt = "c-23", f"{pos}º"
+        elif pos:
+            cls, txt = "c-n", f"{pos}º"
+        elif lance:
+            cls, txt = "c-x", "❌ desclass."
+        else:
+            cls, txt = "c-0", "—"
+        dica = f"Lote {lote}: {txt} · 1º: {primeiro} {melhor} · Fase: {fase}"
+        chips += f'<span class="cl-chip {cls}" title="{e(dica)}"><b>L{e(lote)}</b> {e(txt)}</span>'
+    url = "/classificacao?" + urllib.parse.urlencode({"empresa": g["eid"], "processo": g["processo"], "promotor": g["promotor"]})
+    atual = max((r[10] or "" for r in linhas), default="")
+    return (f'<div class="cv-classif"><span class="cl-tit">📊 Nossa classificação</span>{chips}'
+            f'<a class="btn cl-ver" href="{e(url)}">Ver classificação completa</a>'
+            f'<span class="sub cl-quando">lida em {e(atual)}</span></div>')
 
 
 def pg_chat(q):
