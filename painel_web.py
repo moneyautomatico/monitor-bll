@@ -485,6 +485,7 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .mc-dir{background:var(--card);border:1px solid var(--borda);border-radius:12px;display:flex;flex-direction:column;min-height:0;min-width:0}
 .cv-vazio{padding:40px;text-align:center;color:var(--sub)}
 .cv-cab{background:#173f2c;color:#fff;padding:14px 18px;border-radius:12px 12px 0 0;font-size:13.5px}.cv-cab .sub{color:#cfe3d7}
+.cv-sit{background:rgba(255,255,255,.18);padding:1px 8px;border-radius:999px;font-weight:700;color:#fff}
 .cv-num{font-size:18px;font-weight:700;margin-bottom:4px;display:flex;gap:8px;align-items:center}
 .cv-filtro{display:flex;gap:10px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--borda)}.cv-filtro select{min-width:0;width:100%}.cv-filtro{flex-wrap:wrap}.fm-l{flex:1 1 200px;display:flex;flex-direction:column;gap:4px;margin:0;font-size:12px;font-weight:700;color:var(--sub)}
 @keyframes pulsar{0%,100%{box-shadow:0 0 0 0 rgba(229,57,53,.55)}50%{box-shadow:0 0 0 6px rgba(229,57,53,0)}}
@@ -683,6 +684,21 @@ def agrupar_processos(busca="", empresa=""):
         if d >= g["ultima"]:
             g["ultima"], g["ult_msg"] = d, m
     return procs
+
+
+def situacao_proc(eid, processo, promotor):
+    """Situação atual do processo como aparece na plataforma (ex.: HABILITAÇÃO, RECURSO, HOMOLOGADO)."""
+    db = EMPRESAS / eid / "bll_monitor.db"
+    if not db.exists():
+        return ""
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        r = con.execute("SELECT situacao, atualizada FROM processos WHERE processo=? AND promotor=?",
+                        (processo, promotor)).fetchone()
+        con.close()
+        return (r[0] or "").strip() if r else ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 ARQ_LIDOS = PASTA / "mensagens_lidas.json"
@@ -886,7 +902,8 @@ def html_conversa(g, cfg_chat, mapa=None):
                   f'<div class="cm-txt">{destacar(e(m["texto"]))}</div></div>')
     return (f'<div class="cv-cab" data-proc="{e(cp)}"><div><div class="cv-num">{e(g["processo"])} {selo_plat(g["plat"])}</div>'
             f'<div><b>Órgão:</b> {e(g["promotor"])}</div><div class="sub"><b>Empresa:</b> {e(g["nome"])} · '
-            f'{len(g["msgs"])} movimentação(ões)</div></div></div>'
+            f'<b>Situação:</b> <span class="cv-sit">{e(situacao_proc(g["eid"], g["processo"], g["promotor"]) or "—")}</span>'
+            f'</div></div></div>'
             f'<div class="cv-filtro">'
             + menu("lote", "Lotes (mensagens)", "Todos os lotes", padrao=True)
             + menu("dilig", "Diligências", "Todas as diligências")
