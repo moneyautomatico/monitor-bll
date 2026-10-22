@@ -187,6 +187,28 @@ def ligar(texto):
         return False
 
 
+_NTFY_AVISOS = {}
+
+
+def _cortar_bytes(txt, limite=3500):
+    """O ntfy transforma em ANEXO (arquivo) mensagens acima de 4096 bytes – corta antes, sem quebrar acentos."""
+    dados = (txt or "").encode("utf-8")
+    if len(dados) <= limite:
+        return dados
+    return dados[:limite].decode("utf-8", "ignore").rstrip().encode("utf-8") + " …".encode("utf-8")
+
+
+def _avisar_uma_vez(chave, texto):
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    if _NTFY_AVISOS.get(chave) != hoje:
+        _NTFY_AVISOS[chave] = hoje
+        log(texto)
+        try:
+            telegram("⚠️ " + texto)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def alarme(titulo, texto, prioridade="5"):
     """Notificação no app ntfy. Prioridade 5 = máxima (toca alto); 3 = normal."""
     modo = (CFG.get("ENVIAR_PARA") or "geral").lower() if CFG.get("EMPRESA_ID") else "geral"
@@ -196,18 +218,40 @@ def alarme(titulo, texto, prioridade="5"):
     if modo in ("proprio", "próprio", "ambos"):
         topicos.append(CFG.get("EMPRESA_NTFY_TOPICO", "").strip())
     topicos = [t for i, t in enumerate(topicos) if t and t not in topicos[:i]]
+    if not topicos:
+        _avisar_uma_vez("sem_topico", f"Alarme ntfy NÃO enviado: nenhum tópico ntfy configurado "
+                                      f"(destino '{modo}'). Configure em Configurações/Empresas.")
+        return False
     if CFG.get("EMPRESA_NOME"):
         titulo = f"{CFG['EMPRESA_NOME']} – {titulo}"
+    servidor = (CFG.get("NTFY_SERVIDOR") or "https://ntfy.sh").rstrip("/")
+    corpo = _cortar_bytes(texto)
+    params = {"title": titulo[:250], "priority": prioridade,
+              "tags": "rotating_light" if prioridade == "5" else "bell"}
+    if CFG.get("PAINEL_URL"):
+        params["click"] = CFG["PAINEL_URL"]
     ok = False
     for topico in topicos:
-        try:
-            r = requests.post(f"https://ntfy.sh/{topico}", data=texto[:3000].encode("utf-8"), timeout=20,
-                              params={"title": titulo, "priority": prioridade,
-                                      "tags": "rotating_light" if prioridade == "5" else "bell"})
+        for tentativa in range(3):  # tenta de novo se a internet/servidor falhar
+            try:
+                r = requests.post(f"{servidor}/{topico}", data=corpo, timeout=20, params=params)
+            except requests.RequestException as ex:
+                log(f"Falha no alarme ntfy ({topico}), tentativa {tentativa + 1}: {ex}")
+                time.sleep(3 * (tentativa + 1))
+                continue
             log(f"Alarme ntfy ({topico}): HTTP {r.status_code}")
-            ok = r.ok or ok
-        except requests.RequestException as e:
-            log(f"Falha no alarme ntfy: {e}")
+            if r.ok:
+                ok = True
+                break
+            if r.status_code == 429:
+                _avisar_uma_vez("limite", f"O ntfy.sh recusou o alarme por LIMITE de envios (HTTP 429) – o "
+                                          f"plano grátis aceita cerca de 250 mensagens por dia por servidor. "
+                                          f"Os avisos continuam no Telegram. Resposta: {r.text[:150]}")
+                break
+            if r.status_code < 500:
+                _avisar_uma_vez(f"erro{r.status_code}", f"Alarme ntfy recusado (HTTP {r.status_code}): {r.text[:200]}")
+                break
+            time.sleep(3 * (tentativa + 1))
     return ok
 
 
