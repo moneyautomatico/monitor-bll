@@ -739,7 +739,10 @@ def barra_msgs(valor=""):
             f'<span class="nav-busca"><span id="pesq-pos" class="sub">0/0</span>'
             f'<button type="button" class="sec" title="Anterior (Shift+Enter)" onclick="irPara(-1)">▲</button>'
             f'<button type="button" class="sec" title="Próxima (Enter)" onclick="irPara(1)">▼</button></span>'
-            f'<button type="button" class="sec" title="Marcar todas as mensagens como lidas" onclick="marcarTodas()">✔✔ Marcar todas como lidas</button>'
+            f'<button type="button" class="sec" title="Marca como lidas só as mensagens do lote/menu escolhido neste processo" '
+            f'onclick="marcarLidoAtual()">✔ Marcar como lido</button>'
+            f'<button type="button" class="sec" title="Marca como lidas as mensagens de TODOS os processos" '
+            f'onclick="if(confirm(\'Marcar como lidas as mensagens de todos os processos?\'))marcarTodas()">✔✔ Tudo</button>'
             f'<button type="button" class="sec" title="Atualizar agora" onclick="location.reload()">⟳ Atualizar</button>'
             f'<span id="pesq-info" class="sub"></span></form>')
 
@@ -796,19 +799,21 @@ def html_conversa(g, cfg_chat, mapa=None):
     tot_n = {c: sum(v.values()) for c, v in novas.items()}
 
     def menu(cat, rotulo, todos, padrao=False):
+        # o número entre parênteses é o de NÃO LIDAS: zera quando você clica em "Marcar como lido"
         def op(x):
             n = novas[cat].get(x, 0)
-            extra = f' 🔴 {n} NOVA{"S" if n > 1 else ""}' if n else ""
             estilo = ' style="color:#c62828;font-weight:700"' if n else ""
-            return f'<option value="{e(x)}" data-novas="{n}"{estilo}>{e(_rot_sub(x))} ({cats[cat][x]}){extra}</option>'
+            return (f'<option value="{e(x)}" data-novas="{n}" data-rot="{e(_rot_sub(x))}"{estilo}>'
+                    f'{e(_rot_sub(x))} ({n}{" 🔴" if n else ""})</option>')
         ops = "".join(op(x) for x in sorted(cats[cat], key=_ordem_sub))
         nt = tot_n[cat]
-        sufixo = f" · 🔴 {nt} nova{'s' if nt > 1 else ''}" if nt else ""
-        vazio = f'<option value="">{rotulo} ({tot[cat]}){sufixo}</option>'
+        vazio = f'<option value="" data-rot="{rotulo}">{rotulo} ({nt}{" 🔴" if nt else ""})</option>'
         sel_todos = ' selected' if padrao else ''
         selo = f'<em class="selo-nova">NOVA MENSAGEM</em>' if nt else ""
-        return (f'<label class="fm-l"><span>{rotulo} {selo}</span><select class="fm{" ativo" if padrao else ""}{" tem-novas" if nt else ""}" data-cat="{cat}" '
-                f'onchange="escolherMenu(this)">{vazio}<option value="todos"{sel_todos}>{todos} ({tot[cat]}){sufixo}</option>{ops}</select></label>')
+        return (f'<label class="fm-l"><span title="O número entre parênteses é o de mensagens não lidas">{rotulo} {selo}</span>'
+                f'<select class="fm{" ativo" if padrao else ""}{" tem-novas" if nt else ""}" data-cat="{cat}" '
+                f'onchange="escolherMenu(this)">{vazio}<option value="todos" data-rot="{todos}"{sel_todos}>{todos} ({nt}{" 🔴" if nt else ""})</option>'
+                f'{ops}</select></label>')
 
     chips = "".join(
         f'<button type="button" class="chip-nova" data-cat="{c}" data-sub="{e(x)}" onclick="irNovas(this)">'
@@ -954,20 +959,25 @@ setInterval(()=>{{const a=document.activeElement; const p=document.getElementByI
 function escolherMenu(sel){{const todos=[...document.querySelectorAll('#conversa select.fm')];
  if(sel.value===''){{const l=todos.find(x=>x.dataset.cat==='lote'); if(l){{sel=l; l.value='todos';}}}}
  todos.forEach(x=>{{if(x!==sel)x.value=''; x.classList.toggle('ativo',x===sel);}});
- aplicarBusca(document.getElementById('pesq-txt')); lerSub(sel);
+ aplicarBusca(document.getElementById('pesq-txt'));
  const a=document.querySelector('#lista .it.on'); try{{if(a)sessionStorage.setItem('filtro|'+a.dataset.url,sel.dataset.cat+'|'+sel.value);}}catch(e){{}}}}
-function lerSub(sel){{  // marca como lidas as mensagens do lote/menu escolhido
- const cab=document.querySelector('#conversa .cv-cab'); if(!cab||!sel.value)return;
+function marcarLidoAtual(){{  // marca como lido só o lote/menu escolhido neste processo
+ const cab=document.querySelector('#conversa .cv-cab'); const sel=[...document.querySelectorAll('#conversa select.fm')].find(x=>x.value!=='');
+ if(!cab||!sel)return;
  const subs=sel.value==='todos'?[...sel.options].filter(o=>o.value&&o.value!=='todos').map(o=>o.value):[sel.value];
  const lidas=subs.filter(v=>{{const o=[...sel.options].find(x=>x.value===v);return o&&+o.dataset.novas>0;}});
- if(!lidas.length)return;
+ if(!lidas.length){{avisoLido('Nada novo aqui.');return;}}
  const corpo='csrf={CSRF}&proc='+encodeURIComponent(cab.dataset.proc)+'&subs='+encodeURIComponent(lidas.map(v=>sel.dataset.cat+'|'+v).join('||'));
- fetch('/mensagens/lidas',{{method:'POST',credentials:'same-origin',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:corpo}});
- setTimeout(()=>{{lidas.forEach(v=>{{const o=[...sel.options].find(x=>x.value===v); if(o){{o.dataset.novas=0;o.style.color='';o.style.fontWeight='';o.textContent=o.textContent.replace(/ 🔴.*$/,'');}}
-   document.querySelectorAll('#conversa .chip-nova[data-cat="'+sel.dataset.cat+'"][data-sub="'+v+'"]').forEach(x=>x.remove());}});
-  if(![...sel.options].some(o=>+o.dataset.novas>0)){{sel.classList.remove('tem-novas');const sl=sel.parentElement.querySelector('.selo-nova');if(sl)sl.remove();
-   [...sel.options].forEach(o=>{{o.textContent=o.textContent.replace(/ · 🔴.*$/,'');}});}}
-  const fx=document.querySelector('#conversa .faixa-novas'); if(fx&&!fx.querySelector('.chip-nova'))fx.remove();}},4000);}}
+ fetch('/mensagens/lidas',{{method:'POST',credentials:'same-origin',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:corpo}}).then(r=>{{if(!r.ok)return;
+  lidas.forEach(v=>{{const o=[...sel.options].find(x=>x.value===v); if(o){{o.dataset.novas=0;o.style.color='';o.style.fontWeight='';o.textContent=o.dataset.rot+' (0)';}}
+   document.querySelectorAll('#conversa .chip-nova[data-cat="'+sel.dataset.cat+'"][data-sub="'+v+'"]').forEach(x=>x.remove());
+   document.querySelectorAll('#conversa .cm.nova[data-cat="'+sel.dataset.cat+'"][data-sub="'+v+'"]').forEach(m=>{{m.classList.remove('nova');const t=m.querySelector('.tag-nova');if(t)t.remove();}});}});
+  const resto=[...sel.options].filter(o=>o.value&&o.value!=='todos').reduce((a,o)=>a+(+o.dataset.novas||0),0);
+  [...sel.options].filter(o=>!o.value||o.value==='todos').forEach(o=>{{o.textContent=o.dataset.rot+' ('+resto+(resto?' 🔴':'')+')';}});
+  if(!resto){{sel.classList.remove('tem-novas');const sl=sel.parentElement.querySelector('.selo-nova');if(sl)sl.remove();}}
+  const fx=document.querySelector('#conversa .faixa-novas'); if(fx&&!fx.querySelector('.chip-nova'))fx.remove();
+  avisoLido('Marcado como lido.');}});}}
+function avisoLido(t){{const i=document.getElementById('pesq-info'); if(i){{i.textContent=t; setTimeout(()=>{{i.textContent='';}},2500);}}}}
 function irNovas(b){{const s=document.querySelector('#conversa select.fm[data-cat="'+b.dataset.cat+'"]'); if(!s)return; s.value=b.dataset.sub; escolherMenu(s);
  const n=document.querySelector('#conversa .cm.nova[data-cat="'+b.dataset.cat+'"][data-sub="'+b.dataset.sub+'"]'); if(n)n.scrollIntoView({{block:'center',behavior:'smooth'}});}}
 function restaurarFiltro(c,url){{try{{const r=sessionStorage.getItem('filtro|'+url); if(!r)return; const [cat,v]=r.split('|');
