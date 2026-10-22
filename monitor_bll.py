@@ -298,11 +298,11 @@ def abrir_banco():
         lixo = [r[0] for r in db.execute("SELECT id, autor, texto FROM mensagens").fetchall() if eh_copia_chat(r[1], r[2])]
         db.executemany("DELETE FROM mensagens WHERE id=?", [(x,) for x in lixo])
         db.commit()
-    if (db.execute("SELECT valor FROM estado WHERE chave='classif_versao'").fetchone() or [""])[0] != "2":
-        # nova regra de desclassificação: relê as classificações da BLL/BNC (inclusive o histórico)
-        db.execute("UPDATE classificacao SET lido_em=0 WHERE chave NOT LIKE 'pcp|%'")
+    if (db.execute("SELECT valor FROM estado WHERE chave='classif_versao'").fetchone() or [""])[0] != "3":
+        # agora a classificação vem da janela OFICIAL (troféu) da BLL/BNC: apaga as calculadas e relê em silêncio
+        db.execute("DELETE FROM classificacao WHERE chave NOT LIKE 'pcp|%'")
         db.execute("DELETE FROM estado WHERE chave LIKE 'hist_%'")
-        db.execute("INSERT OR REPLACE INTO estado VALUES('classif_versao','2')")
+        db.execute("INSERT OR REPLACE INTO estado VALUES('classif_versao','3')")
         db.commit()
     return db
 
@@ -942,6 +942,91 @@ def registro_nao_confere(dados, linhas, lt):
         return f"o melhor lance da lista ({lt['melhor']}) não aparece nos registros"
     return ""
 
+# Janela oficial "Classificação" (botão do troféu na linha do lote): Classificados / Inabilitados / Desclassificados
+JS_ABRIR_CLASSIF = """
+(lote) => {
+  for (const t of document.querySelectorAll('table')) {
+    if (!t.getClientRects().length) continue;
+    const cab = [...t.querySelectorAll('thead th, tr:first-child th')].map(x => (x.innerText || '').trim().toUpperCase());
+    const iL = cab.findIndex(c => c.startsWith('LOTE'));
+    if (iL < 0 || !cab.some(c => c.includes('COLOCADO'))) continue;
+    for (const tr of t.querySelectorAll('tbody tr')) {
+      const td = [...tr.querySelectorAll('td')];
+      if (!td[iL] || td[iL].innerText.trim() !== lote) continue;
+      const bs = [...tr.querySelectorAll('button, a')].filter(b => b.getClientRects().length);
+      const dica = b => [b.title, b.getAttribute('aria-label'), b.getAttribute('data-original-title'),
+                         b.getAttribute('data-bs-original-title'), b.innerHTML].join(' ');
+      const alvo = bs.find(b => /trophy|trofeu|classifica|award|medal/i.test(dica(b)));
+      if (!alvo) return false;
+      alvo.click(); return true;
+    }
+  }
+  return false;
+}
+"""
+JS_LER_CLASSIF = r"""
+() => {
+  const modal = [...document.querySelectorAll('.modal')].find(m => m.getClientRects().length > 0 &&
+     /classifica/i.test((m.querySelector('.modal-title, .modal-header') || {}).innerText || ''));
+  if (!modal) return null;
+  const corpo = modal.querySelector('.modal-body') || modal;
+  const out = []; let sec = 'classificados';
+  for (const el of corpo.querySelectorAll('*')) {
+    if (el.tagName === 'TABLE') {
+      if (el.querySelector('table')) continue;
+      for (const tr of el.querySelectorAll('tr')) {
+        if (tr.closest('table') !== el) continue;
+        const cel = [...tr.children].filter(x => x.tagName === 'TD').map(x => (x.innerText || '').replace(/\s+/g, ' ').trim());
+        const part = cel.find(c => /^PARTICIPANTE\s*\d+$/i.test(c)) || '';
+        const valor = cel.find(c => /^(R\$\s*)?[\d.]+,\d{2}$/.test(c)) || '';
+        const nome = cel.find(c => c && c !== part && c !== valor && /[A-Za-zÀ-ÿ]{3}/.test(c)) || '';
+        if (nome && (part || valor)) out.push({sec, nome, part, valor});
+      }
+    } else if (!el.closest('table')) {
+      const t = (el.childElementCount === 0 ? el.innerText || '' : '').trim();
+      if (/^classificad[oa]s?$/i.test(t)) sec = 'classificados';
+      else if (/^inabilitad[oa]s?$/i.test(t)) sec = 'inabilitados';
+      else if (/^desclassificad[oa]s?$/i.test(t)) sec = 'desclassificados';
+    }
+  }
+  return {titulo: ((modal.querySelector('.modal-title, .modal-header') || {}).innerText || '').trim(), linhas: out};
+}
+"""
+
+
+def ler_classif_oficial(page, lote):
+    """Ranking oficial da plataforma (janela do troféu). None se não houver/abrir."""
+    for _ in range(8):
+        if not page.evaluate(JS_MODAL_VISIVEL):
+            break
+        if not page.evaluate(JS_FECHAR_MODAL):
+            page.keyboard.press("Escape")
+        page.wait_for_timeout(400)
+    if not page.evaluate(JS_ABRIR_CLASSIF, lote):
+        return None
+    dados = None
+    for _ in range(16):
+        page.wait_for_timeout(500)
+        dados = page.evaluate(JS_LER_CLASSIF)
+        if dados and dados["linhas"]:
+            page.wait_for_timeout(600)
+            dados = page.evaluate(JS_LER_CLASSIF)  # lê de novo, já com tudo carregado
+            break
+    if not page.evaluate(JS_FECHAR_MODAL):
+        page.keyboard.press("Escape")
+    page.wait_for_timeout(500)
+    if not dados or not dados.get("linhas"):
+        return None
+    ranking, pos = [], 0
+    for x in dados["linhas"]:
+        ok = x["sec"] == "classificados"
+        if ok:
+            pos += 1
+        num = re.sub(r"\D", "", x["part"])
+        ranking.append({"pos": pos if ok else None, "nome": x["nome"], "num": num, "valor": valor_br(x["valor"]) or 0,
+                        "excluido": not ok, "qtd": "", "situacao": x["sec"]})
+    return ranking
+
 
 def ler_classificacao(db, page, p, primeira_vez, diag=False):
     """Lê a classificação de cada lote do processo (já com a sala de disputa aberta). Retorna alertas novos."""
@@ -963,6 +1048,15 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
         velho = not ant or time.time() - (ant[4] or 0) > (120 if viva else 600 if atencao else 6 * 3600)
         if "CANCELAD" in lt["fase"].upper() or not (mudou or velho or diag):
             continue
+        oficial = ler_classif_oficial(page, lt["lote"])
+        if oficial:
+            melhor_l = valor_br(lt.get("melhor") or "")
+            nomes_l = [_norm(x["nome"]) for x in oficial if x["pos"]]
+            confere = (not melhor_l or any(abs((x["valor"] or 0) - melhor_l) < 0.01 for x in oficial)
+                       or any(n and n in _norm(lt.get("primeiro")) for n in nomes_l))
+            if not confere:
+                log(f"{p['processo']} lote {lt['lote']}: classificação oficial ignorada (não confere com a lista).")
+                oficial = None
         # garante que nenhuma janela antiga continua aberta (senão lia os registros do lote ANTERIOR)
         for _ in range(8):
             if not page.evaluate(JS_MODAL_VISIVEL):
@@ -970,9 +1064,9 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
             if not page.evaluate(JS_FECHAR_MODAL):
                 page.keyboard.press("Escape")
             page.wait_for_timeout(400)
-        if not page.evaluate(JS_ABRIR_REGISTRO, lt["lote"]):
-            continue
         dados = None
+        if not page.evaluate(JS_ABRIR_REGISTRO, lt["lote"]) and not oficial:
+            continue
         for _ in range(20):
             page.wait_for_timeout(500)
             if page.evaluate("""() => [...document.querySelectorAll('.modal')].some(m =>
@@ -992,9 +1086,10 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
         if not page.evaluate(JS_FECHAR_MODAL):
             page.keyboard.press("Escape")
         page.wait_for_timeout(500)
-        if not dados:
+        if not dados and not oficial:
             log(f"{p['processo']} lote {lt['lote']}: registros da sessão não abriram.")
             continue
+        dados = dados or {"tabelas": [], "texto_livre": ""}
         if diag:
             (DIAG / f"05_registros_{p['processo'].replace('/', '-')}_lote{lt['lote']}.json").write_text(
                 json.dumps(dados, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -1003,11 +1098,14 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
         for t in dados.get("tabelas", []):
             if any("MOVIMENTO" in c for c in t["cab"]):
                 linhas += t["linhas"]
-        problema = registro_nao_confere(dados, linhas, lt)
+        problema = registro_nao_confere(dados, linhas, lt) if linhas else ""
         if problema:
             log(f"{p['processo']} lote {lt['lote']}: registros ignorados ({problema}); leio de novo no próximo ciclo.")
-            continue
-        ranking = montar_ranking(linhas, lt["melhor"], lt["primeiro"])
+            if not oficial:
+                continue
+            dados, linhas = {"tabelas": [], "texto_livre": ""}, []   # usa só a classificação oficial
+        # a classificação OFICIAL da plataforma (troféu) manda; os registros só servem de reserva
+        ranking = oficial or montar_ranking(linhas, lt["melhor"], lt["primeiro"])
         # eventos do lote (recurso, contrarrazões, desclassificação...) viram mensagens com alerta
         k_ev = "eventos_lote_" + chave
         ja_lia_eventos = bool(estado(db, k_ev))  # 1ª leitura de eventos deste lote: só registra o que já existia
