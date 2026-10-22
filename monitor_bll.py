@@ -920,6 +920,29 @@ def eh_nossa(nome):
     return bool(alvo) and alvo in _norm(nome)
 
 
+JS_MODAL_VISIVEL = "() => [...document.querySelectorAll('.modal')].some(m => m.getClientRects().length > 0)"
+
+
+def _assinatura(dados):
+    return hashlib.sha1(json.dumps((dados or {}).get("tabelas", []), ensure_ascii=False).encode()).hexdigest()
+
+
+def registro_nao_confere(dados, linhas, lt):
+    """Confere se a janela lida é mesmo do lote certo. Devolve o motivo se NÃO for (senão '')."""
+    tit = (dados or {}).get("titulo", "")
+    m = re.search(r"lote\s*:?\s*(\d+)", tit, re.I)
+    if m and lt["lote"].strip().isdigit() and int(m.group(1)) != int(lt["lote"]):
+        return f"a janela era do lote {m.group(1)}"
+    melhor = valor_br(lt.get("melhor") or "")
+    tem_lance = any(len(c) >= 4 and c[1].strip().upper() == "LANCE" for c in linhas)
+    # valores citados em QUALQUER registro (lance, negociação, aceite...) – o melhor lance da lista tem que estar lá
+    valores = [valor_br(x) for c in linhas for x in re.findall(r"\d{1,3}(?:\.\d{3})*,\d{2}", " ".join(c))]
+    valores = [v for v in valores if v is not None]
+    if melhor and tem_lance and not any(abs(v - melhor) < 0.01 for v in valores):
+        return f"o melhor lance da lista ({lt['melhor']}) não aparece nos registros"
+    return ""
+
+
 def ler_classificacao(db, page, p, primeira_vez, diag=False):
     """Lê a classificação de cada lote do processo (já com a sala de disputa aberta). Retorna alertas novos."""
     if page.evaluate(JS_ABA_TODOS):
@@ -929,6 +952,7 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
         (DIAG / f"04_lotes_{p['processo'].replace('/', '-')}.json").write_text(
             json.dumps(lotes, ensure_ascii=False, indent=1), encoding="utf-8")
     novas, agora = [], datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    assinatura_ant = ""
     for lt in lotes:
         chave = hash_msg(p["processo"], p["promotor"], lt["lote"])
         ant = db.execute("SELECT fase, primeiro, melhor, nossa_pos, lido_em, ranking FROM classificacao WHERE chave=?",
@@ -939,6 +963,13 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
         velho = not ant or time.time() - (ant[4] or 0) > (120 if viva else 600 if atencao else 6 * 3600)
         if "CANCELAD" in lt["fase"].upper() or not (mudou or velho or diag):
             continue
+        # garante que nenhuma janela antiga continua aberta (senão lia os registros do lote ANTERIOR)
+        for _ in range(8):
+            if not page.evaluate(JS_MODAL_VISIVEL):
+                break
+            if not page.evaluate(JS_FECHAR_MODAL):
+                page.keyboard.press("Escape")
+            page.wait_for_timeout(400)
         if not page.evaluate(JS_ABRIR_REGISTRO, lt["lote"]):
             continue
         dados = None
@@ -948,6 +979,9 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
                   m.getClientRects().length > 0 && /registros? d[ao] (sess|lote)/i.test(m.innerText))"""):
                 page.wait_for_timeout(1200)
                 dados = page.evaluate(JS_LER_MODAL_REGISTRO)
+                if dados and assinatura_ant and _assinatura(dados) == assinatura_ant:
+                    dados = None  # ainda é o conteúdo do lote anterior: espera atualizar
+                    continue
                 try:
                     dados["texto_livre"] = page.evaluate(JS_TEXTO_MODAL_SEM_TABELA)
                 except Exception:
@@ -964,10 +998,15 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
         if diag:
             (DIAG / f"05_registros_{p['processo'].replace('/', '-')}_lote{lt['lote']}.json").write_text(
                 json.dumps(dados, ensure_ascii=False, indent=1), encoding="utf-8")
+        assinatura_ant = _assinatura(dados)
         linhas = []
         for t in dados.get("tabelas", []):
             if any("MOVIMENTO" in c for c in t["cab"]):
                 linhas += t["linhas"]
+        problema = registro_nao_confere(dados, linhas, lt)
+        if problema:
+            log(f"{p['processo']} lote {lt['lote']}: registros ignorados ({problema}); leio de novo no próximo ciclo.")
+            continue
         ranking = montar_ranking(linhas, lt["melhor"], lt["primeiro"])
         # eventos do lote (recurso, contrarrazões, desclassificação...) viram mensagens com alerta
         k_ev = "eventos_lote_" + chave
