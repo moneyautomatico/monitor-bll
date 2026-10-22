@@ -16,6 +16,7 @@ import shutil
 import sqlite3
 import subprocess
 import threading
+import time
 import unicodedata
 import urllib.parse
 import urllib.request
@@ -41,6 +42,8 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "ia": "Instruções da IA salvas. Valem para as próximas análises.",
           "busca_salva": "Busca salva. Vou mandar no Telegram um resumo agora e, depois, só as licitações novas.",
           "busca_rodando": "Verificando agora. Se houver novidades, chegam no Telegram em instantes.",
+          "senha": "Senha do painel trocada. Os outros aparelhos foram desconectados.",
+          "sessoes": "Todas as outras sessões foram encerradas.",
           "op_rodando": "Atualizando as oportunidades no PNCP. Leva 1 a 3 minutos; recarregue a página depois.",
           "op_cfg": "Perfil salvo. Atualizando as oportunidades com as novas regras (1 a 3 minutos)."}
 e = html.escape
@@ -80,9 +83,13 @@ CFG = ler_env(CONFIG)
 USUARIO = CFG.get("PAINEL_USUARIO", "bll")
 SENHA = CFG.get("PAINEL_SENHA", "")
 PORTA = int(CFG.get("PAINEL_PORTA", "8080"))
-ESPERADO = "Basic " + base64.b64encode(f"{USUARIO}:{SENHA}".encode()).decode()
+HOST = CFG.get("PAINEL_HOST", "0.0.0.0")  # 127.0.0.1 = só pelo HTTPS (Caddy)
 ARQ_SESSOES = PASTA / "sessoes.json"
 TENTATIVAS = {}   # ip -> [horários de erro]
+
+
+def _h(tok):
+    return hashlib.sha256((tok or "").encode()).hexdigest()
 
 
 def _sessoes():
@@ -91,26 +98,69 @@ def _sessoes():
     except Exception:  # noqa: BLE001
         d = {}
     agora = datetime.now().timestamp()
-    return {k: v for k, v in d.items() if v > agora}
+    return {k: v for k, v in d.items() if isinstance(v, (int, float)) and v > agora and len(k) == 64}
+
+
+def _gravar_sessoes(d):
+    ARQ_SESSOES.write_text(json.dumps(d), encoding="utf-8")
+    os.chmod(ARQ_SESSOES, 0o600)
 
 
 def criar_sessao(dias):
+    """O arquivo guarda só o 'hash' do código da sessão: quem ler o arquivo não consegue entrar."""
     tok = secrets.token_urlsafe(32)
     d = _sessoes()
-    d[tok] = datetime.now().timestamp() + dias * 86400
-    ARQ_SESSOES.write_text(json.dumps(d), encoding="utf-8")
-    os.chmod(ARQ_SESSOES, 0o600)
+    d[_h(tok)] = datetime.now().timestamp() + dias * 86400
+    _gravar_sessoes(d)
     return tok
 
 
 def sessao_valida(tok):
-    return bool(tok) and tok in _sessoes()
+    return bool(tok) and _h(tok) in _sessoes()
 
 
 def encerrar_sessao(tok):
     d = _sessoes()
-    d.pop(tok, None)
-    ARQ_SESSOES.write_text(json.dumps(d), encoding="utf-8")
+    d.pop(_h(tok), None)
+    _gravar_sessoes(d)
+
+
+def encerrar_todas(menos=""):
+    d = _sessoes()
+    _gravar_sessoes({k: v for k, v in d.items() if menos and k == _h(menos)})
+
+
+ARQ_ACESSOS = PASTA / "acessos_conhecidos.json"
+FALHAS_GERAIS = []          # horários de senha errada (todos os IPs)
+_ALERTAS_LOGIN = {}
+
+
+def senha_fraca(sen):
+    return len(sen) < 12 or not (re.search(r"[A-Za-z]", sen) and re.search(r"\d", sen))
+
+
+def alerta_seguranca(chave, texto, minutos=60):
+    """Manda aviso de segurança no Telegram (no máximo um por 'chave' a cada X minutos)."""
+    agora = datetime.now().timestamp()
+    if agora - _ALERTAS_LOGIN.get(chave, 0) < minutos * 60:
+        return
+    _ALERTAS_LOGIN[chave] = agora
+    threading.Thread(target=telegram_geral, args=("🛡️ " + texto,), daemon=True).start()
+
+
+def acesso_novo(ip, navegador):
+    try:
+        d = json.loads(ARQ_ACESSOS.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        d = {}
+    novo = ip not in d
+    d[ip] = datetime.now().strftime("%d/%m/%Y %H:%M")
+    ARQ_ACESSOS.write_text(json.dumps(dict(list(d.items())[-200:])), encoding="utf-8")
+    os.chmod(ARQ_ACESSOS, 0o600)
+    if novo:
+        alerta_seguranca(f"novo|{ip}", f"<b>Novo acesso ao painel</b> de um endereço nunca usado antes.\nIP: {e(ip)}\n"
+                                       f"Navegador: {e(navegador[:120])}\nSe não foi você, troque a senha do painel em "
+                                       f"Configurações → Segurança e clique em “Encerrar todas as sessões”.", 0)
 
 
 def pg_login(erro="", destino="/"):
@@ -491,6 +541,9 @@ ABAS = [("/", "Visão geral"), ("/mensagens", "Mensagens"), ("/processos", "Proc
 def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     nav = "".join(f'<a href="{u}" class="{"on" if u == aba else ""}">{n}</a>' for u, n in ABAS)
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
+    if aba in ("/", "/config") and SENHA and senha_fraca(SENHA):
+        msg += ('<div class="msg erro">🛡️ A senha do painel é fraca (menos de 12 caracteres ou sem letras e números). '
+                '<a href="/config#seguranca">Troque em Configurações → Segurança</a>.</div>')
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
@@ -1325,6 +1378,18 @@ mensagens, processos, classificações, buscas e análises.</p>
 <h3>Cópias no servidor</h3>
 <table><tr><th>Arquivo</th><th>Tamanho</th><th>Data</th></tr>{"".join(f'<tr><td><a href="/backup/{e(n)}">{e(n)}</a></td><td>{t / 1024 / 1024:.1f} MB</td><td>{d:%d/%m/%Y %H:%M}</td></tr>' for n, t, d in backup.listar()) or '<tr><td colspan="3">Nenhum ainda.</td></tr>'}</table>
 <p class="sub">Para abrir a cópia do Telegram: <code>openssl enc -d -aes-256-cbc -pbkdf2 -in ARQUIVO.enc -out backup.tar.gz</code> (pede a senha).</p></div>
+<h2 style="margin-top:22px" id="seguranca">🛡️ Segurança</h2><div class="form">
+<p class="sub">Acesso ao painel: {"<b>HTTPS (cadeado) ativo</b>" if HOST == "127.0.0.1" else "<b style='color:var(--erro)'>sem HTTPS</b> – rode <code>bash seguranca.sh</code> no servidor"} ·
+sessões abertas: <b>{len(_sessoes())}</b> · senha {"<b style='color:var(--erro)'>fraca</b>" if senha_fraca(SENHA) else "<b>forte</b>"}</p>
+<form method="post" action="/config/senha"><input type="hidden" name="csrf" value="{CSRF}">
+<h3>Trocar a senha do painel</h3>
+<label>Senha atual</label><input class="campo" type="password" name="atual" autocomplete="current-password" required>
+<label>Nova senha <small>(12+ caracteres, com letras e números)</small></label><input class="campo" type="password" name="nova" autocomplete="new-password" minlength="12" required>
+<label>Repita a nova senha</label><input class="campo" type="password" name="nova2" autocomplete="new-password" minlength="12" required>
+<div class="acoes"><button>Trocar senha</button></div></form>
+<form method="post" action="/config/sessoes" onsubmit="return confirm('Desconectar todos os outros aparelhos?')"><input type="hidden" name="csrf" value="{CSRF}">
+<p class="sub" style="margin-top:14px">Trocar a senha já desconecta os outros aparelhos. Use o botão abaixo se suspeitar que alguém entrou.</p>
+<div class="acoes"><button class="perigo">Encerrar todas as outras sessões</button></div></form></div>
 <h2 style="margin-top:22px">Descobrir conversas do Telegram</h2><div class="form">
 <p class="sub">Mande uma mensagem ao bot (ou num grupo onde ele está) e clique abaixo para ver o chat_id.</p>
 <form method="post" action="/telegram"><input type="hidden" name="csrf" value="{CSRF}">
@@ -1863,6 +1928,33 @@ def descobrir(token):
 
 # ------------------------------------------------------------------ servidor
 class Painel(BaseHTTPRequestHandler):
+    server_version = "Licitatudo"
+    sys_version = ""
+    timeout = 40   # derruba conexões presas (ataque de conexões lentas)
+
+    def ip(self):
+        """IP real do visitante (atrás do HTTPS o pedido chega do próprio servidor)."""
+        ip = self.client_address[0]
+        if ip in ("127.0.0.1", "::1"):
+            xff = (self.headers.get("X-Forwarded-For") or "").split(",")[-1].strip()
+            return xff or ip
+        return ip
+
+    def https(self):
+        return self.client_address[0] in ("127.0.0.1", "::1") and self.headers.get("X-Forwarded-Proto") == "https"
+
+    def cabecalhos_seguranca(self):
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+                         "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; "
+                         "base-uri 'none'; object-src 'none'")
+        if self.https():
+            self.send_header("Strict-Transport-Security", "max-age=31536000")
+
     def cookie(self, nome):
         for parte in (self.headers.get("Cookie") or "").split(";"):
             k, _, v = parte.strip().partition("=")
@@ -1871,21 +1963,22 @@ class Painel(BaseHTTPRequestHandler):
         return ""
 
     def autorizado(self):
-        if SENHA and (sessao_valida(self.cookie("lt_sessao")) or
-                      hmac.compare_digest(self.headers.get("Authorization", ""), ESPERADO)):
+        if SENHA and sessao_valida(self.cookie("lt_sessao")):
             return True
         if self.command == "GET" and not self.path.startswith(("/mensagens/processo", "/mensagens/busca")):
             return self.redirecionar("/login?destino=" + urllib.parse.quote(self.path)) and False
         self.send_response(401)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.cabecalhos_seguranca()
         self.end_headers()
         self.wfile.write("Sessão expirada. Recarregue a página e entre de novo.".encode())
         return False
 
     def login(self):
-        ip = self.client_address[0]
+        ip = self.ip()
         agora = datetime.now().timestamp()
         TENTATIVAS[ip] = [t for t in TENTATIVAS.get(ip, []) if agora - t < 600]
+        FALHAS_GERAIS[:] = [t for t in FALHAS_GERAIS if agora - t < 900]
         tam = int(self.headers.get("Content-Length", "0") or 0)
         f = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(min(tam, 5000)).decode("utf-8"), keep_blank_values=True).items()}
         destino = f.get("destino", "/")
@@ -1893,17 +1986,31 @@ class Painel(BaseHTTPRequestHandler):
             destino = "/"
         if len(TENTATIVAS[ip]) >= 5:
             return self.enviar(pg_login("Muitas tentativas. Aguarde 10 minutos e tente de novo.", destino), 429)
-        ok = bool(SENHA) and hmac.compare_digest(f.get("usuario", "").strip(), USUARIO) and hmac.compare_digest(f.get("senha", ""), SENHA)
+        if len(FALHAS_GERAIS) >= 20:   # ataque vindo de vários endereços: tranca o login por 15 min
+            alerta_seguranca("geral", "<b>Login do painel trancado por 15 minutos</b>: mais de 20 senhas erradas "
+                                      "vindas de vários endereços. Pode ser uma tentativa de invasão.")
+            return self.enviar(pg_login("Login temporariamente bloqueado por segurança. Tente em 15 minutos.", destino), 429)
+        usu_ok = hmac.compare_digest(f.get("usuario", "").strip().encode(), USUARIO.encode())
+        sen_ok = hmac.compare_digest(f.get("senha", "").encode(), SENHA.encode())
+        ok = bool(SENHA) and usu_ok and sen_ok
         if not ok:
             TENTATIVAS[ip].append(agora)
+            FALHAS_GERAIS.append(agora)
+            time.sleep(1)   # deixa o "chute" de senhas lento
+            if len(TENTATIVAS[ip]) >= 5:
+                alerta_seguranca(f"ip|{ip}", f"<b>Tentativas de senha no painel</b>: 5 senhas erradas seguidas do IP "
+                                             f"{e(ip)}. Esse endereço ficou bloqueado por 10 minutos.")
             return self.enviar(pg_login("Usuário ou senha incorretos.", destino), 401)
         TENTATIVAS.pop(ip, None)
+        acesso_novo(ip, self.headers.get("User-Agent", ""))
         dias = 30 if f.get("lembrar") else 1
         tok = criar_sessao(dias)
         self.send_response(303)
         validade = f"; Max-Age={dias * 86400}" if f.get("lembrar") else ""
-        self.send_header("Set-Cookie", f"lt_sessao={tok}; Path=/; HttpOnly; SameSite=Lax{validade}")
+        seguro = "; Secure" if self.https() else ""
+        self.send_header("Set-Cookie", f"lt_sessao={tok}; Path=/; HttpOnly; SameSite=Lax{seguro}{validade}")
         self.send_header("Location", destino)
+        self.cabecalhos_seguranca()
         self.end_headers()
 
     def enviar(self, corpo, codigo=200):
@@ -1911,13 +2018,17 @@ class Painel(BaseHTTPRequestHandler):
         self.send_response(codigo)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Length", str(len(dados)))
+        self.cabecalhos_seguranca()
         self.end_headers()
         self.wfile.write(dados)
 
     def redirecionar(self, url):
+        if not url.startswith("/") or url.startswith("//"):
+            url = "/"
         self.send_response(303)
         self.send_header("Location", url)
+        self.cabecalhos_seguranca()
         self.end_headers()
 
     def do_GET(self):
@@ -1988,7 +2099,9 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar((EMPRESAS / m.group(1) / "painel.html").read_text(encoding="utf-8"))
             self.enviar(pagina("Não encontrado", "<h2>Página não encontrada</h2>"), 404)
         except Exception as ex:  # noqa: BLE001
-            self.enviar(pagina("Erro", f"<h2>Erro</h2><pre>{e(repr(ex))}</pre>"), 500)
+            print("Erro no painel:", self.path.split("?")[0], repr(ex), flush=True)
+            self.enviar(pagina("Erro", "<h2>Algo deu errado</h2><p>O detalhe ficou registrado no servidor "
+                                       "(journalctl -u painel-bll).</p>"), 500)
 
     def do_POST(self):
         if urllib.parse.urlparse(self.path).path.rstrip("/") == "/login":
@@ -2128,6 +2241,26 @@ class Painel(BaseHTTPRequestHandler):
                     return self.redirecionar("/buscar?ok=busca_rodando")
                 buscas.alterar_busca(m.group(1), m.group(2))
                 return self.redirecionar("/buscar?ok=feito")
+            if p == "/config/senha":
+                global SENHA
+                if not hmac.compare_digest(f.get("atual", "").encode(), SENHA.encode()):
+                    time.sleep(1)
+                    return self.enviar(pg_config("Senha atual incorreta."))
+                nova = f.get("nova", "")
+                if nova != f.get("nova2", ""):
+                    return self.enviar(pg_config("As duas senhas novas não são iguais."))
+                if senha_fraca(nova):
+                    return self.enviar(pg_config("A nova senha precisa ter 12 ou mais caracteres, com letras e números."))
+                if "\n" in nova or "\r" in nova:
+                    return self.enviar(pg_config("Senha inválida."))
+                gravar_env(CONFIG, {"PAINEL_SENHA": nova})
+                SENHA = nova
+                encerrar_todas(menos=self.cookie("lt_sessao"))
+                alerta_seguranca("senha", f"<b>Senha do painel trocada</b> (IP {e(self.ip())}). Os outros aparelhos foram desconectados.", 0)
+                return self.redirecionar("/config?ok=senha")
+            if p == "/config/sessoes":
+                encerrar_todas(menos=self.cookie("lt_sessao"))
+                return self.redirecionar("/config?ok=sessoes")
             if p == "/config/backup":
                 v = {"BACKUP_HORA": re.sub(r"\D", "", f.get("BACKUP_HORA", "3")) or "3"}
                 if f.get("BACKUP_SENHA", "").strip():
@@ -2168,16 +2301,18 @@ class Painel(BaseHTTPRequestHandler):
                 return self.redirecionar("/empresas?ok=feito")
             self.enviar(pagina("Não encontrado", "<h2>Ação não encontrada</h2>"), 404)
         except Exception as ex:  # noqa: BLE001
-            self.enviar(pagina("Erro", f"<h2>Erro</h2><pre>{e(repr(ex))}</pre>"), 500)
+            print("Erro no painel:", self.path.split("?")[0], repr(ex), flush=True)
+            self.enviar(pagina("Erro", "<h2>Algo deu errado</h2><p>O detalhe ficou registrado no servidor "
+                                       "(journalctl -u painel-bll).</p>"), 500)
 
     def log_message(self, *a):
         pass
 
 
 if __name__ == "__main__":
-    print(f"Painel em http://0.0.0.0:{PORTA}")
+    print(f"Painel em http://{HOST}:{PORTA}")
     threading.Thread(target=buscas.ciclo, args=(telegram_geral, minutos_busca), daemon=True).start()
     threading.Thread(target=vigiar, daemon=True).start()
     threading.Thread(target=backup.ciclo, args=(CFG_ATUAL, telegram_geral), daemon=True).start()
     threading.Thread(target=oportunidades.ciclo, args=(telegram_geral,), daemon=True).start()
-    ThreadingHTTPServer(("0.0.0.0", PORTA), Painel).serve_forever()
+    ThreadingHTTPServer((HOST, PORTA), Painel).serve_forever()

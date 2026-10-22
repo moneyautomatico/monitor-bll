@@ -63,3 +63,12 @@ VÁRIAS EMPRESAS (no Web console, dentro de ~/monitor-bll)
   2 min, cabem ~6 empresas no ritmo certo; com mais, cada uma é verificada um pouco
   mais espaçada. Para crescer: aumente MAX_NAVEGADORES (≈ 1 por GB de RAM livre)
   ou contrate um plano com mais memória.
+
+SEGURANÇA (bash seguranca.sh)
+- Rode uma vez no servidor: cd ~/monitor-bll && git pull && bash seguranca.sh
+- Coloca HTTPS (cadeado) no painel em https://<ip-com-tracos>.sslip.io e fecha a porta 8080 para a internet.
+- Liga fail2ban no SSH, atualizações automáticas de segurança, aviso no Telegram a cada login no servidor
+  e deixa os arquivos com senhas legíveis só pelo administrador.
+- Painel: senha errada 5x = IP bloqueado 10 min (com aviso no Telegram); muitos erros de vários IPs = login
+  trancado 15 min; aviso de acesso vindo de endereço novo; troca de senha e "encerrar todas as sessões" em
+  Configurações → Segurança.
