@@ -26,7 +26,7 @@ PASTA = Path(__file__).resolve().parent
 DIR = PASTA / "backups"
 GUARDAR = 7
 ARQUIVOS_SOLTOS = ["config.env", "buscas_salvas.json", "buscas_vistos.json", "analise_instrucoes.txt",
-                   "analise_empresa.txt", "urgente_palavras.txt", "vigia_estado.json", "oportunidades.json", "dados_empresas.json"]
+                   "analise_empresa.txt", "urgente_palavras.txt", "vigia_estado.json", "oportunidades.json", "dados_empresas.json", "prazos.json", "certidoes.json"]
 
 
 def _copia_sqlite(origem, destino):
@@ -62,6 +62,10 @@ def gerar():
                     print("backup: não copiei", db, ex, flush=True)
             for ck in emp.glob("*/cookies_sessao.json"):
                 tar.add(ck, arcname=f"empresas/{ck.parent.name}/{ck.name}")
+        cert = PASTA / "certidoes"   # PDFs das certidões
+        if cert.exists():
+            for f in cert.glob("*/*"):
+                tar.add(f, arcname=f"certidoes/{f.parent.name}/{f.name}")
         an = PASTA / "analises"
         if an.exists():
             for j in an.glob("*.json"):

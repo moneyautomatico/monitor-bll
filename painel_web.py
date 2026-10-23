@@ -20,10 +20,11 @@ import time
 import unicodedata
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import agenda
 import analise
 import backup
 import urgencia
@@ -47,6 +48,11 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "busca_rodando": "Verificando agora. Se houver novidades, chegam no Telegram em instantes.",
           "doc_dados": "Dados da empresa salvos.",
           "doc_cnpj": "Dados preenchidos pela Receita e salvos. Confira e complete o CPF do representante (não vem da Receita).",
+          "prazo": "Prazo salvo. Você recebe aviso no Telegram 24 h e 2 h antes.",
+          "agendado": "Prazo colocado na Agenda.",
+          "cert_ok": "Certidão salva.",
+          "cert_lida": "Certidão salva com os dados lidos do PDF – confira o tipo e a validade na lista.",
+          "cert_sem_validade": "Certidão salva, mas SEM validade (não consegui ler do PDF). Clique em “editar” e informe a data.",
           "senha": "Senha do painel trocada. Os outros aparelhos foram desconectados.",
           "sessoes": "Todas as outras sessões foram encerradas.",
           "op_rodando": "Atualizando as oportunidades no PNCP. Leva 1 a 3 minutos; recarregue a página depois.",
@@ -547,7 +553,7 @@ mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.a
 @media (max-width:700px){.ocultar{display:none}nav a{padding:12px 8px}}
 """
 
-ABAS = [("/", "Visão geral"), ("/mensagens", "Mensagens"), ("/processos", "Processos"),
+ABAS = [("/", "Visão geral"), ("/mensagens", "Mensagens"), ("/processos", "Processos"), ("/agenda", "Agenda"),
         ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/documentos", "Documentos"), ("/empresas", "Empresas"), ("/config", "Configurações")]
 
 
@@ -599,7 +605,13 @@ O histórico e o login atuais são mantidos.</p>
     capacidade = int(vagas * intervalo * 60 / max(media, 20))
     ativos = [x for x in emps if x["ativo"]]
     uso = min(100, int(100 * len(ativos) / max(capacidade, 1)))
+    _sts = [agenda.situacao_prazo(it) for it in agenda.prazos()["itens"].values()]
+    n_prazo_urg = sum(1 for x in _sts if x in ("atrasado", "hoje"))
+    n_prazo_sem = sum(1 for x in _sts if x == "semana")
+    n_cert = sum(1 for c in agenda.certidoes()["itens"].values() if agenda.status_cert(c)[0] in ("vence", "vencida"))
     kpis = f"""<div class="kpis">
+<a class="kpi" href="/agenda" style="text-decoration:none;color:inherit{';border-color:#c62828' if n_prazo_urg else ''}"><div class="v">{n_prazo_urg}</div><div class="l">📅 prazos atrasados ou para hoje · {n_prazo_sem} na semana</div></a>
+<a class="kpi" href="/certidoes" style="text-decoration:none;color:inherit{';border-color:#c62828' if n_cert else ''}"><div class="v">{n_cert}</div><div class="l">📑 certidões vencidas ou vencendo (15 dias)</div></a>
 <div class="kpi"><div class="v">{len(ativos)}/{len(emps)}</div><div class="l">empresas ativas</div></div>
 <div class="kpi"><div class="v">{sum(x['andamento'] for x in emps)}</div><div class="l">processos em andamento</div></div>
 <div class="kpi"><div class="v">{sum(x['novas_hoje'] for x in emps)}</div><div class="l">mensagens novas hoje</div></div>
@@ -915,6 +927,7 @@ def html_conversa(g, cfg_chat, mapa=None):
     return (f'<div class="cv-cab" data-proc="{e(cp)}"><div><div class="cv-num">{e(g["processo"])} {selo_plat(g["plat"])}</div>'
             f'<div><b>Órgão:</b> {e(g["promotor"])}</div><div class="sub"><b>Empresa:</b> {e(g["nome"])} · '
             f'<b>Situação:</b> <span class="cv-sit">{e(situacao_proc(g["eid"], g["processo"], g["promotor"]) or "—")}</span>'
+            f'{proximo_prazo_html(g)}'
             f'</div></div><a class="btn cv-doc" href="/documentos?{e(urllib.parse.urlencode({"emp": g["nome"].upper().strip(), "proc": g["processo"] + "||" + g["promotor"]}))}" '
             f'title="Gerar as declarações deste processo">📄 Declarações</a>'
             f'<a class="btn cv-doc" style="margin-left:6px" href="/pecas?{e(urllib.parse.urlencode({"emp": g["nome"].upper().strip(), "proc": g["processo"] + "||" + g["promotor"]}))}" '
@@ -952,6 +965,21 @@ def barra_classif(g):
     return (f'<div class="cv-classif"><span class="cl-tit">📊 Nossa classificação</span>{chips}'
             f'<a class="btn cl-ver" href="{e(url)}">Ver classificação completa</a>'
             f'<span class="sub cl-quando">lida em {e(atual)}</span></div>')
+
+
+def proximo_prazo_html(g):
+    """Próximo prazo aberto deste processo (Agenda), para mostrar no cabeçalho do chat."""
+    agora = datetime.now()
+    abertos = [it for it in agenda.prazos()["itens"].values() if it.get("status") == "aberto"
+               and it.get("processo") == g["processo"] and it.get("promotor") == g["promotor"]
+               and datetime.fromisoformat(it["quando"]) > agora - timedelta(hours=12)]
+    if not abertos:
+        return ""
+    it = min(abertos, key=lambda x: x["quando"])
+    q = datetime.fromisoformat(it["quando"])
+    quando = q.strftime("%d/%m") + ("" if q.hour == 23 and q.minute == 59 else q.strftime(" %H:%M"))
+    return (f' · <a href="/agenda" style="color:#ffd54f;font-weight:700" title="{e(it["titulo"])}">⏰ {e(it["titulo"].split(" – ")[0])} '
+            f'até {quando} ({e(agenda.falta_txt(q, agora))})</a>')
 
 
 def pg_chat(q):
@@ -1587,7 +1615,8 @@ def gerar_docs(q):
 def abas_doc(atual):
     return ('<div class="acoes" style="margin:6px 0 12px">'
             f'<a class="btn {"" if atual == "dec" else "sec"}" href="/documentos">📄 Declarações</a>'
-            f'<a class="btn {"" if atual == "pec" else "sec"}" href="/pecas">⚖️ Peças com IA (recurso, contrarrazões…)</a></div>')
+            f'<a class="btn {"" if atual == "pec" else "sec"}" href="/pecas">⚖️ Peças com IA (recurso, contrarrazões…)</a>'
+            f'<a class="btn {"" if atual == "cer" else "sec"}" href="/certidoes">📑 Certidões</a></div>')
 
 
 def pg_pecas(q, aviso=""):
@@ -1717,6 +1746,173 @@ body{{background:#e9edf0;margin:0;font-family:Arial,Helvetica,sans-serif;color:#
 <div class="barra"><button onclick="window.print()">🖨 Imprimir / Salvar em PDF</button><a href="{e(url_docx)}">⬇ Baixar Word</a>
 <span>Dica: clique no texto para corrigir algo antes de imprimir. No Chrome, escolha “Salvar como PDF”.</span></div>
 {documentos.html(docs, ctx)}</body></html>"""
+
+
+# ------------------------------------------------------------------ agenda de prazos
+COR_PRAZO = {"atrasado": "#c62828", "hoje": "#e65100", "semana": "#f9a825", "depois": "#2e7d32", "feito": "#90a4ae"}
+
+
+def link_chat(it):
+    if not it.get("eid") or not it.get("processo"):
+        return ""
+    return "/mensagens?" + urllib.parse.urlencode({"eid": it["eid"], "processo": it["processo"], "promotor": it.get("promotor", "")})
+
+
+def pg_agenda(q, aviso=""):
+    d = agenda.prazos()
+    agora = datetime.now()
+    emp_f = q.get("emp", "")
+    itens = [(pid, it) for pid, it in d["itens"].items() if not emp_f or it.get("empresa", "").upper() == emp_f]
+    grupos = {"atrasado": [], "hoje": [], "semana": [], "depois": [], "feito": []}
+    for pid, it in itens:
+        grupos[agenda.situacao_prazo(it, agora)].append((pid, it))
+    for g in grupos.values():
+        g.sort(key=lambda x: x[1]["quando"])
+    grupos["feito"] = sorted(grupos["feito"], key=lambda x: x[1]["quando"], reverse=True)[:30]
+    nomes = sorted(nomes_empresas())
+
+    def cartao(pid, it):
+        st = agenda.situacao_prazo(it, agora)
+        qd = datetime.fromisoformat(it["quando"])
+        dia_todo = qd.hour == 23 and qd.minute == 59
+        quando = qd.strftime("%d/%m/%Y") + ("" if dia_todo else qd.strftime(" %H:%M"))
+        semana = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"][qd.weekday()]
+        lc = link_chat(it)
+        hora_v = "" if dia_todo else qd.strftime("%H:%M")
+        acoes = botao(f"/agenda/{pid}/feito", "✓ Concluído") if it.get("status") == "aberto" else botao(f"/agenda/{pid}/reabrir", "↺ Reabrir", "sec")
+        acoes += (f'<details class="ag-ed"><summary class="btn sec">✎ Mudar data</summary><form method="post" action="/agenda/{pid}/data" class="linha" style="gap:6px;margin-top:6px">'
+                  f'<input type="hidden" name="csrf" value="{CSRF}"><input class="campo" type="date" name="data" value="{qd:%Y-%m-%d}" required>'
+                  f'<input class="campo" type="time" name="hora" value="{hora_v}"><button>Salvar</button></form></details>')
+        acoes += botao(f"/agenda/{pid}/excluir", "🗑", "sec", "Apagar este prazo?")
+        falta = e(agenda.falta_txt(qd, agora)) if st != "feito" else "concluído"
+        tags = ('<span class="tag aviso">estimado</span>' if it.get("estimado") else "") + \
+               ('<span class="tag parado">detectado no chat</span>' if it.get("origem") == "auto" else "")
+        orgao = " · " + e(it.get("promotor", "")) if it.get("promotor") else ""
+        chat = f' · <a href="{e(lc)}">abrir o chat do processo</a>' if lc else ""
+        obs = (f'<details class="sub" style="margin-top:4px"><summary>trecho / observação</summary><div class="txt">{e(it.get("obs", ""))}</div></details>'
+               if it.get("obs") else "")
+        return (f'<div class="ag" style="border-left-color:{COR_PRAZO[st]}"><div class="ag-q"><b>{e(quando)}</b> <span class="sub">({semana})</span>'
+                f'<span class="tag" style="background:{COR_PRAZO[st]};color:#fff">{falta}</span>{tags}</div>'
+                f'<div class="nome">{e(it.get("titulo", ""))}</div><div class="sub">{e(it.get("empresa", ""))}{orgao}{chat}</div>{obs}'
+                f'<div class="acoes" style="margin-top:6px">{acoes}</div></div>')
+
+    blocos = ""
+    for k, rot in (("atrasado", "❗ Atrasados"), ("hoje", "🔴 Hoje"), ("semana", "🟠 Próximos 7 dias"), ("depois", "🟢 Depois"),
+                   ("feito", "✅ Concluídos (últimos 30)")):
+        if grupos[k] or k in ("hoje", "semana"):
+            lista = "".join(cartao(pid, it) for pid, it in grupos[k]) or '<p class="sub">Nada aqui.</p>'
+            aberto = "" if k == "feito" else "open"
+            blocos += f'<details {aberto} class="ag-grupo"><summary><h3 style="display:inline">{rot} ({len(grupos[k])})</h3></summary>{lista}</details>'
+    sel_emp = ('<select class="campo" style="max-width:260px" onchange="location.href=\'/agenda?emp=\'+encodeURIComponent(this.value)">'
+               '<option value="">Todas as empresas</option>' +
+               "".join(f'<option value="{e(n)}" {"selected" if n == emp_f else ""}>{e(n)}</option>' for n in nomes) + "</select>")
+    opc_emp = "".join(f'<option value="{e(n)}">{e(n)}</option>' for n in nomes)
+    corpo = f"""<style>.ag{{background:var(--card);border:1px solid var(--borda);border-left:6px solid;border-radius:10px;padding:10px 14px;margin:8px 0}}
+.ag-q{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}.ag-grupo summary{{cursor:pointer;margin:14px 0 4px}}
+.ag-ed{{display:inline-block}}.ag-ed summary{{list-style:none;display:inline-block}}.ag .acoes form{{display:inline}}
+.kp-ag{{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}}.kp-ag div{{background:var(--card);border:1px solid var(--borda);border-radius:10px;padding:8px 14px}}
+.kp-ag b{{font-size:22px;display:block}}</style>
+<h2>📅 Agenda de prazos</h2>
+<p class="sub">Prazos detectados sozinhos nas mensagens do pregoeiro, diligências e registros (ex.: “prazo de 2 horas”, “reabertura
+amanhã às 10h”, “5 dias úteis para regularização”) e os que você cadastrar. Avisos no Telegram: quando aparece, 24 h antes,
+2 h antes (também no ntfy) e quando vence. Dias úteis contam feriados nacionais – <b>confira feriados municipais</b>.</p>
+<div class="kp-ag"><div><b style="color:{COR_PRAZO['atrasado']}">{len(grupos['atrasado'])}</b>atrasados</div>
+<div><b style="color:{COR_PRAZO['hoje']}">{len(grupos['hoje'])}</b>hoje</div>
+<div><b style="color:#b8860b">{len(grupos['semana'])}</b>próximos 7 dias</div><div><b>{len(grupos['depois'])}</b>depois</div></div>
+<div class="acoes">{sel_emp}</div>
+<details class="form" style="max-width:none;margin:10px 0"><summary><b>➕ Novo prazo</b></summary>
+<form method="post" action="/agenda/novo"><input type="hidden" name="csrf" value="{CSRF}">
+<label>O quê</label><input class="campo" name="titulo" required placeholder="ex.: Enviar proposta ajustada – PE 033/2026">
+<div class="linha" style="gap:8px;flex-wrap:wrap"><div><label>Data</label><input class="campo" type="date" name="data" required></div>
+<div><label>Hora <small>(vazio = fim do dia)</small></label><input class="campo" type="time" name="hora"></div>
+<div style="flex:1;min-width:200px"><label>Empresa</label><select class="campo" name="empresa"><option value="">—</option>{opc_emp}</select></div></div>
+<label>Processo / órgão <small>(opcional)</small></label><input class="campo" name="processo" placeholder="ex.: 033/2026 – Município de Ruy Barbosa">
+<label>Observação</label><textarea class="campo" name="obs" rows="2" style="max-width:100%"></textarea>
+<div class="acoes"><button>Salvar prazo</button></div></form></details>
+{blocos}"""
+    return pagina("Agenda", corpo, "/agenda", aviso, recarregar=True)
+
+
+# ------------------------------------------------------------------ certidões
+COR_CERT = {"ok": ("#2e7d32", "✅ válida"), "vence": ("#ef6c00", "🟠 vence em breve"), "vencida": ("#c62828", "❌ vencida"),
+            "sem": ("#90a4ae", "sem validade")}
+ESSENCIAIS = ("federal", "fgts", "trabalhista", "estadual", "municipal", "falencia")
+
+
+def _dt_br(iso):
+    try:
+        return date.fromisoformat(iso).strftime("%d/%m/%Y")
+    except (TypeError, ValueError):
+        return "—"
+
+
+def pg_certidoes(q, aviso=""):
+    emps = sorted(nomes_empresas())
+    dados = agenda.certidoes()["itens"]
+    emp_f = q.get("emp", "")
+    hoje = date.today()
+    blocos = ""
+    links = {k: u for k, _, u in agenda.TIPOS_CERT if u}
+    opc_tipo = "".join(f'<option value="{k}">{e(n)}</option>' for k, n, _ in agenda.TIPOS_CERT)
+    for nome in [n for n in emps if not emp_f or n == emp_f]:
+        minhas = sorted([(cid, c) for cid, c in dados.items() if c.get("empresa") == nome],
+                        key=lambda x: (x[1].get("validade") or "9999"))
+        linhas = ""
+        for cid, c in minhas:
+            st, dias = agenda.status_cert(c, hoje)
+            cor, rot = COR_CERT[st]
+            prazo = "" if dias is None else f"{-dias} dia(s) atrás" if dias < 0 else "hoje" if dias == 0 else f"{dias} dia(s)"
+            arq = f'<a href="/certidoes/{cid}/arquivo" target="_blank">📄 PDF</a>' if agenda.arquivo_cert(cid) else '<span class="sub">sem PDF</span>'
+            emitir = f' · <a href="{e(links[c.get("tipo")])}" target="_blank" rel="noopener">emitir nova</a>' if c.get("tipo") in links else ""
+            editar = (f'<details><summary class="sub" style="cursor:pointer">✎ editar / trocar PDF</summary>'
+                      f'<form method="post" action="/certidoes/salvar" enctype="multipart/form-data" class="linha" style="gap:6px;flex-wrap:wrap;margin-top:6px">'
+                      f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="cid" value="{cid}"><input type="hidden" name="empresa" value="{e(nome)}">'
+                      f'<input type="hidden" name="tipo" value="{e(c.get("tipo", ""))}">'
+                      f'<input class="campo" name="numero" value="{e(c.get("numero", ""))}" placeholder="nº" style="max-width:160px">'
+                      f'<label class="sub">emissão <input class="campo" type="date" name="emissao" value="{e(c.get("emissao", ""))}"></label>'
+                      f'<label class="sub">validade <input class="campo" type="date" name="validade" value="{e(c.get("validade", ""))}"></label>'
+                      f'<input type="file" name="arquivo" accept=".pdf"><button>Salvar</button></form></details>')
+            obs = f'<div class="sub">{e(c.get("obs", ""))}</div>' if c.get("obs") else ""
+            linhas += (f'<tr><td><b>{e(agenda.NOME_CERT.get(c.get("tipo"), c.get("tipo", "")))}</b>{obs}{editar}</td>'
+                       f'<td class="ocultar">{e(c.get("numero", "") or "—")}<div class="sub">emitida {_dt_br(c.get("emissao"))}</div></td>'
+                       f'<td><b>{_dt_br(c.get("validade"))}</b></td><td><span class="tag" style="background:{cor};color:#fff">{rot}</span>'
+                       f'<div class="sub">{prazo}</div></td><td>{arq}{emitir}</td>'
+                       f'<td>{botao(f"/certidoes/{cid}/excluir", "🗑", "sec", "Apagar esta certidão?")}</td></tr>')
+        tem = {c.get("tipo") for _, c in minhas if agenda.status_cert(c, hoje)[0] != "vencida"}
+        faltam = [k for k in ESSENCIAIS if k not in tem]
+        aviso_falta = ("<p class='sub'>Sem certidão válida cadastrada: " +
+                       ", ".join(f'<b>{e(agenda.NOME_CERT[k])}</b>' + (f' (<a href="{e(links[k])}" target="_blank" rel="noopener">emitir</a>)' if k in links else "")
+                                 for k in faltam) + "</p>") if faltam else ""
+        n_venc = sum(1 for _, c in minhas if agenda.status_cert(c, hoje)[0] in ("vence", "vencida"))
+        atencao = f'<span class="tag erro">{n_venc} precisa(m) de atenção</span>' if n_venc else ""
+        vazio = '<tr><td colspan="6">Nenhuma certidão cadastrada.</td></tr>'
+        blocos += (f'<div class="form" style="max-width:none;margin-bottom:16px">'
+                   f'<div class="linha" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><h3 style="margin:0">{e(nome)} {atencao}</h3>'
+                   f'<a class="btn sec" href="/certidoes/pacote?emp={e(urllib.parse.quote(nome))}">⬇ Pacote de habilitação (ZIP com as válidas)</a></div>'
+                   f'{aviso_falta}<table><tr><th>Certidão</th><th class="ocultar">Número</th><th>Validade</th><th>Situação</th><th>Arquivo</th><th></th></tr>'
+                   f'{linhas or vazio}</table></div>')
+    opc_emp = "".join(f'<option value="{e(n)}" {"selected" if n == emp_f else ""}>{e(n)}</option>' for n in emps)
+    sel_emp = ('<select class="campo" style="max-width:260px" onchange="location.href=\'/certidoes?emp=\'+encodeURIComponent(this.value)">'
+               '<option value="">Todas as empresas</option>' +
+               "".join(f'<option value="{e(n)}" {"selected" if n == emp_f else ""}>{e(n)}</option>' for n in emps) + "</select>")
+    corpo = f"""<h2>📄 Documentos</h2>{abas_doc("cer")}
+<p class="sub">Guarde as certidões de cada empresa com a validade. O sistema avisa no Telegram 15, 7, 3 e 1 dia antes de vencer
+e quando vence. Ao enviar o PDF, ele tenta ler sozinho o tipo, o número e as datas – confira depois de salvar.
+As certidões são emitidas por você nos sites oficiais (eles têm captcha).</p>
+<div class="acoes">{sel_emp}</div>
+<details class="form" style="max-width:none;margin:10px 0" open><summary><b>➕ Adicionar certidão</b></summary>
+<form method="post" action="/certidoes/salvar" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{CSRF}">
+<div class="linha" style="gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label>Empresa</label><select class="campo" name="empresa">{opc_emp}</select></div>
+<div style="flex:1;min-width:220px"><label>PDF da certidão <small>(lê as datas sozinho)</small></label><input type="file" name="arquivo" accept=".pdf"></div></div>
+<div class="linha" style="gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><label>Tipo <small>(vazio = descobrir pelo PDF)</small></label>
+<select class="campo" name="tipo"><option value="">— descobrir pelo PDF —</option>{opc_tipo}</select></div>
+<div><label>Número</label><input class="campo" name="numero"></div>
+<div><label>Emissão</label><input class="campo" type="date" name="emissao"></div>
+<div><label>Validade <small>(vazio = ler do PDF)</small></label><input class="campo" type="date" name="validade"></div></div>
+<label>Observação</label><input class="campo" name="obs" placeholder="ex.: certidão municipal de Feira de Santana">
+<div class="acoes"><button>Salvar certidão</button></div></form></details>
+{blocos}"""
+    return pagina("Certidões", corpo, "/documentos", aviso)
 
 
 def pg_config(aviso=""):
@@ -1851,7 +2047,8 @@ def pg_buscar(qs, aviso=""):
 <div class="acoes"><a class="btn" target="_blank" rel="noopener" href="{e(buscas.link_pncp(it))}">Ver edital (PNCP)</a>
 <a class="btn sec" href="/buscar/itens?cnpj={e(str(cnpj))}&ano={e(str(ano))}&seq={e(str(seq))}">Itens</a>
 {botao_analisar(cnpj, ano, seq, f"{it.get('orgao_nome') or ''} – {it.get('title') or ''} – {it.get('municipio_nome') or ''}/{it.get('uf') or ''}")}
-{f'<a class="btn sec" target="_blank" rel="noopener" href="{e(origem)}">Sistema de origem</a>' if origem.startswith("http") else ''}</div></div>"""
+{f'<a class="btn sec" target="_blank" rel="noopener" href="{e(origem)}">Sistema de origem</a>' if origem.startswith("http") else ''}
+{botao_agendar(it.get('data_fim_vigencia'), f"{it.get('title') or ''} – {it.get('municipio_nome') or ''}/{it.get('uf') or ''}", it.get('orgao_nome') or '', buscas.link_pncp(it))}</div></div>"""
         base = urllib.parse.urlencode([(k, v) for k, vs in qs.items() if k != "pagina" for v in vs])
         nav = mais_cards(len(itens))
         salvar = f"""<form method="post" action="/buscas/salvar" class="linha" style="margin-top:10px">
@@ -2170,6 +2367,7 @@ def pg_oportunidades(q, aviso=""):
 <a class="btn sec" href="/buscar/itens?cnpj={e(str(r.get('cnpj')))}&ano={e(str(r.get('ano')))}&seq={e(str(r.get('seq')))}">Itens</a>
 {botao_analisar(r.get('cnpj'), r.get('ano'), r.get('seq'), f"{r.get('orgao')} – {r.get('titulo')} – {r.get('municipio')}/{r.get('uf')}")}
 {f'<a class="btn sec" target="_blank" rel="noopener" href="{e(origem)}">Sistema de origem</a>' if origem.startswith("http") else ''}
+{botao_agendar(r.get('fim'), f"{r.get('titulo') or ''} – {r.get('municipio') or ''}/{r.get('uf') or ''}", r.get('orgao') or '', r.get('link') or '')}
 {acao_desc}</div></div>"""
     nav = mais_cards(len(trecho))
     # perfil
@@ -2242,6 +2440,19 @@ def mais_cards(total):
             'if(!r)document.getElementById("mais-wrap").remove();'
             f'else document.getElementById("mais-bt").textContent="⬇ Mostrar mais "+Math.min({LOTE_CARDS},r)+" (faltam "+r+")";}}'
             '</script>')
+
+
+def botao_agendar(fim_iso, titulo, orgao, link):
+    """📅 coloca na Agenda o prazo de envio de proposta de uma licitação (PNCP)."""
+    m = re.match(r"(\d{4}-\d{2}-\d{2})T?(\d{2}:\d{2})?", fim_iso or "")
+    if not m:
+        return ""
+    return (f'<form method="post" action="/agenda/novo" style="display:inline"><input type="hidden" name="csrf" value="{CSRF}">'
+            f'<input type="hidden" name="titulo" value="{e(("📝 Enviar proposta – " + titulo)[:150])}">'
+            f'<input type="hidden" name="data" value="{m.group(1)}"><input type="hidden" name="hora" value="{m.group(2) or ""}">'
+            f'<input type="hidden" name="processo" value="{e(orgao[:150])}"><input type="hidden" name="obs" value="{e(link)}">'
+            f'<input type="hidden" name="voltar" value="/agenda?ok=agendado">'
+            f'<button class="sec" title="Colocar o prazo de envio da proposta na Agenda">📅 Agendar</button></form>')
 
 
 def mapa_busca(itens, qs):
@@ -2672,6 +2883,15 @@ class Painel(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(dados)
 
+    def baixar(self, dados, nome, tipo, na_tela=False):
+        self.send_response(200)
+        self.send_header("Content-Type", tipo)
+        self.send_header("Content-Disposition", f'{"inline" if na_tela else "attachment"}; filename="{nome}"')
+        self.send_header("Content-Length", str(len(dados)))
+        self.cabecalhos_seguranca()
+        self.end_headers()
+        self.wfile.write(dados)
+
     def redirecionar(self, url):
         if not url.startswith("/") or url.startswith("//"):
             url = "/"
@@ -2716,6 +2936,23 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_config(AVISOS.get(q.get("ok", ""), "")))
             if p == "/documentos":
                 return self.enviar(pg_documentos(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/agenda":
+                return self.enviar(pg_agenda(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/certidoes":
+                return self.enviar(pg_certidoes(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/certidoes/pacote":
+                dados, n = agenda.pacote_zip(q.get("emp", ""))
+                if not n:
+                    return self.enviar(pg_certidoes(q, "Nenhuma certidão válida com PDF para esta empresa."))
+                nome_arq = re.sub(r"[^\w.-]+", "_", f"Certidoes_{q.get('emp', '')}_{date.today():%Y-%m-%d}") + ".zip"
+                return self.baixar(dados, nome_arq, "application/zip")
+            m = re.fullmatch(r"/certidoes/([0-9a-f]{12})/arquivo", p)
+            if m:
+                arq = agenda.arquivo_cert(m.group(1))
+                if not arq:
+                    return self.redirecionar("/certidoes")
+                return self.baixar(arq.read_bytes(), re.sub(r"[^\w.-]+", "_", arq.name),
+                                   "application/pdf" if arq.suffix.lower() == ".pdf" else "application/octet-stream", True)
             if p == "/pecas":
                 return self.enviar(pg_pecas(q, AVISOS.get(q.get("ok", ""), "")))
             m = re.fullmatch(r"/pecas/([0-9a-f]{14})(/ver|/docx)?", p)
@@ -2810,6 +3047,26 @@ class Painel(BaseHTTPRequestHandler):
                                           '<p><a class="btn sec" href="/processos">Voltar</a></p>', "/processos"))
             return self.redirecionar("/classificacao?" + urllib.parse.urlencode(
                 {"empresa": eid, "processo": chave[0], "promotor": chave[1]}))
+        if self.path.rstrip("/") == "/certidoes/salvar":
+            if tam > 15 * 1024 * 1024:
+                return self.enviar(pg_certidoes({}, "Arquivo grande demais (máx. 15 MB)."), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if campos.get("empresa", "") not in nomes_empresas():
+                return self.redirecionar("/certidoes")
+            arq = next(((n, d) for n, d in arqs if d), None)
+            lido = agenda.ler_pdf_certidao(arq[1]) if arq else {}
+            cid = campos.get("cid", "") if re.fullmatch(r"[0-9a-f]{12}", campos.get("cid", "")) else ""
+            dados_c = {"empresa": campos["empresa"], "tipo": campos.get("tipo") or lido.get("tipo") or "outra",
+                       "numero": campos.get("numero") or lido.get("numero", ""),
+                       "emissao": campos.get("emissao") or lido.get("emissao", ""),
+                       "validade": campos.get("validade") or lido.get("validade", "")}
+            if campos.get("obs") or not cid:
+                dados_c["obs"] = campos.get("obs", "")
+            agenda.salvar_cert(cid, dados_c, arq)
+            ok = "cert_sem_validade" if not dados_c["validade"] else "cert_lida" if lido else "cert_ok"
+            return self.redirecionar("/certidoes?" + urllib.parse.urlencode({"emp": campos["empresa"], "ok": ok}))
         if self.path.rstrip("/") in ("/pecas/gerar", "/pecas/declaracoes"):
             if tam > 40 * 1024 * 1024:
                 return self.enviar(pagina("Erro", "<h2>Arquivos grandes demais (máx. 40 MB).</h2>", "/documentos"), 413)
@@ -2930,6 +3187,35 @@ class Painel(BaseHTTPRequestHandler):
                 else:
                     analise.salvar_config_ia(f.get("instrucoes", ""), f.get("empresa", ""))
                 return self.redirecionar("/editais?ok=ia")
+            if p == "/agenda/novo":
+                try:
+                    dt = datetime.strptime(f.get("data", "")[:10] + " " + (f.get("hora") or "23:59")[:5], "%Y-%m-%d %H:%M")
+                except ValueError:
+                    return self.enviar(pg_agenda({}, "Data ou hora inválida."))
+                agenda.adicionar(f.get("titulo", "").strip() or "Prazo", dt, f.get("empresa", ""),
+                                 promotor=f.get("processo", "").strip(), obs=f.get("obs", "").strip())
+                volta = f.get("voltar", "")
+                return self.redirecionar(volta if volta.startswith("/") and not volta.startswith("//") else "/agenda?ok=prazo")
+            m = re.fullmatch(r"/agenda/([0-9a-f]{12})/(feito|reabrir|excluir|data)", p)
+            if m:
+                pid, acao = m.groups()
+                if acao == "feito":
+                    agenda.alterar(pid, status="feito")
+                elif acao == "reabrir":
+                    agenda.alterar(pid, status="aberto")
+                elif acao == "excluir":
+                    agenda.excluir(pid)
+                else:
+                    try:
+                        dt = datetime.strptime(f.get("data", "")[:10] + " " + (f.get("hora") or "23:59")[:5], "%Y-%m-%d %H:%M")
+                        agenda.alterar(pid, quando=dt.strftime("%Y-%m-%dT%H:%M"), estimado=False, status="aberto")
+                    except ValueError:
+                        pass
+                return self.redirecionar("/agenda")
+            m = re.fullmatch(r"/certidoes/([0-9a-f]{12})/excluir", p)
+            if m:
+                agenda.excluir_cert(m.group(1))
+                return self.redirecionar("/certidoes?ok=feito")
             m = re.fullmatch(r"/pecas/([0-9a-f]{14})/(salvar|refazer)", p)
             if m:
                 pid = m.group(1)
@@ -3069,4 +3355,5 @@ if __name__ == "__main__":
     threading.Thread(target=vigiar, daemon=True).start()
     threading.Thread(target=backup.ciclo, args=(CFG_ATUAL, telegram_geral), daemon=True).start()
     threading.Thread(target=oportunidades.ciclo, args=(telegram_geral,), daemon=True).start()
+    threading.Thread(target=agenda.ciclo, args=(telegram_geral, CFG_ATUAL), daemon=True).start()
     ThreadingHTTPServer((HOST, PORTA), Painel).serve_forever()

@@ -20,3 +20,6 @@ diagnostico/
 venv/
 dados_empresas.json
 pecas/
+prazos.json
+certidoes.json
+certidoes/
