@@ -1765,7 +1765,8 @@ def pg_agenda(q, aviso=""):
     d = agenda.prazos()
     agora = datetime.now()
     emp_f = q.get("emp", "")
-    itens = [(pid, it) for pid, it in d["itens"].items() if not emp_f or it.get("empresa", "").upper() == emp_f]
+    itens = [(pid, it) for pid, it in d["itens"].items()
+             if not emp_f or emp_f in [x.strip().upper() for x in it.get("empresa", "").split(",")]]
     grupos = {"atrasado": [], "hoje": [], "semana": [], "depois": [], "feito": []}
     for pid, it in itens:
         grupos[agenda.situacao_prazo(it, agora)].append((pid, it))

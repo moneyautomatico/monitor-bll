@@ -221,6 +221,49 @@ def excluir(pid):
         _gravar(ARQ_PRAZOS, d)
 
 
+def _chave_dup(it):
+    """O mesmo prazo do mesmo processo (ex.: duas empresas nossas na mesma licitação) vira um item só."""
+    return (it.get("processo", ""), it.get("promotor", ""), it.get("quando", ""), it.get("titulo", ""))
+
+
+def _juntar_empresa(destino, nome, eid):
+    nomes = [x.strip() for x in (destino.get("empresa") or "").split(",") if x.strip()]
+    if nome and nome not in nomes:
+        nomes.append(nome)
+    destino["empresa"] = ", ".join(nomes)
+    eids = destino.get("eids") or ([destino["eid"]] if destino.get("eid") else [])
+    if eid and eid not in eids:
+        eids.append(eid)
+    destino["eids"] = eids
+
+
+def _arrumar(d):
+    """Uma vez só: junta os prazos repetidos e conclui os que já tinham vencido quando foram detectados."""
+    if d.get("versao") == 2:
+        return False
+    vistos = {}
+    for pid in sorted(d["itens"], key=lambda k: d["itens"][k].get("criado", "")):
+        it = d["itens"].get(pid)
+        if not it or it.get("origem") != "auto":
+            continue
+        if it.get("quando", "") < it.get("criado", "") and it.get("status") == "aberto":
+            it["status"] = "feito"
+            it["auto_vencido"] = True
+        k = _chave_dup(it)
+        if k in vistos:
+            dest = d["itens"][vistos[k]]
+            _juntar_empresa(dest, it.get("empresa", ""), it.get("eid", ""))
+            dest["avisos"] = sorted(set(dest.get("avisos", [])) | set(it.get("avisos", [])))
+            if it.get("status") == "aberto":
+                dest["status"] = "aberto" if not dest.get("auto_vencido") else dest["status"]
+            del d["itens"][pid]
+        else:
+            vistos[k] = pid
+            _juntar_empresa(it, it.get("empresa", ""), it.get("eid", ""))
+    d["versao"] = 2
+    return True
+
+
 def varrer_mensagens():
     """Lê as mensagens novas de cada empresa (desde a última varredura) e cria os prazos encontrados."""
     novos = []
@@ -228,7 +271,11 @@ def varrer_mensagens():
         return novos
     with TRAVA:
         d = prazos()
+        if _arrumar(d):
+            _gravar(ARQ_PRAZOS, d)
     marcas = d.setdefault("marcas", {})
+    indice = {_chave_dup(it): pid for pid, it in d["itens"].items() if it.get("origem") == "auto"}
+    juntados = {}
     for env in sorted(EMPRESAS.glob("*.env")):
         eid = env.stem
         db = EMPRESAS / eid / "bll_monitor.db"
@@ -261,15 +308,24 @@ def varrer_mensagens():
             if not base or (desde and base < desde):
                 continue
             for quando, tipo, estimado in extrair(txt, base):
-                if quando < datetime.now() - timedelta(days=2):
+                # 1ª varredura: só prazos que ainda vão vencer; depois, até 2 dias de atraso (mensagem lida com demora)
+                if quando < (datetime.now() if primeira else datetime.now() - timedelta(days=2)):
                     continue
                 pid = _id("auto", eid, mid, quando.isoformat())
                 if pid in d["itens"]:
                     continue
                 item = {"titulo": f"{tipo} – {proc}", "quando": quando.strftime("%Y-%m-%dT%H:%M"), "empresa": nome, "eid": eid,
-                        "processo": proc, "promotor": prom, "obs": f"{esc} · {aut} · {hor}\n{(txt or '')[:900]}",
+                        "eids": [eid], "processo": proc, "promotor": prom, "obs": f"{esc} · {aut} · {hor}\n{(txt or '')[:900]}",
                         "origem": "auto", "estimado": estimado, "status": "aberto", "avisos": [],
                         "criado": datetime.now().strftime("%Y-%m-%dT%H:%M")}
+                k = _chave_dup(item)
+                if k in indice:   # já existe (outra empresa nossa no mesmo processo): só acrescenta a empresa
+                    dest = d["itens"].get(indice[k]) or next((i for p_, i, _ in novos if p_ == indice[k]), None)
+                    if dest is not None:
+                        _juntar_empresa(dest, nome, eid)
+                        juntados[indice[k]] = (dest["empresa"], dest["eids"])
+                    continue
+                indice[k] = pid
                 d["itens"][pid] = item
                 novos.append((pid, item, primeira))
     with TRAVA:
@@ -277,6 +333,9 @@ def varrer_mensagens():
         atual["marcas"] = marcas
         for pid, item, _ in novos:
             atual["itens"].setdefault(pid, item)
+        for pid, (emp, eids) in juntados.items():
+            if pid in atual["itens"]:
+                atual["itens"][pid]["empresa"], atual["itens"][pid]["eids"] = emp, eids
         _gravar(ARQ_PRAZOS, atual)
     return [(pid, item) for pid, item, primeira in novos if not primeira]
 
