@@ -202,6 +202,23 @@ def auditoria(n=300, filtro=""):
     return out
 
 
+# ------------------------------------------------------------------ configurações de cada usuário
+def cfg(login):
+    return dict((carregar().get(login) or {}).get("cfg") or {})
+
+
+def salvar_cfg(login, campos):
+    with TRAVA:
+        d = carregar()
+        if login in d:
+            c = d[login].setdefault("cfg", {})
+            for k, v in campos.items():
+                if v is None:
+                    c.pop(k, None)
+                else:
+                    c[k] = v
+            _salvar(d)
+
 # ------------------------------------------------------------------ recuperação pela linha de comando
 if __name__ == "__main__":
     import getpass
@@ -224,3 +241,4 @@ if __name__ == "__main__":
             sys.exit(str(ex))
     else:
         print("Uso: venv/bin/python usuarios.py --novo-admin LOGIN   (ou --nova-senha LOGIN)")
+

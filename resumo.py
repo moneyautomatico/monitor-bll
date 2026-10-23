@@ -33,13 +33,21 @@ def _nome(env):
     return env.stem
 
 
-def montar(agora=None):
+def montar(agora=None, permitidos=None, login=""):
+    """permitidos = NOMES das empresas do usuário (None = todas, resumo geral)."""
     agora = agora or datetime.now()
+
+    def ok(nomes, criador=""):
+        lista = [x.strip().upper() for x in (nomes or "").split(",") if x.strip()]
+        if permitidos is None:
+            return True
+        return any(x in permitidos for x in lista) if lista else criador == login
     desde = agora - timedelta(hours=24)
     partes = [f"☀️ <b>Resumo do dia – {agora:%d/%m/%Y}</b>"]
 
     # ---- prazos
-    abertos = [(datetime.fromisoformat(it["quando"]), it) for it in agenda.prazos()["itens"].values() if it.get("status") == "aberto"]
+    abertos = [(datetime.fromisoformat(it["quando"]), it) for it in agenda.prazos()["itens"].values() if it.get("status") == "aberto"
+               and ok(it.get("empresa"), it.get("criado_por", ""))]
     atras = sorted([x for x in abertos if desde - timedelta(days=2) < x[0] < agora], key=lambda x: x[0])
     hoje = sorted([x for x in abertos if x[0] >= agora and x[0].date() == agora.date()], key=lambda x: x[0])
     amanha = sorted([x for x in abertos if x[0].date() == agora.date() + timedelta(days=1)], key=lambda x: x[0])
@@ -56,6 +64,8 @@ def montar(agora=None):
     # ---- certidões
     cert = []
     for c in agenda.certidoes()["itens"].values():
+        if not ok(c.get("empresa"), "-"):
+            continue
         st, dias = agenda.status_cert(c)
         if dias is not None and dias <= 7:
             nome = agenda.NOME_CERT.get(c.get("tipo"), "Certidão")
@@ -67,6 +77,8 @@ def montar(agora=None):
     # ---- processos: o que mudou nas últimas 24 h
     blocos = []
     for env in sorted(EMPRESAS.glob("*.env")) if EMPRESAS.exists() else []:
+        if permitidos is not None and _nome(env).upper().strip() not in permitidos:
+            continue
         db = EMPRESAS / env.stem / "bll_monitor.db"
         if not db.exists():
             continue

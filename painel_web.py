@@ -46,6 +46,8 @@ CONFIG = PASTA / "config.env"
 PY = PASTA / "venv" / "bin" / "python"
 CSRF = secrets.token_hex(16)
 AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
+          "pref": "Configurações salvas.", "pref_aplicadas": "Configurações salvas e aplicadas em todas as suas empresas (monitores reiniciados).",
+          "pref_chat": "Achei o seu chat do Telegram e salvei. Clique em “Testar” para conferir.", "pref_resumo": "Resumo enviado no seu Telegram.",
           "usuario_criado": "Usuário criado. Passe o login e a senha para a pessoa (de preferência pessoalmente ou por telefone).",
           "usuario_excluido": "Usuário excluído e desconectado.", "senha": "Senha trocada. Os seus outros aparelhos foram desconectados.",
           "senha_redefinida": "Senha redefinida e a pessoa foi desconectada dos aparelhos.",
@@ -200,6 +202,28 @@ def dono_empresa(eid):
 
 def pode_editar_empresa(eid):
     return eh_admin() or dono_empresa(eid) == login_atual()
+
+
+def cfg_ia():
+    """Configuração para a IA: usa a chave Gemini do próprio usuário, se ele cadastrou uma."""
+    c = dict(CFG_ATUAL())
+    k = usuarios.cfg(login_atual()).get("gemini_key", "") if login_atual() else ""
+    if k:
+        c["GEMINI_API_KEY"] = k
+    return c
+
+
+def nomes_do_usuario(login):
+    """NOMES das empresas de um usuário (fora de uma requisição). None = todas (admin)."""
+    u = usuarios.obter(login)
+    if not u or u["papel"] == "admin":
+        return None
+    ok = {x.upper().strip() for x in u.get("empresas") or []}
+    for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
+        c = ler_env(a)
+        if (c.get("EMPRESA_DONO") or "").lower() == login:
+            ok.add((c.get("EMPRESA_NOME") or a.stem).upper().strip())
+    return ok
 
 
 def ve_analise(d):
@@ -705,7 +729,7 @@ mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.a
 
 ABAS = [("/", "Início"), ("/mensagens", "Mensagens"), ("/processos", "Processos"), ("/disputa", "🎯 Disputa"), ("/agenda", "Agenda"),
         ("/concorrentes", "Concorrentes"), ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais"),
-        ("/documentos", "Documentos"), ("/empresas", "Empresas"), ("/config", "⚙️")]
+        ("/documentos", "Documentos"), ("/empresas", "Empresas"), ("/preferencias", "⚙️")]
 
 
 PAPEL_NOME = usuarios.PAPEIS
@@ -719,8 +743,8 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     u = usuario_atual()
     if getattr(_REQ, "admin", False) and aba in ROTAS_ADM_LAYOUT:
         return pagina_admin(titulo, corpo, aviso, erro)
-    abas = [(x, n) for x, n in ABAS if eh_admin() or x != "/config"]
-    nav = "".join(f'<a href="{x}" class="{"on" if x == aba else ""}" title="{"Configurações" if x == "/config" else n}">{n}</a>' for x, n in abas)
+    abas = ABAS
+    nav = "".join(f'<a href="{x}" class="{"on" if x == aba else ""}" title="{"Minhas configurações" if x == "/preferencias" else n}">{n}</a>' for x, n in abas)
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
     if u and u.get("trocar_senha") and aba != "/conta":
         msg += ('<div class="msg erro">🛡️ ' + ("Defina uma senha nova (a atual foi criada pelo administrador). " if u.get("trocar_senha") else
@@ -1581,6 +1605,11 @@ def pg_empresas(aviso="", erro=False):
 
 def form_empresa(eid=None):
     cfg = ler_env(EMPRESAS / f"{eid}.env") if eid else {}
+    if not eid:   # empresa nova: começa com os alertas das "Minhas configurações"
+        uc = usuarios.cfg(login_atual())
+        if uc.get("tg_chat") or uc.get("ntfy"):
+            cfg = {"ENVIAR_PARA": uc.get("modo") or "proprio", "EMPRESA_TELEGRAM_CHAT_ID": uc.get("tg_chat", ""),
+                   "EMPRESA_NTFY_TOPICO": uc.get("ntfy", ""), "EMPRESA_TELEGRAM_TOKEN": uc.get("tg_token", "")}
     g = lambda k, d="": e(cfg.get(k, d))  # noqa: E731
     modo = cfg.get("ENVIAR_PARA", "geral")
     plat = cfg.get("PLATAFORMA", "bll").lower()
@@ -2641,6 +2670,65 @@ def pg_conta(aviso="", erro=False):
     return pagina("Minha conta", corpo, "/conta", aviso, erro)
 
 
+def pg_preferencias(aviso="", erro=False):
+    u = usuario_atual()
+    lg = u["login"]
+    uc = usuarios.cfg(lg)
+    minhas = sorted(a.stem for a in EMPRESAS.glob("*.env") if (ler_env(a).get("EMPRESA_DONO") or "").lower() == lg) if EMPRESAS.exists() else []
+    tok = uc.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
+    bot = nome_bot(tok) if tok else ""
+    modo = uc.get("modo") or "proprio"
+    sel = lambda v: "selected" if modo == v else ""  # noqa: E731
+    leitura = u["papel"] == "leitura"
+    form_ia = "" if leitura else f"""<form method="post" action="/preferencias/ia"><input type="hidden" name="csrf" value="{CSRF}">
+<label>Minha chave do Gemini <small>(opcional – gere em aistudio.google.com; vazio = manter)</small></label>
+<input class="campo" type="password" name="gemini_key" autocomplete="off">
+{'<label class="ck"><input type="checkbox" name="tirar_chave" value="1"> Remover minha chave e usar a do sistema</label>' if uc.get("gemini_key") else ''}
+<div class="acoes"><button>Salvar</button></div></form>"""
+    corpo = f"""{ESTILO_ADM}<h2>⚙️ Minhas configurações</h2>
+<p class="sub">Valem só para você ({e(lg)}) e para as suas empresas. {"As configurações gerais do sistema ficam na Área do administrador." if eh_admin() else ""}</p>
+<div class="duas-adm"><div>
+<div class="form" style="max-width:none"><h3 style="margin-top:0">🔔 Alertas das minhas empresas</h3>
+<p class="sub">Para onde vão as mensagens do pregoeiro, diligências, prazos e alarmes das empresas que você cadastrou.</p>
+<form method="post" action="/preferencias/alertas"><input type="hidden" name="csrf" value="{CSRF}">
+<label>Enviar para</label><select class="campo" name="modo">
+<option value="proprio" {sel("proprio")}>Meu Telegram / meu celular (recomendado)</option>
+<option value="geral" {sel("geral")}>Telegram geral do sistema (administrador)</option>
+<option value="ambos" {sel("ambos")}>Os dois</option></select>
+<label>Meu chat do Telegram <small>(chat_id)</small></label>
+<input class="campo" name="tg_chat" value="{e(uc.get("tg_chat", ""))}" placeholder="ex.: 123456789">
+<label>Bot próprio <small>(opcional – token do seu bot; vazio = bot do sistema{", já cadastrado: deixe vazio para manter" if uc.get("tg_token") else ""})</small></label>
+<input class="campo" type="password" name="tg_token" autocomplete="off">
+{'<label class="ck"><input type="checkbox" name="tirar_token" value="1"> Remover meu bot e usar o do sistema</label>' if uc.get("tg_token") else ''}
+<label>Tópico ntfy <small>(alarme que toca no celular – app ntfy)</small></label>
+<input class="campo" name="ntfy" value="{e(uc.get("ntfy", ""))}" placeholder="ex.: licitacoes-minhaempresa-x7k2">
+<label class="ck"><input type="checkbox" name="aplicar" value="1" checked> Aplicar agora em todas as minhas empresas ({len(minhas)})</label>
+<p class="sub">Empresas que você cadastrar depois já começam com esses alertas.</p>
+<div class="acoes">{'' if leitura else '<button>Salvar</button>'}</div></form>
+<div class="acoes">{botao("/preferencias/testar", "📨 Testar meus alertas", "sec")}</div>
+<details style="margin-top:10px"><summary><b>Não sei o meu chat_id</b></summary>
+<ol class="sub" style="line-height:1.7"><li>No Telegram, abra {f'<a href="https://t.me/{e(bot)}" target="_blank" rel="noopener">@{e(bot)}</a>' if bot else 'o bot do sistema (peça o nome ao administrador)'} e toque em <b>Iniciar</b>.</li>
+<li>Mande esta mensagem para o bot: <b style="font-size:16px">{e(codigo_telegram(lg))}</b></li>
+<li>Clique no botão abaixo – o sistema encontra só a sua conversa e salva.</li></ol>
+{botao("/preferencias/descobrir", "🔎 Encontrar meu chat")}</details></div>
+</div><div>
+<div class="form" style="max-width:none"><h3 style="margin-top:0">☀️ Meu resumo diário</h3>
+<p class="sub">Um resumo por dia no seu Telegram, só com as suas empresas: prazos, certidões vencendo e o que mudou nos processos.</p>
+<form method="post" action="/preferencias/resumo"><input type="hidden" name="csrf" value="{CSRF}">
+<label class="ck"><input type="checkbox" name="ativo" value="1" {"checked" if uc.get("resumo_ativo") else ""}> Receber o resumo diário</label>
+<label>Hora <small>(0 a 23)</small></label><input class="campo" type="number" min="0" max="23" name="hora" value="{e(str(uc.get("resumo_hora", 7)))}" style="max-width:120px">
+<div class="acoes"><button>Salvar</button><button class="sec" name="acao" value="agora">📨 Enviar agora</button></div></form></div>
+<div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">🤖 Inteligência artificial</h3>
+<p class="sub">{"Você está usando a <b>sua própria chave</b> do Google Gemini: o custo vai para a sua conta Google." if uc.get("gemini_key") else "Você usa a chave de IA do sistema."}
+O texto “Sobre a empresa” e as instruções da análise ficam em <a href="/editais">Editais</a>.</p>
+{form_ia}</div>
+<div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">🔑 Conta</h3>
+<p class="sub">Login <b>{e(lg)}</b> · {tag_papel(u["papel"])}</p><div class="acoes"><a class="btn sec" href="/conta">Trocar minha senha</a>
+<a class="btn sec" href="/empresas">Minhas empresas</a></div></div>
+</div></div>"""
+    return pagina("Minhas configurações", corpo, "/preferencias", aviso, erro)
+
+
 def pg_admin(q, aviso="", erro=False, f=None):
     f = f or {}
     us = usuarios.carregar()
@@ -3404,7 +3492,7 @@ def form_refazer(ch, d):
 
 
 def pg_editais(aviso="", erro=False):
-    tem_chave = bool(CFG_ATUAL().get("GEMINI_API_KEY"))
+    tem_chave = bool(cfg_ia().get("GEMINI_API_KEY"))
     alerta = "" if tem_chave else ('<div class="msg erro">Falta a chave gratuita do Gemini. '
                                    'Cadastre em <a href="/config">Configurações → Inteligência artificial</a>.</div>')
     linhas = "".join(
@@ -3538,6 +3626,71 @@ def minutos_busca():
         return 30.0
 
 
+def telegram_para(tok, chat, texto):
+    if not tok or not chat:
+        return False
+    dados = urllib.parse.urlencode({"chat_id": chat, "text": texto, "parse_mode": "HTML", "disable_web_page_preview": "true"}).encode()
+    try:
+        urllib.request.urlopen(f"https://api.telegram.org/bot{tok}/sendMessage", dados, timeout=20).read()
+        return True
+    except Exception as ex:  # noqa: BLE001
+        print("Telegram (usuário):", ex, flush=True)
+        return False
+
+
+def codigo_telegram(login):
+    cod = usuarios.cfg(login).get("tg_codigo")
+    if not cod:
+        cod = "LT-" + secrets.token_hex(3).upper()
+        usuarios.salvar_cfg(login, {"tg_codigo": cod})
+    return cod
+
+
+def achar_chat(tok, codigo):
+    """Acha o chat de quem mandou o código ao bot (sem mostrar as conversas das outras pessoas)."""
+    if not tok:
+        return None
+    try:
+        with urllib.request.urlopen(f"https://api.telegram.org/bot{tok}/getUpdates", timeout=20) as r:
+            dados = json.load(r)
+    except Exception:  # noqa: BLE001
+        return None
+    for u in reversed(dados.get("result", [])):
+        m = u.get("message") or u.get("channel_post") or {}
+        if codigo.lower() in (m.get("text") or "").lower() and (m.get("chat") or {}).get("id"):
+            return m["chat"]["id"]
+    return None
+
+
+def nome_bot(tok):
+    try:
+        with urllib.request.urlopen(f"https://api.telegram.org/bot{tok}/getMe", timeout=10) as r:
+            return json.load(r).get("result", {}).get("username", "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def resumo_usuarios():
+    """Resumo diário de cada usuário, no Telegram dele, só com as empresas dele."""
+    time.sleep(150)
+    while True:
+        try:
+            agora = datetime.now()
+            hoje = date.today().isoformat()
+            for lg, u in usuarios.carregar().items():
+                c = u.get("cfg") or {}
+                if not (u.get("ativo", True) and c.get("resumo_ativo") and c.get("tg_chat")):
+                    continue
+                if agora.hour != int(c.get("resumo_hora", 7)) or c.get("resumo_ultimo") == hoje:
+                    continue
+                tok = c.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
+                resumo.enviar_partes(lambda t: telegram_para(tok, c["tg_chat"], t), resumo.montar(agora, nomes_do_usuario(lg), lg))
+                usuarios.salvar_cfg(lg, {"resumo_ultimo": hoje})
+        except Exception as ex:  # noqa: BLE001
+            print("Erro no resumo dos usuários:", ex, flush=True)
+        time.sleep(300)
+
+
 def telegram_geral(texto):
     c = CFG_ATUAL()
     tok, chat = c.get("TELEGRAM_TOKEN"), c.get("TELEGRAM_CHAT_ID")
@@ -3595,6 +3748,8 @@ def salvar_empresa(f, eid=None):
         v["BLL_SENHA"] = senha
     if f.get("tg_token", "").strip():
         v["EMPRESA_TELEGRAM_TOKEN"] = f["tg_token"].strip()
+    elif novo and usuarios.cfg(dono).get("tg_token"):
+        v["EMPRESA_TELEGRAM_TOKEN"] = usuarios.cfg(dono)["tg_token"]
     gravar_env(arq, v)
     login_mudou = (senha or antigo.get("BLL_EMAIL") != v["BLL_EMAIL"] or antigo.get("BLL_PERFIL") != v["BLL_PERFIL"]
                    or antigo.get("PLATAFORMA", "bll") != plat or antigo.get("EMPRESA_CNPJ", "") != v["EMPRESA_CNPJ"])
@@ -3707,7 +3862,7 @@ class Painel(BaseHTTPRequestHandler):
         if caminho.startswith(ROTAS_ADMIN) and u["papel"] != "admin":
             return self.negar("Esta área é só do administrador.")
         if self.command == "POST":
-            if u["papel"] == "leitura" and not caminho.startswith(("/mensagens/lidas", "/conta/")):
+            if u["papel"] == "leitura" and not caminho.startswith(("/mensagens/lidas", "/conta/", "/preferencias")):
                 return self.negar("O seu usuário é só de consulta: não pode alterar nada.")
             if (caminho.startswith(ROTAS_IA) and not caminho.endswith("/telegram") or ROTAS_IA_RE.fullmatch(caminho)) and not u.get("ia", True):
                 return self.negar("O seu usuário não tem permissão para usar os recursos com IA (que têm custo). Fale com o administrador.")
@@ -3926,6 +4081,8 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_pergunte())
             if p == "/conta":
                 return self.enviar(pg_conta(AVISOS.get(q.get("ok", ""), "")))
+            if p == "/preferencias":
+                return self.enviar(pg_preferencias(AVISOS.get(q.get("ok", ""), "")))
             if p == "/admin":
                 return self.enviar(pg_admin(q, AVISOS.get(q.get("ok", ""), "")))
             if p == "/admin/auditoria":
@@ -4104,7 +4261,7 @@ class Painel(BaseHTTPRequestHandler):
                 pasta.mkdir(parents=True, exist_ok=True)
                 for n, d in arqs:
                     (pasta / re.sub(r"[^\w.\- ]", "_", n)[:120]).write_bytes(d)
-            pecas.iniciar(pid, CFG_ATUAL(), pedido)
+            pecas.iniciar(pid, cfg_ia(), pedido)
             if declaracoes:
                 return self.redirecionar("/documentos?" + urllib.parse.urlencode({"emp": nome, "proc": campos.get("proc", ""), "leitura": pid}))
             return self.redirecionar(f"/pecas/{pid}")
@@ -4125,7 +4282,7 @@ class Painel(BaseHTTPRequestHandler):
             pasta.mkdir(parents=True, exist_ok=True)
             for nome, dados in arqs:
                 (pasta / re.sub(r"[^\w.\- ]", "_", nome)[:120]).write_bytes(dados)
-            analise.iniciar(ch, CFG_ATUAL(), {"tipo": "upload", "arquivos": arqs, "titulo": titulo,
+            analise.iniciar(ch, cfg_ia(), {"tipo": "upload", "arquivos": arqs, "titulo": titulo,
                                               "extra": campos.get("extra", "").strip()[:2000]})
             return self.redirecionar(f"/analise/{ch}")
         multi = urllib.parse.parse_qs(self.rfile.read(min(tam, 100000)).decode("utf-8"), keep_blank_values=True)
@@ -4141,6 +4298,8 @@ class Painel(BaseHTTPRequestHandler):
             self.auditar("ação " + p, ", ".join(f"{k}={str(v)[:40]}" for k, v in f.items()
                                                 if k not in ("csrf", "nova", "nova2", "atual", "md") and not re.search(r"senha|token|key|pass|secret|chave", k, re.I)))
         try:
+            if p.startswith("/preferencias/"):
+                return self.preferencias(p, f)
             if p in ("/conta/senha", "/admin/senha"):
                 u = usuario_atual()
                 f["volta"] = "admin" if p == "/admin/senha" else ""
@@ -4225,7 +4384,7 @@ class Painel(BaseHTTPRequestHandler):
                 ch = chave_usuario(analise.chave_pncp(cnpj, ano, seq))
                 d = analise.ler(ch)
                 if not d or d.get("status") == "erro":
-                    analise.iniciar(ch, CFG_ATUAL(), {"tipo": "pncp", "cnpj": cnpj, "ano": ano, "seq": seq,
+                    analise.iniciar(ch, cfg_ia(), {"tipo": "pncp", "cnpj": cnpj, "ano": ano, "seq": seq,
                                                       "titulo": f.get("titulo", "").strip()[:200] or ch})
                 return self.redirecionar(f"/analise/{ch}")
             m = re.fullmatch(r"/analise/([a-z0-9-]+)/(telegram|refazer)", p)
@@ -4244,7 +4403,7 @@ class Painel(BaseHTTPRequestHandler):
                         o["arquivos"] = [(x.name, x.read_bytes()) for x in sorted(pasta.glob("*")) if x.is_file()] if pasta.is_dir() else []
                         if not o["arquivos"]:
                             return self.enviar(pg_editais("Os arquivos desta análise não estão mais guardados. Envie de novo.", True))
-                    analise.iniciar(ch, CFG_ATUAL(), o)
+                    analise.iniciar(ch, cfg_ia(), o)
                 return self.redirecionar(f"/analise/{ch}")
             if p == "/mensagens/lidas":
                 if f.get("proc"):
@@ -4266,7 +4425,7 @@ class Painel(BaseHTTPRequestHandler):
                 ch = m.group(1)
                 d_an = analise.ler(ch) or {}
                 pid = pecas.novo_id("hab", ch)
-                pecas.iniciar(pid, CFG_ATUAL(), {"tipo": "habilitacao", "edital": ch, "ctx": {}, "empresa": "",
+                pecas.iniciar(pid, cfg_ia(), {"tipo": "habilitacao", "edital": ch, "ctx": {}, "empresa": "",
                                                  "titulo": d_an.get("titulo", ""), "anexos": []})
                 return self.redirecionar(f"/analise/{ch}#hab")
             if p == "/config/ia_custos":
@@ -4283,7 +4442,7 @@ class Painel(BaseHTTPRequestHandler):
                 try:
                     if not perg:
                         raise RuntimeError("Escreva uma pergunta.")
-                    md, modelo, custo = assistente.perguntar(CFG_ATUAL(), perg, login_atual(), nomes_permitidos(), ve_analise)
+                    md, modelo, custo = assistente.perguntar(cfg_ia(), perg, login_atual(), nomes_permitidos(), ve_analise)
                     res = {"ok": True, "html": analise.md_html(md), "modelo": modelo, "custo": custo_uso(custo)}
                 except Exception as ex:  # noqa: BLE001
                     res = {"ok": False, "erro": str(ex)[:400]}
@@ -4357,7 +4516,7 @@ class Painel(BaseHTTPRequestHandler):
                 anexos = [(x.name, x.read_bytes()) for x in sorted(pasta.glob("*"))] if pasta.is_dir() else []
                 pedido = {k: d.get(k) for k in ("tipo", "empresa", "ctx", "ids_empresa", "proc", "prom", "edital", "pontos", "titulo")}
                 pedido["anexos"] = anexos
-                pecas.iniciar(pid, CFG_ATUAL(), pedido)
+                pecas.iniciar(pid, cfg_ia(), pedido)
                 return self.redirecionar(f"/pecas/{pid}")
             if p == "/documentos/dados":
                 nome = f.get("emp", "")
@@ -4456,6 +4615,69 @@ class Painel(BaseHTTPRequestHandler):
             self.enviar(pagina("Erro", "<h2>Algo deu errado</h2><p>O detalhe ficou registrado no servidor "
                                        "(journalctl -u painel-bll).</p>"), 500)
 
+    def preferencias(self, p, f):
+        lg = login_atual()
+        uc = usuarios.cfg(lg)
+        if p == "/preferencias/alertas":
+            modo = f.get("modo", "proprio") if f.get("modo") in ("proprio", "geral", "ambos") else "proprio"
+            chat = re.sub(r"[^\d-]", "", f.get("tg_chat", ""))[:20]
+            ntfy = re.sub(r"[^\w-]", "", f.get("ntfy", ""))[:64]
+            tok = f.get("tg_token", "").strip()
+            if tok and not re.fullmatch(r"\d{5,12}:[\w-]{30,60}", tok):
+                return self.enviar(pg_preferencias("O token do bot parece errado (formato 123456789:ABC…).", True))
+            if modo in ("proprio", "ambos") and not chat and not ntfy:
+                return self.enviar(pg_preferencias("Para receber no seu Telegram/celular, informe o chat_id ou o tópico ntfy.", True))
+            usuarios.salvar_cfg(lg, {"modo": modo, "tg_chat": chat, "ntfy": ntfy,
+                                     "tg_token": None if f.get("tirar_token") else (tok or uc.get("tg_token") or None)})
+            uc = usuarios.cfg(lg)
+            n = 0
+            if f.get("aplicar"):
+                for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
+                    if (ler_env(a).get("EMPRESA_DONO") or "").lower() != lg:
+                        continue
+                    gravar_env(a, {"ENVIAR_PARA": modo, "EMPRESA_TELEGRAM_CHAT_ID": chat, "EMPRESA_NTFY_TOPICO": ntfy,
+                                   "EMPRESA_TELEGRAM_TOKEN": uc.get("tg_token", "")})
+                    if ativo(a.stem):
+                        sh("systemctl", "restart", f"monitor-bll@{a.stem}")
+                    n += 1
+            return self.redirecionar(f"/preferencias?ok={'pref_aplicadas' if n else 'pref'}")
+        if p == "/preferencias/testar":
+            tok = uc.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
+            res = []
+            if uc.get("tg_chat") and tok:
+                res.append("Telegram: " + ("✅ enviado" if telegram_para(tok, uc["tg_chat"], f"✅ Teste do Licitatudo para <b>{e(lg)}</b>: os alertas das suas empresas chegam aqui.") else "❌ falhou (confira o chat_id e se você mandou uma mensagem ao bot)"))
+            if uc.get("ntfy"):
+                agenda.ntfy({"NTFY_TOPICO": uc["ntfy"]}, "Teste do Licitatudo", "Os alarmes das suas empresas tocam aqui.")
+                res.append("ntfy: enviado (veja no app)")
+            return self.enviar(pg_preferencias(" · ".join(res) or "Cadastre o chat_id do Telegram ou o tópico ntfy primeiro.", not res))
+        if p == "/preferencias/descobrir":
+            tok = uc.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
+            chat = achar_chat(tok, codigo_telegram(lg))
+            if not chat:
+                return self.enviar(pg_preferencias(f"Não achei a mensagem “{codigo_telegram(lg)}”. Mande esse código ao bot no Telegram e clique de novo.", True))
+            usuarios.salvar_cfg(lg, {"tg_chat": str(chat)})
+            return self.redirecionar("/preferencias?ok=pref_chat")
+        if p == "/preferencias/ia":
+            k = f.get("gemini_key", "").strip()
+            if k and not re.fullmatch(r"[\w-]{30,60}", k):
+                return self.enviar(pg_preferencias("A chave do Gemini parece errada.", True))
+            usuarios.salvar_cfg(lg, {"gemini_key": None if f.get("tirar_chave") else (k or uc.get("gemini_key") or None)})
+            return self.redirecionar("/preferencias?ok=pref")
+        if p == "/preferencias/resumo":
+            try:
+                hora = max(0, min(23, int(f.get("hora", "7") or 7)))
+            except ValueError:
+                hora = 7
+            usuarios.salvar_cfg(lg, {"resumo_ativo": f.get("ativo") == "1", "resumo_hora": hora})
+            if f.get("acao") == "agora":
+                tok = uc.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
+                if not (uc.get("tg_chat") and tok):
+                    return self.enviar(pg_preferencias("Cadastre o seu Telegram em “Alertas” primeiro.", True))
+                resumo.enviar_partes(lambda t: telegram_para(tok, uc["tg_chat"], t), resumo.montar(None, nomes_do_usuario(lg), lg))
+                return self.redirecionar("/preferencias?ok=pref_resumo")
+            return self.redirecionar("/preferencias?ok=pref")
+        return self.redirecionar("/preferencias")
+
     def log_message(self, *a):
         pass
 
@@ -4463,6 +4685,7 @@ class Painel(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     print(f"Painel em http://{HOST}:{PORTA}")
     migrar_donos()
+    threading.Thread(target=resumo_usuarios, daemon=True).start()
     threading.Thread(target=buscas.ciclo, args=(telegram_geral, minutos_busca), daemon=True).start()
     threading.Thread(target=vigiar, daemon=True).start()
     threading.Thread(target=backup.ciclo, args=(CFG_ATUAL, telegram_geral), daemon=True).start()
