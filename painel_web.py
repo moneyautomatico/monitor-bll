@@ -1822,7 +1822,21 @@ amanhã às 10h”, “5 dias úteis para regularização”) e os que você cad
 <div class="kp-ag"><div><b style="color:{COR_PRAZO['atrasado']}">{len(grupos['atrasado'])}</b>atrasados</div>
 <div><b style="color:{COR_PRAZO['hoje']}">{len(grupos['hoje'])}</b>hoje</div>
 <div><b style="color:#b8860b">{len(grupos['semana'])}</b>próximos 7 dias</div><div><b>{len(grupos['depois'])}</b>depois</div></div>
-<div class="acoes">{sel_emp}</div>
+<div class="acoes">{sel_emp}<input class="campo ag-busca" type="search" placeholder="🔍 Pesquisar prazo, processo, órgão, empresa…"
+ oninput="buscarPrazo(this.value)" style="flex:1;min-width:240px"><span class="sub" id="ag-cont"></span></div>
+<script>
+function semAcento(t){{return (t||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase();}}
+function buscarPrazo(v){{const t=semAcento(v).trim(); let total=0;
+ document.querySelectorAll('.ag-grupo').forEach(g=>{{let n=0;
+  g.querySelectorAll('.ag').forEach(c=>{{if(c.dataset.t===undefined)c.dataset.t=semAcento(c.textContent);
+   const ok=!t||t.split(/\\s+/).every(p=>c.dataset.t.includes(p)); c.style.display=ok?'':'none'; if(ok)n++;}});
+  const h=g.querySelector('summary h3'); if(h){{if(h.dataset.r===undefined)h.dataset.r=h.textContent.replace(/\\s*\\(\\d+\\)\\s*$/,'');
+   h.textContent=h.dataset.r+' ('+n+')';}} if(t&&n)g.open=true; total+=n;}});
+ document.getElementById('ag-cont').textContent=t?total+' encontrado(s)':'';
+ try{{sessionStorage.setItem('agBusca',v);}}catch(e){{}}}}
+document.addEventListener('DOMContentLoaded',()=>{{try{{const v=sessionStorage.getItem('agBusca');
+ if(v){{const i=document.querySelector('.ag-busca'); i.value=v; buscarPrazo(v);}}}}catch(e){{}}}});
+</script>
 <details class="form" style="max-width:none;margin:10px 0"><summary><b>➕ Novo prazo</b></summary>
 <form method="post" action="/agenda/novo"><input type="hidden" name="csrf" value="{CSRF}">
 <label>O quê</label><input class="campo" name="titulo" required placeholder="ex.: Enviar proposta ajustada – PE 033/2026">
