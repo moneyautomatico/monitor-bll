@@ -768,7 +768,78 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
-{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{'' if aba == "/pergunte" else BOTAO_IA}</body></html>"""
+{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
+setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();</script></body></html>"""
+
+
+PRESENCA = {}   # chave do aparelho -> {login, area, pagina, desde, visto, visivel, ip, aparelho}
+ONLINE_SEG = 120
+NOMES_PAGINA = [("/admin/empresas", "Admin · Empresas"), ("/admin/auditoria", "Admin · Auditoria"), ("/admin/usuario", "Admin · Editar usuário"),
+                ("/admin", "Admin · Usuários"), ("/mensagens", "Mensagens"), ("/processos", "Processos"), ("/classificacao", "Classificação"),
+                ("/disputa", "🎯 Disputa"), ("/agenda", "Agenda"), ("/certidoes", "Certidões"), ("/concorrentes", "Concorrentes"),
+                ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/analise", "Análise de edital"),
+                ("/documentos", "Declarações"), ("/propostas", "Proposta comercial"), ("/pecas", "Peças com IA"), ("/empresas", "Empresas"),
+                ("/preferencias", "⚙️ Minhas configurações"), ("/meu-consumo", "Meu consumo de IA"), ("/pergunte", "Pergunte ao Licitatudo"),
+                ("/conta", "Minha conta"), ("/config", "Configurações gerais"), ("/consumo", "Consumo de IA")]
+
+
+def nome_pagina(url):
+    u = urllib.parse.urlparse(url or "/")
+    q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
+    nome = next((n for pre, n in NOMES_PAGINA if u.path.startswith(pre)), "Início" if u.path in ("", "/") else u.path)
+    det = q.get("processo") or q.get("emp") or q.get("q") or ""
+    return nome + (f" – {det[:40]}" if det else "")
+
+
+def aparelho(ua):
+    ua = ua or ""
+    nav = next((n for k, n in (("Edg/", "Edge"), ("OPR/", "Opera"), ("Firefox/", "Firefox"), ("Chrome/", "Chrome"), ("Safari/", "Safari")) if k in ua), "navegador")
+    so = next((n for k, n in (("Android", "Android"), ("iPhone", "iPhone"), ("iPad", "iPad"), ("Windows", "Windows"), ("Mac OS", "Mac"), ("Linux", "Linux")) if k in ua), "")
+    return f"{nav}{' · ' + so if so else ''}"
+
+
+def marcar_presenca(handler, url, visivel=True):
+    u = usuario_atual()
+    if not u:
+        return
+    tok = handler.tok()
+    chave = _h(tok)[:16] if tok else handler.ip()
+    agora = time.time()
+    antigo = PRESENCA.get(chave) or {}
+    pag = url if not url.startswith("/ping") else antigo.get("url", "/")
+    PRESENCA[chave] = {"login": u["login"], "nome": u.get("nome", ""), "area": "admin" if getattr(_REQ, "admin", False) else "painel",
+                       "url": pag, "desde": antigo.get("desde", agora) if antigo.get("url") == pag else agora, "visto": agora,
+                       "visivel": visivel, "ip": handler.ip(), "aparelho": aparelho(handler.headers.get("User-Agent", ""))}
+    if len(PRESENCA) > 500:   # limpa os antigos
+        for k in [k for k, v in PRESENCA.items() if agora - v["visto"] > 3600]:
+            PRESENCA.pop(k, None)
+
+
+def online_agora():
+    agora = time.time()
+    return sorted((v for v in PRESENCA.values() if agora - v["visto"] <= ONLINE_SEG), key=lambda v: (v["login"], -v["visto"]))
+
+
+def tempo_txt(seg):
+    seg = int(seg)
+    return f"{seg} s" if seg < 60 else f"{seg // 60} min" if seg < 3600 else f"{seg // 3600} h {seg % 3600 // 60} min"
+
+
+def html_online():
+    on = online_agora()
+    agora = time.time()
+    pessoas = len({v["login"] for v in on})
+    linhas = "".join(
+        f'<tr><td><b>{e(v["login"])}</b><div class="sub">{e(v["nome"])}</div></td>'
+        f'<td>{"🟢" if v["visivel"] else "🟡"} {e(nome_pagina(v["url"]))}'
+        f'<div class="sub">{"na tela" if v["visivel"] else "aba em segundo plano"}{" · área do admin" if v["area"] == "admin" else ""}</div></td>'
+        f'<td>{tempo_txt(agora - v["desde"])}</td><td class="ocultar">{e(v["aparelho"])}<div class="sub">{e(v["ip"])}</div></td>'
+        f'<td class="ocultar">há {tempo_txt(agora - v["visto"])}</td></tr>' for v in on)
+    return (f'<div class="kpis" style="margin:6px 0"><div class="kpi"><div class="v">🟢 {pessoas}</div><div class="l">pessoa(s) online agora</div></div>'
+            f'<div class="kpi"><div class="v">{len(on)}</div><div class="l">aparelho(s)/aba(s) abertos</div></div></div>'
+            f'<table><tr><th>Usuário</th><th>Página</th><th>Nesta página há</th><th class="ocultar">Aparelho</th><th class="ocultar">Último sinal</th></tr>'
+            f'{linhas or "<tr><td colspan=5>Ninguém online agora.</td></tr>"}</table>'
+            f'<p class="sub">Online = sinal nos últimos {ONLINE_SEG // 60} min. 🟡 = a aba está aberta, mas a pessoa está em outra janela. Atualiza a cada 20 s.</p>')
 
 
 def pagina_admin(titulo, corpo, aviso="", erro=False):
@@ -779,7 +850,8 @@ def pagina_admin(titulo, corpo, aviso="", erro=False):
 {TEMA_JS}<style>{ESTILO}header{{background:linear-gradient(90deg,#2a1f4d,#3b2a6b)!important}}</style></head><body>
 <header><b>🛡️ Licitatudo · Administração</b><nav></nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>
 <a class="sair" href="/" target="_blank" title="Abrir o painel de uso diário">↗ Abrir o painel</a>
-<span class="sair" style="cursor:default">👤 {e(u["login"]) if u else ""}</span><a class="sair" href="/admin/sair">Sair</a></header><main>{msg}{corpo}</main></body></html>"""
+<span class="sair" style="cursor:default">👤 {e(u["login"]) if u else ""}</span><a class="sair" href="/admin/sair">Sair</a></header><main>{msg}{corpo}</main><script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
+setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();</script></body></html>"""
 
 
 def tag_status(emp):
@@ -3183,6 +3255,8 @@ def pg_admin(q, aviso="", erro=False, f=None):
 <button>Trocar minha senha</button></form>
 <p class="sub" style="margin:6px 0 0">Mínimo 8 caracteres com letras e números (recomendado 12+). Seu acesso exclusivo de administrador:
 <a href="/admin/entrar"><b>/admin/entrar</b></a> – guarde nos favoritos.</p></div>
+<h3>🟢 Quem está online agora</h3><div id="online">{html_online()}</div>
+<script>setInterval(()=>fetch('/admin/online',{{credentials:'same-origin',cache:'no-store'}}).then(r=>r.ok?r.text():null).then(t=>{{if(t)document.getElementById('online').innerHTML=t;}}).catch(()=>{{}}),20000);</script>
 <div class="duas-adm"><div><h3>Usuários</h3>
 <table><tr><th>Login</th><th>Papel</th><th class="ocultar">Empresas</th><th>IA</th><th>Bot do Telegram</th><th class="ocultar">Último acesso</th><th>Sessões</th><th class="ocultar">IA no mês</th><th></th></tr>
 {linhas}</table>
@@ -4602,6 +4676,7 @@ class Painel(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if caminho == "/sair":
+            PRESENCA.pop(_h(self.cookie("lt_sessao"))[:16], None)
             lg = sessao_usuario(self.cookie("lt_sessao"))
             if lg:
                 usuarios.auditar(lg, self.ip(), "saiu")
@@ -4616,6 +4691,25 @@ class Painel(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         q = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
         p = url.path.rstrip("/") or "/"
+        if p == "/ping":   # sinal de "estou nesta página" (a cada 40 s e ao trocar de aba)
+            alvo = q.get("p", "/")
+            marcar_presenca(self, alvo if alvo.startswith("/") and not alvo.startswith("//") else "/", q.get("v", "1") != "0")
+            self.send_response(204)
+            self.cabecalhos_seguranca()
+            self.end_headers()
+            return
+        if p == "/admin/online":
+            dados = html_online().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(dados)))
+            self.cabecalhos_seguranca()
+            self.end_headers()
+            self.wfile.write(dados)
+            return
+        if not p.startswith(("/mensagens/processo", "/mensagens/busca", "/consumo.csv", "/meu-consumo.csv", "/backup/")) \
+                and not p.endswith(("/docx", "/arquivo", "/pacote")):
+            marcar_presenca(self, self.path)
         if p.startswith("/admin/empresas"):
             p = p[6:]
         try:
