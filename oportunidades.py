@@ -278,7 +278,7 @@ def atualizar(enviar=None):
 
         def pesquisa(termo):
             res = []
-            for pag in (1, 2):
+            for pag in range(1, 11):   # até 500 por termo
                 its, total, erro = buscas.buscar({"q": termo, "status": "recebendo_proposta", "ufs": ufs,
                                                   "excluir": cfg.get("excluir", "")}, pag, 50)
                 res += its

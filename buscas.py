@@ -99,6 +99,38 @@ def buscar(f, pagina=1, tam=50):
     return itens, total, erro
 
 
+_CACHE = {}
+
+
+def buscar_tudo(f, limite=3000):
+    """Todas as páginas da busca (até 'limite' resultados, por segurança), em paralelo. Guarda 10 min em memória."""
+    if f.get("itens"):
+        limite = min(limite, 300)  # conferir dentro dos itens é lento: no máximo 300
+    chave = json.dumps(f, sort_keys=True, ensure_ascii=False)
+    agora = time.time()
+    c = _CACHE.get(chave)
+    if c and agora - c[0] < 600:
+        return c[1]
+    itens, total, erro = buscar(f, 1, 50)
+    vistos = {it.get("id") for it in itens}
+    paginas = min((total + 49) // 50, (limite + 49) // 50)
+    if paginas > 1 and not (erro and not itens):
+        with ThreadPoolExecutor(6) as ex:
+            for its, _, err in ex.map(lambda pg: buscar(f, pg, 50), range(2, paginas + 1)):
+                erro = erro or err
+                for it in its:
+                    if it.get("id") not in vistos:
+                        vistos.add(it.get("id"))
+                        itens.append(it)
+    itens.sort(key=lambda it: it.get("data_publicacao_pncp") or "", reverse=True)
+    res = (itens[:limite], total, erro)
+    if not erro:
+        _CACHE[chave] = (agora, res)
+        for k in [k for k, v in _CACHE.items() if agora - v[0] > 600]:
+            _CACHE.pop(k, None)
+    return res
+
+
 def passa(it, f):
     """Filtros que o PNCP não faz (ou que reforçamos aqui)."""
     if f.get("ufs") and it.get("uf") not in f["ufs"]:

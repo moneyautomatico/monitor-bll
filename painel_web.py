@@ -1516,17 +1516,17 @@ def pg_buscar(qs, aviso=""):
     corpo = "<h2>Buscar licitações</h2>" + form_busca(f)
     feita = any(k in qs for k in ("q", "uf", "municipio", "modalidade", "status"))
     if feita:
-        itens, total, erro = buscas.buscar(f, pag)
+        itens, total, erro = buscas.buscar_tudo(f)
         if erro:
             corpo += f'<div class="msg erro">{e(erro)}</div>'
         cards = ""
-        for it in itens:
+        for n_card, it in enumerate(itens):
             achados = "".join(f'<li><b>Item {e(str(x.get("numeroItem")))}</b>: {e((x.get("descricao") or "")[:180])}'
                               f' <span class="sub">({e(str(x.get("quantidade") or ""))} {e(x.get("unidadeMedida") or "")})</span></li>'
                               for x in it.get("_itens_achados", []))
             cnpj, ano, seq = buscas.ref(it)
             origem = it.get("link_sistema_origem") or ""
-            cards += f"""<div class="card" data-lid="{e(str(it.get('id') or ''))}"><div class="sub">{e(it.get('modalidade_licitacao_nome') or '')} · {e(it.get('title') or '')}
+            cards += f"""<div class="card{' lote-oculto' if n_card >= LOTE_CARDS else ''}" data-lid="{e(str(it.get('id') or ''))}"><div class="sub">{e(it.get('modalidade_licitacao_nome') or '')} · {e(it.get('title') or '')}
 · publicada {e(buscas.data_br(it.get('data_publicacao_pncp')))}</div>
 <div class="nome" style="margin:4px 0">{e(it.get('orgao_nome') or '')}</div>
 <div class="sub"><b>{e(it.get('municipio_nome') or '')}/{e(it.get('uf') or '')}</b> · {e(it.get('unidade_nome') or '')}</div>
@@ -1539,19 +1539,14 @@ def pg_buscar(qs, aviso=""):
 {botao_analisar(cnpj, ano, seq, f"{it.get('orgao_nome') or ''} – {it.get('title') or ''} – {it.get('municipio_nome') or ''}/{it.get('uf') or ''}")}
 {f'<a class="btn sec" target="_blank" rel="noopener" href="{e(origem)}">Sistema de origem</a>' if origem.startswith("http") else ''}</div></div>"""
         base = urllib.parse.urlencode([(k, v) for k, vs in qs.items() if k != "pagina" for v in vs])
-        nav = '<div class="acoes">'
-        if pag > 1:
-            nav += f'<a class="btn sec" href="/buscar?{base}&pagina={pag - 1}">← Anterior</a>'
-        nav += f'<span class="sub" style="align-self:center">Página {pag}</span>'
-        if total > pag * 50:
-            nav += f'<a class="btn sec" href="/buscar?{base}&pagina={pag + 1}">Próxima →</a>'
-        nav += "</div>"
+        nav = mais_cards(len(itens))
         salvar = f"""<form method="post" action="/buscas/salvar" class="linha" style="margin-top:10px">
 <input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="filtros" value="{e(json.dumps(f, ensure_ascii=False))}">
 <input name="nome" placeholder="Nome da busca (ex.: Limpeza SP)" value="{e(f['q'][:40])}">
 <button>🔔 Salvar busca e avisar novas no Telegram</button></form>"""
-        corpo += (f'<h3>{len(itens)} resultado(s) nesta página'
-                  f'{" (de cerca de " + str(total) + " no PNCP)" if total else ""}</h3>' + salvar +
+        corpo += (f'<h3>{len(itens)} resultado(s)'
+                  f'{" (o PNCP indica cerca de " + str(total) + ")" if total > len(itens) else ""}'
+                  f'{" – mostrando as 3.000 mais recentes" if len(itens) >= 3000 else ""}</h3>' + salvar +
                   mapa_busca(itens, qs) +
                   f'<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr))">'
                   f'{cards or "<p>Nada encontrado com esses filtros.</p>"}</div>' + nav)
@@ -1639,7 +1634,7 @@ def html_mapa(lista, sedes, base, raio, link, rot_nivel, titulo="Mapa das oportu
                       "url": link(cidade=f'{g["cidade"]}/{g["uf"]}', pagina=""),
                       "it": [{"o": r.get("orgao", "")[:70], "t": (r.get("objeto") or r.get("titulo") or "")[:110],
                               "v": buscas.moeda(r.get("valor")), "l": r.get("link", ""), "nv": r.get("nivel"),
-                              "f": buscas.data_br(r.get("fim")), "id": str(r.get("id") or "")} for r in g["itens"][:15]]})
+                              "f": buscas.data_br(r.get("fim")), "id": str(r.get("id") or "")} for r in g["itens"]]})
     bases = [{"n": n, "c": s["cidade"], "lat": s["pt"][0], "lon": s["pt"][1], "on": n == base}
              for n, s in sedes.items() if s.get("pt")]
     dados = json.dumps({"pinos": pinos, "bases": bases, "raio": raio, "base": base}, ensure_ascii=False).replace("</", "<\\/")
@@ -1729,7 +1724,7 @@ function criar(){{
 // clique numa licitação do pino: vai até o card dela na lista (e destaca); se não estiver nesta página, abre o edital
 window.verLicitacao=function(id,lnk){{
  const c=[...document.querySelectorAll('[data-lid]')].find(x=>x.classList.contains('card')&&x.dataset.lid===id);
- if(c){{ if(box.classList.contains('max'))mapaMax(); if(mapa)mapa.closePopup();
+ if(c){{ c.classList.remove('lote-oculto'); if(box.classList.contains('max'))mapaMax(); if(mapa)mapa.closePopup();
   c.scrollIntoView({{behavior:'smooth',block:'center'}}); c.classList.remove('destaque'); void c.offsetWidth; c.classList.add('destaque'); return;}}
  if(lnk)window.open(lnk,'_blank','noopener');}};
 document.addEventListener('click',ev=>{{
@@ -1798,10 +1793,7 @@ def pg_oportunidades(q, aviso=""):
     lista.sort(key=lambda r: (r.get("achada_em", "")[:10] == hoje, r.get("pontos", 0), r.get("publicada", "")), reverse=True)
     if raio and ponto_base:
         lista.sort(key=lambda r: r.get("_km") or 0)
-    pag = max(1, int(re.sub(r"\D", "", q.get("pagina", "1")) or 1))
-    total_pag = max(1, (len(lista) + 39) // 40)
-    pag = min(pag, total_pag)
-    trecho = lista[(pag - 1) * 40: pag * 40]
+    trecho = lista   # todas; a tela mostra de 60 em 60 ("Mostrar mais")
 
     def link(**k):
         base = {"f": filtro, "emp": emp_f, "uf": uf_f, "raio": str(raio or ""), "base": q.get("base", ""), "cidade": cidade_f}
@@ -1843,13 +1835,13 @@ def pg_oportunidades(q, aviso=""):
                    if cidade_f else "")
     mapa = html_mapa(lista, sedes, base, raio, link, ROT_NIVEL)
     cards = ""
-    for r in trecho:
+    for n_card, r in enumerate(trecho):
         rot, cor = ROT_NIVEL.get(r.get("nivel"), ROT_NIVEL["baixo"])
         nova = r.get("achada_em", "")[:10] == hoje
         acao_desc = (botao(f"/oportunidades/{r['id']}/voltar", "Restaurar", "sec") if r.get("descartado")
                      else botao(f"/oportunidades/{r['id']}/descartar", "Descartar", "sec"))
         origem = r.get("origem") or ""
-        cards += f"""<div class="card" data-lid="{e(str(r.get('id') or ''))}" style="border-left-color:{cor}">
+        cards += f"""<div class="card{' lote-oculto' if n_card >= LOTE_CARDS else ''}" data-lid="{e(str(r.get('id') or ''))}" style="border-left-color:{cor}">
 <div class="sub"><b style="color:{cor}">{rot}</b> · {r.get('pontos', 0)} pts {'<span class="tag-nova">NOVA</span>' if nova else ''}
 · {e(r.get('modalidade') or '')} · {e(r.get('titulo') or '')}</div>
 <div class="nome" style="margin:4px 0">{e(r.get('orgao') or '')}</div>
@@ -1865,11 +1857,7 @@ def pg_oportunidades(q, aviso=""):
 {botao_analisar(r.get('cnpj'), r.get('ano'), r.get('seq'), f"{r.get('orgao')} – {r.get('titulo')} – {r.get('municipio')}/{r.get('uf')}")}
 {f'<a class="btn sec" target="_blank" rel="noopener" href="{e(origem)}">Sistema de origem</a>' if origem.startswith("http") else ''}
 {acao_desc}</div></div>"""
-    nav = ""
-    if total_pag > 1:
-        nav = ('<div class="acoes">' + (f'<a class="btn sec" href="{link(pagina=pag - 1)}">← Anterior</a>' if pag > 1 else "") +
-               f'<span class="sub" style="align-self:center">Página {pag} de {total_pag}</span>' +
-               (f'<a class="btn sec" href="{link(pagina=pag + 1)}">Próxima →</a>' if pag < total_pag else "") + "</div>")
+    nav = mais_cards(len(trecho))
     # perfil
     blocos = ""
     for nome, pf in d.get("perfis", {}).items():
@@ -1923,6 +1911,25 @@ Avisar no Telegram geral as novas com encaixe alto</label>
     return pagina("Oportunidades", corpo, "/oportunidades", aviso)
 
 
+LOTE_CARDS = 60
+
+
+def mais_cards(total):
+    """Botão 'Mostrar mais' (todas as licitações já vêm na página; a tela revela de 60 em 60)."""
+    if total <= LOTE_CARDS:
+        return ""
+    return (f'<div class="acoes" id="mais-wrap"><button type="button" class="sec" id="mais-bt" onclick="maisCards()">'
+            f'⬇ Mostrar mais {LOTE_CARDS} (faltam {total - LOTE_CARDS})</button>'
+            f'<button type="button" class="sec" onclick="maisCards(true)">Mostrar todas ({total})</button></div>'
+            '<style>.card.lote-oculto{display:none}</style><script>'
+            'function maisCards(tudo){const h=[...document.querySelectorAll(".card.lote-oculto")];'
+            f'h.slice(0,tudo?h.length:{LOTE_CARDS}).forEach(c=>c.classList.remove("lote-oculto"));'
+            'const r=document.querySelectorAll(".card.lote-oculto").length;'
+            'if(!r)document.getElementById("mais-wrap").remove();'
+            f'else document.getElementById("mais-bt").textContent="⬇ Mostrar mais "+Math.min({LOTE_CARDS},r)+" (faltam "+r+")";}}'
+            '</script>')
+
+
 def mapa_busca(itens, qs):
     """Mapa com os resultados desta página da busca (um pino por cidade, azul)."""
     lista = []
@@ -1943,7 +1950,7 @@ def mapa_busca(itens, qs):
         base = [(k, v) for k, vs in qs.items() if k not in ("pagina", "municipio", "uf") for v in vs]
         base += [("municipio", cid), ("uf", uf)]
         return "/buscar?" + urllib.parse.urlencode(base)
-    return html_mapa(lista, sedes, "", 0, link, ROT_NIVEL, "Mapa dos resultados (esta página)")
+    return html_mapa(lista, sedes, "", 0, link, ROT_NIVEL, "Mapa dos resultados")
 
 
 def busca_para_qs(b):
