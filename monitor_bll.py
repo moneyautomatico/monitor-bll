@@ -2170,7 +2170,7 @@ def pcp_classificacao(db, page, p, primeira_vez):
         lider = next((x for x in it["ranking"] if x["pos"] == 1), None)
         pos = nossa["pos"] if nossa else None
         db.execute("INSERT OR REPLACE INTO classificacao VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                   (chave, p["processo"], p["promotor"], n, it["descricao"][:200], "Ranking (PDF)",
+                   (chave, p["processo"], p["promotor"], n, it["descricao"][:200], (p.get("situacao") or "").strip() or "Ranking (PDF)",
                     lider["nome"] if lider else "", moeda_br(lider["valor"]) if lider else "",
                     json.dumps(rk, ensure_ascii=False), pos, moeda_br(nossa["valor"]) if nossa else "", time.time(), agora))
         if ant and not primeira_vez and nossa and (pos != ant[0] or moeda_br(nossa["valor"]) != ant[1]):

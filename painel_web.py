@@ -1171,7 +1171,17 @@ def classif(eid, processo=None, promotor=None):
             return int(re.sub(r"\D", "", x) or 0)
         except ValueError:
             return 0
-    return sorted(linhas, key=lambda r: num(r[2]))
+    # Portal de Compras: o PDF não traz a fase; mostra a situação atual do processo
+    sit = {}
+    out = []
+    for r in linhas:
+        if (r[4] or "") == "Ranking (PDF)":
+            k = (r[0], r[1])
+            if k not in sit:
+                sit[k] = situacao_proc(eid, r[0], r[1])
+            r = r[:4] + (sit[k] or r[4],) + r[5:]
+        out.append(r)
+    return sorted(out, key=lambda r: num(r[2]))
 
 
 def nlote(n):
