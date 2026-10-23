@@ -485,6 +485,7 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .mc-dir{background:var(--card);border:1px solid var(--borda);border-radius:12px;display:flex;flex-direction:column;min-height:0;min-width:0}
 .cv-vazio{padding:40px;text-align:center;color:var(--sub)}
 .cv-cab{background:#173f2c;color:#fff;padding:14px 18px;border-radius:12px 12px 0 0;font-size:13.5px}.cv-cab .sub{color:#cfe3d7}
+.mc-emp{flex-basis:100%;width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--borda);border-radius:8px;background:var(--card);color:inherit;font-size:14px}
 .cv-classif{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;background:var(--nova);border-bottom:1px solid var(--borda)}
 .cl-tit{font-weight:800;margin-right:4px}.cl-chip{border-radius:999px;padding:4px 12px;font-size:14px;border:1px solid var(--borda);background:var(--card);cursor:default}
 .cl-chip.c-1{background:#2e7d32;color:#fff;border-color:#2e7d32}.cl-chip.c-23{background:#f9a825;color:#1b1b1b;border-color:#f9a825}
@@ -956,6 +957,11 @@ def pg_chat(q):
             '<button class="aba" data-f="naolidos" onclick="aba(this)">Não lidos</button>'
             '<button class="aba" data-f="urgentes" onclick="aba(this)">Urgentes</button>' +
             "".join(f'<button class="aba" data-f="plat:{e(pl)}" onclick="aba(this)">{e(pl)}</button>' for pl in plats))
+    nomes_emp = sorted({g["nome"] for g in lista})
+    menu_emp = ('<select class="mc-emp" onchange="filtrar();try{sessionStorage.setItem(\'emp\',this.value)}catch(e){}" title="Filtrar por empresa">'
+                f'<option value="">🏢 Todas as empresas ({len(lista)})</option>' +
+                "".join(f'<option value="{e(n)}">{e(n)} ({sum(1 for g in lista if g["nome"] == n)})</option>' for n in nomes_emp) +
+                "</select>")
     sel = q.get("processo") and (q.get("eid", ""), q.get("processo", ""), q.get("promotor", ""))
     itens = ""
     for g in lista:
@@ -964,9 +970,9 @@ def pg_chat(q):
         nl = nao_lido(g, mapa)
         quando = g["ultima"].strftime("%d/%m/%Y - %H:%M") if g["ultima"] != datetime.min else "—"
         url = "/mensagens/processo?" + urllib.parse.urlencode({"eid": g["eid"], "processo": g["processo"], "promotor": g["promotor"]})
-        busca_txt = f'{g["processo"]} {g["promotor"]} {g["nome"]} {g["plat"]}'.lower()
+        busca_txt = f'{g["processo"]} {g["promotor"]}'.lower()   # empresa tem filtro próprio (menu abaixo das plataformas)
         on = sel == (g["eid"], g["processo"], g["promotor"])
-        itens += (f'<a class="it{" on" if on else ""}" href="#" data-url="{e(url)}" data-plat="{e(g["plat"])}" data-nl="{1 if nl else 0}" '
+        itens += (f'<a class="it{" on" if on else ""}" href="#" data-url="{e(url)}" data-plat="{e(g["plat"])}" data-emp="{e(g["nome"])}" data-nl="{1 if nl else 0}" '
                   f'data-urg="{1 if urg else 0}" data-busca="{e(busca_txt)}" onclick="return abrir(this)">'
                   f'<div class="it-l1"><b>{e(g["processo"])}</b><span class="it-data">{e(quando)}'
                   f'<i class="ponto"{"" if nl else " hidden"}></i></span></div>'
@@ -982,14 +988,15 @@ def pg_chat(q):
 <div class="ferr">
 <a class="btn sec" href="/mensagens?vista=lista" title="Ver todas as mensagens em tabela">☰</a></div></div>
 
-<input class="mc-busca" placeholder="Buscar pregão, órgão ou empresa…" oninput="filtrar()">
-<div class="abas">{abas}</div>
+<input class="mc-busca" placeholder="Buscar pregão ou órgão…" oninput="filtrar()">
+<div class="abas">{abas}{menu_emp}</div>
 <div class="mc-lista" id="lista">{itens or '<div class="sub" style="padding:14px">Nenhuma mensagem ainda.</div>'}</div></aside>
 <section class="mc-dir"><div id="conversa">{direita}</div></section></div>
 <script>
 let filtroAba='todos';
 function filtrar(){{const t=document.querySelector('.mc-busca').value.toLowerCase();
- document.querySelectorAll('#lista .it').forEach(a=>{{let ok=!t||a.dataset.busca.includes(t);
+ const em=(document.querySelector('.mc-emp')||{{}}).value||'';
+ document.querySelectorAll('#lista .it').forEach(a=>{{let ok=(!t||a.dataset.busca.includes(t))&&(!em||a.dataset.emp===em);
   if(filtroAba==='naolidos')ok=ok&&a.dataset.nl==='1'; else if(filtroAba==='urgentes')ok=ok&&a.dataset.urg==='1';
   else if(filtroAba.startsWith('plat:'))ok=ok&&a.dataset.plat===filtroAba.slice(5);
   a.style.display=ok?'':'none';}});}}
@@ -1084,6 +1091,8 @@ function irNovas(b){{const s=document.querySelector('#conversa select.fm[data-ca
  const n=document.querySelector('#conversa .cm.nova[data-cat="'+b.dataset.cat+'"][data-sub="'+b.dataset.sub+'"]'); if(n)n.scrollIntoView({{block:'center',behavior:'smooth'}});}}
 function restaurarFiltro(c,url){{try{{const r=sessionStorage.getItem('filtro|'+url); if(!r)return; const [cat,v]=r.split('|');
  const s=c.querySelector('select.fm[data-cat="'+cat+'"]'); if(s&&[...s.options].some(o=>o.value===v)){{s.value=v; escolherMenu(s);}}}}catch(e){{}}}}
+try{{const em=sessionStorage.getItem('emp'); const se=document.querySelector('.mc-emp');
+ if(em&&se&&[...se.options].some(o=>o.value===em)){{se.value=em; filtrar();}}}}catch(e){{}}
 try{{const f=sessionStorage.getItem('aba'); if(f){{const b=document.querySelector('.aba[data-f="'+f+'"]'); if(b)aba(b);}}}}catch(e){{}}
 (function(){{const a=document.querySelector('#lista .it.on'); if(a){{a.scrollIntoView({{block:'center'}});
  restaurarFiltro(document.getElementById('conversa'),a.dataset.url);}}}})();
