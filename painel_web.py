@@ -26,6 +26,7 @@ from pathlib import Path
 
 import agenda
 import analise
+import assistente
 import backup
 import urgencia
 import buscas
@@ -563,6 +564,12 @@ ABAS = [("/", "Início"), ("/mensagens", "Mensagens"), ("/processos", "Processos
         ("/documentos", "Documentos"), ("/empresas", "Empresas"), ("/config", "⚙️")]
 
 
+BOTAO_IA = ('<a href="/pergunte" class="fab-ia" title="Pergunte ao Licitatudo (IA)">💬<span>Pergunte</span></a>'
+            '<style>.fab-ia{position:fixed;right:18px;bottom:18px;z-index:1500;background:#1b5e20;color:#fff;text-decoration:none;'
+            'border-radius:999px;padding:12px 16px;font-weight:700;box-shadow:0 6px 18px rgba(0,0,0,.3);display:flex;gap:6px;align-items:center}'
+            '.fab-ia:hover{background:#2e7d32}@media print{.fab-ia{display:none}}@media(max-width:700px){.fab-ia span{display:none}}</style>')
+
+
 def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     nav = "".join(f'<a href="{u}" class="{"on" if u == aba else ""}" title="{"Configurações" if u == "/config" else n}">{n}</a>' for u, n in ABAS)
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
@@ -572,7 +579,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
-{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main></body></html>"""
+{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{'' if aba == "/pergunte" else BOTAO_IA}</body></html>"""
 
 
 def tag_status(emp):
@@ -2200,6 +2207,62 @@ O copiloto usa o piso para dizer se ainda dá para cobrir o concorrente.</p>
     return pagina("Disputa ao vivo", corpo, "/disputa", aviso)
 
 
+# ------------------------------------------------------------------ pergunte ao Licitatudo (IA)
+SUGESTOES = ["Quais processos estão em habilitação ou recurso agora?", "Em quais lotes estamos em 1º lugar?",
+             "Quais prazos vencem esta semana?", "Quais certidões estão vencidas ou vencendo?",
+             "Quem é o concorrente que mais ganha da gente e por quanto?", "Resuma o que aconteceu hoje nos processos",
+             "Quais oportunidades de encaixe alto vencem nos próximos 5 dias?", "O que o pregoeiro pediu no 033/2026?"]
+
+
+def pg_pergunte():
+    hist = assistente.conversa()
+    bolhas = "".join(
+        (f'<div class="bl voce"><div>{e(m["texto"])}</div><small>{e(m.get("quando", ""))}</small></div>' if m["papel"] == "voce" else
+         f'<div class="bl ia"><div class="analise">{analise.md_html(m["texto"])}</div><small>{e(m.get("quando", ""))} · {e(m.get("modelo", ""))}</small></div>')
+        for m in hist)
+    chips = "".join(f'<button type="button" class="sec chip-s" onclick="usar(this)">{e(t)}</button>' for t in SUGESTOES)
+    corpo = f"""<style>.conv{{max-width:900px;margin:0 auto}}.bls{{display:flex;flex-direction:column;gap:10px;margin:12px 0 130px}}
+.bl{{max-width:85%;border-radius:14px;padding:10px 14px;line-height:1.5}}.bl small{{display:block;color:var(--sub);font-size:11px;margin-top:4px}}
+.bl.voce{{align-self:flex-end;background:#1b5e20;color:#fff}}.bl.voce small{{color:#cfe3d7}}
+.bl.ia{{align-self:flex-start;background:var(--card);border:1px solid var(--borda)}}.bl.ia table.md{{font-size:13px}}
+.entrada{{position:fixed;left:0;right:0;bottom:0;background:var(--bg);border-top:1px solid var(--borda);padding:10px 16px;z-index:20}}
+.entrada form{{max-width:900px;margin:0 auto;display:flex;gap:8px}}.entrada textarea{{flex:1;resize:none;min-height:46px;max-height:160px}}
+.chips-s{{display:flex;flex-wrap:wrap;gap:6px}}.chip-s{{font-size:13px;padding:6px 10px;border-radius:999px}}
+.pensando{{color:var(--sub);font-style:italic}}</style>
+<div class="conv"><div class="linha" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+<h2 style="margin:0">💬 Pergunte ao Licitatudo</h2>
+<form method="post" action="/pergunte/limpar"><input type="hidden" name="csrf" value="{CSRF}"><button class="sec">🗑 Nova conversa</button></form></div>
+<p class="sub">A IA responde com os dados do sistema: processos, situação, classificação, mensagens do chat, prazos, certidões,
+concorrentes, oportunidades e editais analisados. Ela pode errar – confira o que for decisivo. Os dados vão para o Google
+Gemini para gerar a resposta (sem senhas e sem CPF).</p>
+{'' if hist else f'<div class="chips-s">{chips}</div>'}
+<div class="bls" id="bls">{bolhas}</div></div>
+<div class="entrada"><form onsubmit="return enviar(event)"><textarea class="campo" id="perg" rows="1"
+ placeholder="Pergunte algo… ex.: em quais lotes do 033/2026 estamos em 1º?" onkeydown="if(event.key==='Enter'&&!event.shiftKey){{event.preventDefault();enviar(event);}}"></textarea>
+<button id="bt">Enviar</button></form></div>
+<script>
+const bls=document.getElementById('bls');
+function rolar(){{window.scrollTo(0,document.body.scrollHeight);}}
+function usar(b){{document.getElementById('perg').value=b.textContent;enviar(new Event('submit'));}}
+function bolha(cls,html){{const d=document.createElement('div');d.className='bl '+cls;d.innerHTML=html;bls.appendChild(d);rolar();return d;}}
+function esc(t){{return t.replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}})[c]);}}
+let ocupado=false;
+function enviar(ev){{if(ev&&ev.preventDefault)ev.preventDefault(); if(ocupado)return false;
+ const t=document.getElementById('perg'); const q=t.value.trim(); if(!q)return false;
+ ocupado=true; document.getElementById('bt').disabled=true; t.value='';
+ const ch=document.querySelector('.chips-s'); if(ch)ch.remove();
+ bolha('voce','<div>'+esc(q)+'</div>'); const p=bolha('ia','<div class="pensando">🤖 Pensando… (pode levar até 1 minuto)</div>');
+ fetch('/pergunte/enviar',{{method:'POST',credentials:'same-origin',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
+  body:'csrf={CSRF}&pergunta='+encodeURIComponent(q)}}).then(r=>r.json()).then(j=>{{
+   p.innerHTML=j.ok?'<div class="analise">'+j.html+'</div><small>'+esc(j.modelo||'')+'</small>':'<div class="msg erro">'+esc(j.erro||'Erro')+'</div>';
+   rolar();}}).catch(()=>{{p.innerHTML='<div class="msg erro">Não consegui falar com o servidor.</div>';}})
+  .finally(()=>{{ocupado=false;document.getElementById('bt').disabled=false;t.focus();}});
+ return false;}}
+rolar(); document.getElementById('perg').focus();
+</script>"""
+    return pagina("Pergunte", corpo, "/pergunte")
+
+
 def pg_config(aviso=""):
     c = CFG_ATUAL()
     g = lambda k, d="": e(c.get(k, d))  # noqa: E731
@@ -3227,6 +3290,8 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_config(AVISOS.get(q.get("ok", ""), "")))
             if p == "/documentos":
                 return self.enviar(pg_documentos(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/pergunte":
+                return self.enviar(pg_pergunte())
             if p == "/disputa":
                 return self.enviar(pg_disputa(q, AVISOS.get(q.get("ok", ""), "")))
             if p == "/concorrentes":
@@ -3490,6 +3555,26 @@ class Painel(BaseHTTPRequestHandler):
                 pecas.iniciar(pid, CFG_ATUAL(), {"tipo": "habilitacao", "edital": ch, "ctx": {}, "empresa": "",
                                                  "titulo": d_an.get("titulo", ""), "anexos": []})
                 return self.redirecionar(f"/analise/{ch}#hab")
+            if p == "/pergunte/enviar":
+                perg = f.get("pergunta", "").strip()[:2000]
+                try:
+                    if not perg:
+                        raise RuntimeError("Escreva uma pergunta.")
+                    md, modelo = assistente.perguntar(CFG_ATUAL(), perg)
+                    res = {"ok": True, "html": analise.md_html(md), "modelo": modelo}
+                except Exception as ex:  # noqa: BLE001
+                    res = {"ok": False, "erro": str(ex)[:400]}
+                dados = json.dumps(res, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(dados)))
+                self.cabecalhos_seguranca()
+                self.end_headers()
+                self.wfile.write(dados)
+                return
+            if p == "/pergunte/limpar":
+                assistente.limpar_conversa()
+                return self.redirecionar("/pergunte")
             if p == "/disputa/piso":
                 k = f.get("k", "")
                 if k.count("|") == 3:

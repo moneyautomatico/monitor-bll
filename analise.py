@@ -384,9 +384,28 @@ def _inline(t):
 
 
 def md_html(md):
-    out, lista = [], False
+    out, lista, tabela = [], False, []
+
+    def fecha_tabela():
+        if not tabela:
+            return
+        linhas = [[c.strip() for c in t.strip().strip("|").split("|")] for t in tabela
+                  if not re.fullmatch(r"\|?[\s:|-]+\|?", t.strip())]
+        if linhas:
+            cab = "".join(f"<th>{_inline(c)}</th>" for c in linhas[0])
+            corpo = "".join("<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in ln) + "</tr>" for ln in linhas[1:])
+            out.append(f"<table class='md'><tr>{cab}</tr>{corpo}</table>")
+        tabela.clear()
+
     for linha in md.splitlines():
         s = linha.strip()
+        if s.startswith("|") and s.count("|") >= 2:   # tabela em Markdown
+            if lista:
+                out.append("</ul>")
+                lista = False
+            tabela.append(s)
+            continue
+        fecha_tabela()
         m = re.match(r"^[-*]\s+\[( |x|X)\]\s+(.*)", s)
         b = re.match(r"^(?:[-*•]|\d+[.)])\s+(.*)", s)
         if (m or b) and not lista:
@@ -408,6 +427,7 @@ def md_html(md):
             out.append(f"<h3>{_inline(s[2:])}</h3>")
         elif s:
             out.append(f"<p>{_inline(s)}</p>")
+    fecha_tabela()
     if lista:
         out.append("</ul>")
     return "\n".join(out)
