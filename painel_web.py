@@ -2692,7 +2692,7 @@ def pg_preferencias(aviso="", erro=False):
 <li>Mande <code>/newbot</code>, escolha um nome (ex.: <i>Alertas da Minha Empresa</i>) e um usuário terminado em <b>bot</b> (ex.: <i>minhaempresa_alertas_bot</i>).</li>
 <li>O BotFather responde com um <b>token</b> parecido com <code>123456789:AAH…</code>. Copie e cole aqui:</li></ol>
 <form method="post" action="/preferencias/bot" class="linha-senha"><input type="hidden" name="csrf" value="{CSRF}">
-<input class="campo" name="tg_token" placeholder="cole o token do seu bot" autocomplete="off" style="max-width:420px" required>
+<input class="campo" name="tg_token" placeholder="cole o token (pode colar a mensagem inteira do BotFather)" autocomplete="off" style="max-width:420px" required>
 {'' if leitura else '<button>Conectar bot</button>'}</form></div></div>
 <div class="etapa apagada">{n_i(2)}<div><b>Ligue o bot à sua conversa</b></div></div>"""
     else:
@@ -3756,6 +3756,16 @@ def ntfy_em_uso(topico, login):
     return False
 
 
+def limpar_token(txt):
+    """Aceita o token como vier colado: a mensagem inteira do BotFather, com o número virado link de telefone
+    ([8775…](tel:8775…)), com espaços, quebras de linha ou crases."""
+    t = re.sub(r"\]\((?:tel:|https?://)[^)]*\)", "", txt or "")   # [123](tel:123) -> [123
+    t = re.sub(r"[\[\]`'\"<>]", " ", t)
+    t = re.sub(r"\s*:\s*", ":", t)
+    m = re.search(r"(?<![\w-])(\d{5,12}):([A-Za-z0-9_-]{30,60})(?![\w-])", t)
+    return f"{m.group(1)}:{m.group(2)}" if m else ""
+
+
 def codigo_telegram(login):
     cod = usuarios.cfg(login).get("tg_codigo")
     if not cod:
@@ -4741,8 +4751,8 @@ class Painel(BaseHTTPRequestHandler):
         lg = login_atual()
         uc = usuarios.cfg(lg)
         if p == "/preferencias/bot":
-            tok = re.sub(r"\s", "", f.get("tg_token", ""))
-            if not re.fullmatch(r"\d{5,12}:[\w-]{30,60}", tok):
+            tok = limpar_token(f.get("tg_token", ""))
+            if not tok:
                 return self.enviar(pg_preferencias("Esse token não parece o do BotFather (formato 123456789:AAH…). Copie a linha inteira.", True))
             nome = nome_bot(tok)
             if not nome:
