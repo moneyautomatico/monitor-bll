@@ -32,6 +32,7 @@ import urgencia
 import buscas
 import concorrentes
 import copiloto
+import custos_ia
 import resumo
 import documentos
 import geo
@@ -53,6 +54,7 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "doc_dados": "Dados da empresa salvos.",
           "doc_cnpj": "Dados preenchidos pela Receita e salvos. Confira e complete o CPF do representante (não vem da Receita).",
           "piso": "Piso salvo. O copiloto usa este valor na disputa.",
+          "custos": "Preços da IA salvos. Os novos usos já são calculados com eles.",
           "resumo_enviado": "Resumo enviado agora no Telegram geral.",
           "prazo": "Prazo salvo. Você recebe aviso no Telegram 24 h e 2 h antes.",
           "agendado": "Prazo colocado na Agenda.",
@@ -623,6 +625,7 @@ O histórico e o login atuais são mantidos.</p>
     n_prazo_sem = sum(1 for x in _sts if x == "semana")
     n_cert = sum(1 for c in agenda.certidoes()["itens"].values() if agenda.status_cert(c)[0] in ("vence", "vencida"))
     kpis = f"""<div class="kpis">
+<a class="kpi" href="/consumo" style="text-decoration:none;color:inherit"><div class="v">{custos_ia.brl(custos_ia.resumo_mes(datetime.now().strftime("%Y-%m"))["total_brl"])}</div><div class="l">💳 IA neste mês</div></a>
 <a class="kpi" href="/agenda" style="text-decoration:none;color:inherit{';border-color:#c62828' if n_prazo_urg else ''}"><div class="v">{n_prazo_urg}</div><div class="l">📅 prazos atrasados ou para hoje · {n_prazo_sem} na semana</div></a>
 <a class="kpi" href="/certidoes" style="text-decoration:none;color:inherit{';border-color:#c62828' if n_cert else ''}"><div class="v">{n_cert}</div><div class="l">📑 certidões vencidas ou vencendo (15 dias)</div></a>
 <div class="kpi"><div class="v">{len(ativos)}/{len(emps)}</div><div class="l">empresas ativas</div></div>
@@ -1535,7 +1538,7 @@ def pg_documentos(q, aviso=""):
         bloco_ia = ('<div class="msg">🤖 <b>A IA leu o edital</b> e marcou abaixo as declarações que ele exige'
                     + (f' (veja: {e(r.get("onde"))})' if r.get("onde") else "") + '.'
                     + (f'<br>⚠️ {e(r.get("observacoes"))}' if r.get("observacoes") else "")
-                    + '<br><small>Confira no edital – a IA pode errar.</small></div>')
+                    + f'<br><small>Confira no edital – a IA pode errar.</small> {custo_uso(leitura.get("custo"))}</div>')
         extras_html = "".join(
             f'<label class="dec"><input type="checkbox" name="d" value="x{i}" {"checked" if f"x{i}" in marcadas else ""}> '
             f'<span>📎 <b>Modelo do edital:</b> {e(x.get("titulo") or "Declaração")}</span></label>'
@@ -1543,10 +1546,10 @@ def pg_documentos(q, aviso=""):
     analisados = [a for a in analise.listar() if a.get("status") == "pronto"]
     sel_edital = ('<option value="">— escolha um edital já analisado em Editais (IA) —</option>' +
                   "".join(f'<option value="{e(a["chave"])}">{e((a.get("titulo") or a["chave"])[:110])}</option>' for a in analisados))
-    form_ia = f"""<details class="op-perfil" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if not leitura else ""}>
+    form_ia = ESTILO_IA + f"""<details class="op-perfil" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if not leitura else ""}>
 <summary style="display:block;cursor:pointer;padding:10px 14px">🤖 <b>Ler o edital com IA</b> e marcar sozinho as declarações que ele exige
 (inclusive os modelos próprios dos anexos)</summary>
-<form method="post" action="/pecas/declaracoes" enctype="multipart/form-data" style="padding:0 14px 12px">
+<form method="post" action="/pecas/declaracoes" enctype="multipart/form-data" style="padding:0 14px 12px">{aviso_custo("declaracoes")}
 <input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="emp" value="{e(nome)}"><input type="hidden" name="proc" value="{e(proc_q)}">
 <div class="duas"><div><label>Edital já analisado</label><select class="campo" name="edital">{sel_edital}</select></div>
 <div><label>…ou envie o PDF do edital</label><input type="file" name="arquivo" accept=".pdf,.docx,.zip" multiple></div></div>
@@ -1656,7 +1659,7 @@ def pg_pecas(q, aviso=""):
         f'<td class="ocultar">{e(x.get("fim") or x.get("inicio") or "")}</td></tr>'
         for x in pecas.listar() if x.get("tipo") != "declaracoes")
     corpo = f"""<style>.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}@media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}</style>
-<h2>📄 Documentos</h2>{abas_doc("pec")}
+{ESTILO_IA}<h2>📄 Documentos</h2>{abas_doc("pec")}{aviso_custo("peca")}
 <p class="sub">A IA escreve um <b>rascunho</b> usando o edital, o histórico que o monitor registrou no processo (chat, registros
 da sessão, classificação, diligências) e os pontos que você indicar. <b>Revise sempre</b> (ou peça ao advogado) antes de
 protocolar – a IA marca com [CONFERIR] o que não encontrou. O sistema não envia nada à plataforma.</p>
@@ -1695,7 +1698,7 @@ def pg_peca(pid):
     curta = d.get("tipo") == "intencao"
     notas = analise.md_html(d.get("notas", "")) if d.get("notas") else ""
     corpo = topo + f"""
-<div class="msg">✅ Rascunho pronto ({e(d.get("fim", ""))} · {e(d.get("modelo", ""))}). <b>Revise tudo</b> – procure por <b>[CONFERIR]</b>.
+{ESTILO_IA}<div class="msg">✅ Rascunho pronto ({e(d.get("fim", ""))} · {e(d.get("modelo", ""))}) {custo_uso(d.get("custo"))}. <b>Revise tudo</b> – procure por <b>[CONFERIR]</b>.
 Arquivos lidos: {e(", ".join(d.get("arquivos") or []) or "—")}</div>
 {f'<details open class="form" style="max-width:none;margin-bottom:12px"><summary><b>📝 Notas para revisão</b> (não vão no documento)</summary>{notas}</details>' if notas else ''}
 <div class="form" style="max-width:none"><form method="post" action="/pecas/{pid}/salvar"><input type="hidden" name="csrf" value="{CSRF}">
@@ -1950,7 +1953,7 @@ def html_habilitacao(ch, q):
     """'Posso participar?': documentos exigidos (lidos pela IA) x certidões cadastradas da empresa."""
     jobs = [x for x in pecas.listar(200) if x.get("tipo") == "habilitacao" and x.get("edital") == ch]
     job = jobs[0] if jobs else None
-    cab = '<h2 id="hab" style="margin-top:24px">✅ Posso participar?</h2>'
+    cab = ESTILO_IA + '<h2 id="hab" style="margin-top:24px">✅ Posso participar?</h2>' + aviso_custo("habilitacao")
     botao_ler = (f'<form method="post" action="/analise/{ch}/habilitacao" style="display:inline"><input type="hidden" name="csrf" value="{CSRF}">'
                  f'<button {"class=sec" if job else ""}>🤖 {"Ler de novo" if job else "Ver os documentos exigidos e comparar com as certidões"}</button></form>')
     if not job:
@@ -2010,7 +2013,7 @@ def html_habilitacao(ch, q):
             + (f'<div class="msg">⚠️ {e(r.get("observacoes"))}</div>' if r.get("observacoes") else "")
             + f'<table><tr><th>Documento exigido</th><th class="ocultar">Item</th><th class="ocultar">Tipo</th><th>{e(emp)}</th></tr>'
             f'{linhas or "<tr><td colspan=4>A IA não encontrou a lista de documentos.</td></tr>"}</table>'
-            f'<p class="sub">Lido em {e(job.get("fim", ""))}. A IA pode errar – confira no edital. Cadastre/atualize as certidões em '
+            f'<p class="sub">Lido em {e(job.get("fim", ""))} {custo_uso(job.get("custo"))}. A IA pode errar – confira no edital. Cadastre/atualize as certidões em '
             f'<a href="/certidoes?emp={e(urllib.parse.quote(emp))}">Documentos → Certidões</a>.</p>')
 
 
@@ -2218,7 +2221,7 @@ def pg_pergunte():
     hist = assistente.conversa()
     bolhas = "".join(
         (f'<div class="bl voce"><div>{e(m["texto"])}</div><small>{e(m.get("quando", ""))}</small></div>' if m["papel"] == "voce" else
-         f'<div class="bl ia"><div class="analise">{analise.md_html(m["texto"])}</div><small>{e(m.get("quando", ""))} · {e(m.get("modelo", ""))}</small></div>')
+         f'<div class="bl ia"><div class="analise">{analise.md_html(m["texto"])}</div><small>{e(m.get("quando", ""))} · {e(m.get("modelo", ""))} {custo_uso(m.get("custo"))}</small></div>')
         for m in hist)
     chips = "".join(f'<button type="button" class="sec chip-s" onclick="usar(this)">{e(t)}</button>' for t in SUGESTOES)
     corpo = f"""<style>.conv{{max-width:900px;margin:0 auto}}.bls{{display:flex;flex-direction:column;gap:10px;margin:12px 0 130px}}
@@ -2234,7 +2237,7 @@ def pg_pergunte():
 <form method="post" action="/pergunte/limpar"><input type="hidden" name="csrf" value="{CSRF}"><button class="sec">🗑 Nova conversa</button></form></div>
 <p class="sub">A IA responde com os dados do sistema: processos, situação, classificação, mensagens do chat, prazos, certidões,
 concorrentes, oportunidades e editais analisados. Ela pode errar – confira o que for decisivo. Os dados vão para o Google
-Gemini para gerar a resposta (sem senhas e sem CPF).</p>
+Gemini para gerar a resposta (sem senhas e sem CPF).</p>{ESTILO_IA}{aviso_custo("pergunta")}
 {'' if hist else f'<div class="chips-s">{chips}</div>'}
 <div class="bls" id="bls">{bolhas}</div></div>
 <div class="entrada"><form onsubmit="return enviar(event)"><textarea class="campo" id="perg" rows="1"
@@ -2254,13 +2257,146 @@ function enviar(ev){{if(ev&&ev.preventDefault)ev.preventDefault(); if(ocupado)re
  bolha('voce','<div>'+esc(q)+'</div>'); const p=bolha('ia','<div class="pensando">🤖 Pensando… (pode levar até 1 minuto)</div>');
  fetch('/pergunte/enviar',{{method:'POST',credentials:'same-origin',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
   body:'csrf={CSRF}&pergunta='+encodeURIComponent(q)}}).then(r=>r.json()).then(j=>{{
-   p.innerHTML=j.ok?'<div class="analise">'+j.html+'</div><small>'+esc(j.modelo||'')+'</small>':'<div class="msg erro">'+esc(j.erro||'Erro')+'</div>';
+   p.innerHTML=j.ok?'<div class="analise">'+j.html+'</div><small>'+esc(j.modelo||'')+' '+(j.custo||'')+'</small>':'<div class="msg erro">'+esc(j.erro||'Erro')+'</div>';
    rolar();}}).catch(()=>{{p.innerHTML='<div class="msg erro">Não consegui falar com o servidor.</div>';}})
   .finally(()=>{{ocupado=false;document.getElementById('bt').disabled=false;t.focus();}});
  return false;}}
 rolar(); document.getElementById('perg').focus();
 </script>"""
     return pagina("Pergunte", corpo, "/pergunte")
+
+
+# ------------------------------------------------------------------ custos da IA (comunicação ao licitante)
+def milhar(n):
+    return f"{int(n or 0):,}".replace(",", ".")
+
+
+def aviso_custo(recurso):
+    """Aviso antes de usar um recurso pago: custo estimado por uso."""
+    base, cliente, n = custos_ia.estimativa(recurso)
+    p = custos_ia.precos()
+    nome = custos_ia.RECURSOS.get(recurso, (recurso, 0))[0]
+    valor = custos_ia.brl(cliente if p["cobrar"] and p["acrescimo"] else base)
+    return (f'<div class="aviso-ia">💳 <b>Recurso com IA paga por uso</b> – {e(nome)}: custo estimado de <b>~{valor}</b> por uso'
+            f'{f" (média dos últimos {n} usos)" if n else " (estimativa)"}. <a href="/consumo">ver consumo e valores</a></div>')
+
+
+def custo_uso(reg):
+    """'Custo deste uso' depois que a IA respondeu."""
+    if not reg:
+        return ""
+    p = custos_ia.precos()
+    valor = reg.get("cliente") if p["cobrar"] and p["acrescimo"] else reg.get("brl")
+    return (f'<span class="custo-ia" title="{milhar(reg.get("entrada", 0))} tokens de entrada + {milhar(reg.get("saida", 0))} de saída · '
+            f'{e(reg.get("modelo", ""))} · US$ {reg.get("usd", 0):.4f}">💳 custo deste uso: <b>{custos_ia.brl(valor or 0)}</b></span>')
+
+
+ESTILO_IA = ('<style>.aviso-ia{background:#fff8e1;border:1px solid #ffe082;color:#5d4300;border-radius:10px;padding:8px 12px;'
+             'margin:8px 0;font-size:13.5px}:root[data-theme=dark] .aviso-ia{background:#3a3418;border-color:#6b5b1b;color:#f3e3a3}'
+             '@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .aviso-ia{background:#3a3418;border-color:#6b5b1b;color:#f3e3a3}}'
+             '.custo-ia{font-size:12px;color:var(--sub);margin-left:6px}</style>')
+
+
+def pg_consumo(q, aviso=""):
+    mes = q.get("mes", "") or datetime.now().strftime("%Y-%m")
+    if not re.fullmatch(r"\d{4}-\d{2}", mes):
+        mes = datetime.now().strftime("%Y-%m")
+    r = custos_ia.resumo_mes(mes)
+    p = custos_ia.precos()
+    CL = "cliente"
+    repassa = p["cobrar"] and p["acrescimo"] > 0
+    meses = sorted({u["quando"][:7] for u in custos_ia.usos()} | {datetime.now().strftime("%Y-%m")}, reverse=True)
+    sel = ('<select class="campo" style="max-width:180px" onchange="location.href=\'/consumo?mes=\'+this.value">' +
+           "".join(f'<option value="{m}" {"selected" if m == mes else ""}>{m[5:]}/{m[:4]}</option>' for m in meses) + "</select>")
+    linhas_rec = "".join(
+        f'<tr><td>{e(custos_ia.RECURSOS.get(k, (k, 0))[0])}</td><td>{v["n"]}</td><td>{custos_ia.brl(v["brl"] / v["n"] if v["n"] else 0)}</td>'
+        f'<td><b>{custos_ia.brl(v["brl"])}</b></td>{f"<td>{custos_ia.brl(v[CL])}</td>" if repassa else ""}'
+        f'<td class="ocultar">{milhar(v["tokens"])}</td></tr>' for k, v in sorted(r["por_recurso"].items()))
+    linhas_emp = "".join(
+        f'<tr><td>{e(k)}</td><td>{v["n"]}</td><td><b>{custos_ia.brl(v["brl"])}</b></td>{f"<td>{custos_ia.brl(v[CL])}</td>" if repassa else ""}</tr>'
+        for k, v in sorted(r["por_empresa"].items(), key=lambda t: -t[1]["brl"]))
+    ult = "".join(
+        f'<tr><td>{e(u["quando"][8:10] + "/" + u["quando"][5:7] + " " + u["quando"][11:16])}</td>'
+        f'<td>{e(custos_ia.RECURSOS.get(u.get("recurso"), (u.get("recurso"), 0))[0])}<div class="sub">{e(u.get("ref", ""))}</div></td>'
+        f'<td class="ocultar">{e(u.get("empresa") or "—")}</td><td class="ocultar">{milhar(u.get("entrada", 0) + u.get("saida", 0))}</td>'
+        f'<td>{custos_ia.brl(u.get("brl", 0))}</td>{f"<td>{custos_ia.brl(u.get(CL, 0))}</td>" if repassa else ""}</tr>'
+        for u in reversed(r["usos"][-150:]))
+    col_cli = "<th>Valor ao licitante</th>" if repassa else ""
+    # tabela de valores por uso (para o comunicado)
+    tab_valores = []
+    for k, (nome, _) in custos_ia.RECURSOS.items():
+        base, cli, n = custos_ia.estimativa(k)
+        tab_valores.append((nome, cli if repassa else base, n))
+    comunicado = comunicado_texto(tab_valores)
+    corpo = f"""{ESTILO_IA}<h2>💳 Consumo de IA</h2>
+<p class="sub">Os recursos com inteligência artificial usam o Google Gemini, que cobra por uso (por tokens – pedaços de texto lidos e
+escritos). O sistema registra o que o Google informa em cada resposta e calcula o custo com os preços e a cotação definidos em ⚙️.
+Os demais recursos (monitor, alertas, agenda, certidões, concorrentes, copiloto, oportunidades, mapa, resumo diário) <b>não têm custo de IA</b>.</p>
+<div class="acoes">{sel}<a class="btn sec" href="/consumo.csv?mes={mes}">⬇ Exportar CSV</a><a class="btn sec" href="/config#custos-ia">⚙️ Preços e repasse</a></div>
+<div class="kpis"><div class="kpi"><div class="v">{len(r["usos"])}</div><div class="l">usos de IA no mês</div></div>
+<div class="kpi"><div class="v">{custos_ia.brl(r["total_brl"])}</div><div class="l">custo no mês (US$ {r["total_usd"]:.2f} · cotação {p["cotacao"]:.2f})</div></div>
+{f'<div class="kpi"><div class="v">{custos_ia.brl(r["total_cliente"])}</div><div class="l">valor ao licitante (+{p["acrescimo"]:g}%)</div></div>' if repassa else ''}</div>
+<h3>Por recurso</h3><table><tr><th>Recurso</th><th>Usos</th><th>Custo médio por uso</th><th>Total</th>{col_cli}<th class="ocultar">Tokens</th></tr>
+{linhas_rec or '<tr><td colspan="6">Nenhum uso neste mês.</td></tr>'}</table>
+<h3>Por empresa</h3><table><tr><th>Empresa</th><th>Usos</th><th>Total</th>{col_cli}</tr>{linhas_emp or '<tr><td colspan="4">—</td></tr>'}</table>
+<p class="sub">Análises de edital, “Posso participar?” e perguntas não são ligadas a uma empresa específica e aparecem como “(sem empresa)”.</p>
+<h3>Últimos usos</h3><table><tr><th>Quando</th><th>Recurso</th><th class="ocultar">Empresa</th><th class="ocultar">Tokens</th><th>Custo</th>{col_cli}</tr>
+{ult or '<tr><td colspan="6">—</td></tr>'}</table>
+<h2 style="margin-top:26px" id="comunicado">📣 Comunicado aos licitantes</h2>
+<p class="sub">Texto pronto para informar quem usa a ferramenta sobre o custo dos recursos com IA. Os valores por uso saem do consumo
+real (média dos últimos usos) e dos preços/repasse em ⚙️. Edite à vontade antes de enviar.</p>
+<div class="form" style="max-width:none"><textarea class="campo" id="com" rows="22" style="max-width:100%;font-family:Georgia,serif;font-size:14px">{e(comunicado)}</textarea>
+<div class="acoes"><button type="button" onclick="navigator.clipboard.writeText(document.getElementById('com').value);this.textContent='Copiado!'">📋 Copiar</button>
+<a class="btn sec" href="/consumo/comunicado" target="_blank">🖨 Versão para imprimir/PDF</a></div></div>"""
+    return pagina("Consumo de IA", corpo, "/config", aviso)
+
+
+def comunicado_texto(tab_valores):
+    p = custos_ia.precos()
+    linhas = "\n".join(f"  • {nome.split(' ', 1)[1] if ' ' in nome else nome}: aprox. {custos_ia.brl(v)} por uso" for nome, v, _ in tab_valores)
+    return f"""Assunto: Uso dos recursos de Inteligência Artificial no Licitatudo – custos por uso
+
+Prezado(a) licitante,
+
+Informamos que alguns recursos do Licitatudo utilizam Inteligência Artificial (Google Gemini), serviço cobrado
+por uso. Por isso, cada utilização desses recursos gera um custo, calculado pela quantidade de texto lida e
+escrita pela IA (tokens).
+
+Recursos com IA e custo estimado por uso:
+{linhas}
+
+Os valores acima são médias: editais maiores ou perguntas que envolvem muitos processos custam mais; consultas
+simples custam menos. O custo exato de cada uso é mostrado na tela logo após a resposta e fica registrado no
+relatório mensal de consumo.
+
+Recursos SEM custo de IA (incluídos): monitoramento das plataformas e alertas (Telegram/celular), mensagens do
+chat, classificação dos lotes, agenda de prazos, controle de certidões, declarações padrão, inteligência de
+concorrentes, copiloto da disputa ao vivo, oportunidades do PNCP com mapa e resumo diário.
+
+Forma de cobrança: o consumo de IA é apurado mensalmente e {"repassado conforme o uso" if p["cobrar"] else "informado para acompanhamento"}.
+Os valores consideram a cotação de US$ 1 = R$ {p["cotacao"]:.2f} e podem mudar se o Google alterar seus preços
+(há reajuste anunciado para janeiro de 2027).
+
+Sobre os dados: para gerar as respostas, o conteúdo necessário (edital, histórico do processo ou dados do
+sistema) é enviado ao Google Gemini. Senhas e CPF não são enviados.
+
+Ficamos à disposição para esclarecimentos.
+
+Atenciosamente,
+"""
+
+
+def pg_comunicado_imprimir():
+    tab = []
+    p = custos_ia.precos()
+    for k, (nome, _) in custos_ia.RECURSOS.items():
+        base, cli, n = custos_ia.estimativa(k)
+        tab.append((nome, cli if p["cobrar"] and p["acrescimo"] else base, n))
+    txt = comunicado_texto(tab)
+    return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><title>Comunicado – custos de IA</title>
+<style>body{{font-family:Georgia,serif;max-width:720px;margin:30px auto;padding:0 20px;line-height:1.6;color:#111}}
+pre{{white-space:pre-wrap;font-family:inherit;font-size:15px}}button{{padding:8px 14px}}@media print{{button{{display:none}}}}</style></head>
+<body><button onclick="window.print()">🖨 Imprimir / Salvar em PDF</button><pre>{e(txt)}</pre></body></html>"""
 
 
 def pg_config(aviso=""):
@@ -2311,6 +2447,20 @@ mensagens, processos, classificações, buscas e análises.</p>
 <h3>Cópias no servidor</h3>
 <table><tr><th>Arquivo</th><th>Tamanho</th><th>Data</th></tr>{"".join(f'<tr><td><a href="/backup/{e(n)}">{e(n)}</a></td><td>{t / 1024 / 1024:.1f} MB</td><td>{d:%d/%m/%Y %H:%M}</td></tr>' for n, t, d in backup.listar()) or '<tr><td colspan="3">Nenhum ainda.</td></tr>'}</table>
 <p class="sub">Para abrir a cópia do Telegram: <code>openssl enc -d -aes-256-cbc -pbkdf2 -in ARQUIVO.enc -out backup.tar.gz</code> (pede a senha).</p></div>
+<h2 style="margin-top:22px" id="custos-ia">💳 Custos da IA</h2><div class="form">
+<form method="post" action="/config/ia_custos"><input type="hidden" name="csrf" value="{CSRF}">
+<p class="sub">Preços do Google Gemini em US$ por 1 milhão de tokens (confira em ai.google.dev/pricing – há reajuste anunciado para jan/2027).
+Usados para calcular o custo de cada uso e o comunicado aos licitantes. <a href="/consumo">Ver consumo</a></p>
+<div class="linha" style="gap:8px;flex-wrap:wrap">
+<div><label>Flash – entrada</label><input class="campo" name="IA_PRECO_ENTRADA" value="{g('IA_PRECO_ENTRADA', '0.75')}" style="width:110px"></div>
+<div><label>Flash – saída</label><input class="campo" name="IA_PRECO_SAIDA" value="{g('IA_PRECO_SAIDA', '3.75')}" style="width:110px"></div>
+<div><label>Flash-Lite – entrada</label><input class="campo" name="IA_PRECO_LITE_ENTRADA" value="{g('IA_PRECO_LITE_ENTRADA', '0.30')}" style="width:110px"></div>
+<div><label>Flash-Lite – saída</label><input class="campo" name="IA_PRECO_LITE_SAIDA" value="{g('IA_PRECO_LITE_SAIDA', '2.50')}" style="width:110px"></div>
+<div><label>Cotação US$ → R$</label><input class="campo" name="IA_COTACAO_USD" value="{g('IA_COTACAO_USD', '5.50')}" style="width:110px"></div>
+<div><label>Acréscimo no repasse %</label><input class="campo" name="IA_ACRESCIMO_PCT" value="{g('IA_ACRESCIMO_PCT', '0')}" style="width:110px"></div></div>
+<label style="font-weight:400;display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" name="IA_COBRAR" value="1" {"checked" if c.get("IA_COBRAR", "1") != "0" else ""}>
+O custo da IA é repassado ao licitante (mostrar o “valor ao licitante”, com o acréscimo, nos avisos e no comunicado)</label>
+<div class="acoes"><button>Salvar</button></div></form></div>
 <h2 style="margin-top:22px">☀️ Resumo diário no Telegram</h2><div class="form">
 <form method="post" action="/config/resumo"><input type="hidden" name="csrf" value="{CSRF}">
 <label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" name="RESUMO_ATIVO" value="1" {"checked" if c.get("RESUMO_ATIVO", "1") != "0" else ""}>
@@ -2886,7 +3036,7 @@ def pg_analise(ch, q=None):
              '<button class="sec" onclick="window.print()">Imprimir / PDF</button></div>'
              + (f'<div class="msg">Pedido adicional usado: {e(d["extra"])}</div>' if d.get("extra") else "") +
              f'<div class="analise">{analise.md_html(d.get("md", ""))}</div>'
-             f'<p class="sub">Gerado em {e(d.get("fim", ""))} por {e(d.get("modelo", ""))} · Arquivos lidos: {e(arqs) or "—"}<br>'
+             f'<p class="sub">Gerado em {e(d.get("fim", ""))} por {e(d.get("modelo", ""))} {custo_uso(d.get("custo"))} · Arquivos lidos: {e(arqs) or "—"}<br>'
              '⚠️ A IA pode errar ou deixar algo de fora. Confira sempre no edital antes de enviar documentos e proposta.</p>'
              + html_habilitacao(ch, q or {}) + form_refazer(ch, d))
     return pagina("Análise", corpo, "/editais")
@@ -2912,7 +3062,7 @@ def pg_editais(aviso="", erro=False):
         f'<td>{ {"pronto": "✅ Pronta", "analisando": "⏳ Analisando", "erro": "❌ Erro"}.get(d.get("status"), "") }</td>'
         f'<td class="ocultar">{e(d.get("fim") or d.get("inicio") or "")}</td></tr>' for d in analise.listar())
     corpo = f"""<h2>Editais (IA)</h2>{alerta}
-<div class="form"><h3 style="margin-top:0">Analisar um edital que você tem em mãos</h3>
+{ESTILO_IA}{aviso_custo("analise")}<div class="form"><h3 style="margin-top:0">Analisar um edital que você tem em mãos</h3>
 <p class="sub">Para editais de qualquer plataforma (BLL, BNC, Licitanet...). Envie o PDF do edital e, se quiser, o termo de referência (até 18 MB no total).
 Para licitações do PNCP, use o botão “🤖 Analisar edital (IA)” na aba Buscar.</p>
 <form method="post" action="/analise/upload" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{CSRF}">
@@ -3290,6 +3440,17 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_config(AVISOS.get(q.get("ok", ""), "")))
             if p == "/documentos":
                 return self.enviar(pg_documentos(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/consumo":
+                return self.enviar(pg_consumo(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/consumo/comunicado":
+                return self.enviar(pg_comunicado_imprimir())
+            if p == "/consumo.csv":
+                mes = q.get("mes", "")
+                linhas = ["quando;recurso;empresa;referencia;modelo;tokens_entrada;tokens_saida;custo_usd;custo_brl;valor_licitante"]
+                for u in custos_ia.usos(mes if re.fullmatch(r"\d{4}-\d{2}", mes) else ""):
+                    linhas.append(";".join(str(u.get(k, "")).replace(";", ",") for k in
+                                           ("quando", "recurso", "empresa", "ref", "modelo", "entrada", "saida", "usd", "brl", "cliente")))
+                return self.baixar(("\n".join(linhas)).encode("utf-8-sig"), f"consumo_ia_{mes or 'tudo'}.csv", "text/csv; charset=utf-8")
             if p == "/pergunte":
                 return self.enviar(pg_pergunte())
             if p == "/disputa":
@@ -3555,13 +3716,22 @@ class Painel(BaseHTTPRequestHandler):
                 pecas.iniciar(pid, CFG_ATUAL(), {"tipo": "habilitacao", "edital": ch, "ctx": {}, "empresa": "",
                                                  "titulo": d_an.get("titulo", ""), "anexos": []})
                 return self.redirecionar(f"/analise/{ch}#hab")
+            if p == "/config/ia_custos":
+                v = {}
+                for k in ("IA_PRECO_ENTRADA", "IA_PRECO_SAIDA", "IA_PRECO_LITE_ENTRADA", "IA_PRECO_LITE_SAIDA", "IA_COTACAO_USD", "IA_ACRESCIMO_PCT"):
+                    x = f.get(k, "").strip().replace(",", ".")
+                    if re.fullmatch(r"\d{1,6}(\.\d{1,6})?", x):
+                        v[k] = x
+                v["IA_COBRAR"] = "1" if f.get("IA_COBRAR") else "0"
+                gravar_env(CONFIG, v)
+                return self.redirecionar("/consumo?ok=custos")
             if p == "/pergunte/enviar":
                 perg = f.get("pergunta", "").strip()[:2000]
                 try:
                     if not perg:
                         raise RuntimeError("Escreva uma pergunta.")
-                    md, modelo = assistente.perguntar(CFG_ATUAL(), perg)
-                    res = {"ok": True, "html": analise.md_html(md), "modelo": modelo}
+                    md, modelo, custo = assistente.perguntar(CFG_ATUAL(), perg)
+                    res = {"ok": True, "html": analise.md_html(md), "modelo": modelo, "custo": custo_uso(custo)}
                 except Exception as ex:  # noqa: BLE001
                     res = {"ok": False, "erro": str(ex)[:400]}
                 dados = json.dumps(res, ensure_ascii=False).encode("utf-8")

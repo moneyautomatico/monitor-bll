@@ -294,6 +294,11 @@ def gemini(chave_api, modelo, partes, pedido):
                     resp = json.load(r)
                 cand = (resp.get("candidates") or [{}])[0]
                 txt = "".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts", []))
+                try:  # registra o custo deste uso (tokens informados pelo próprio Google)
+                    import custos_ia
+                    custos_ia.registrar(m, resp.get("usageMetadata"))
+                except Exception as ex_c:  # noqa: BLE001
+                    print("custos_ia:", ex_c, flush=True)
                 if txt.strip():
                     return txt, m, usados
                 erros.append(f"{m}: resposta vazia ({cand.get('finishReason', '')})")
@@ -344,8 +349,11 @@ def _rodar(chave, cfg, origem):
             partes = [p for nome, dados in origem["arquivos"] for p in preparar(nome, dados)]
             nomes = [n for n, _ in origem["arquivos"]]
             contexto = ""
+        import custos_ia
+        custos_ia.contexto("analise", "", origem.get("titulo", ""))
         md, modelo, usados = gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes,
                                     montar_pedido(contexto, origem.get("extra", "")))
+        base.update(custo=custos_ia.ultimo())
         base.update(status="pronto", md=md, extra=origem.get("extra", ""), modelo=modelo, arquivos=usados or nomes,
                     fim=datetime.now().strftime("%d/%m/%Y %H:%M"))
     except Exception as ex:  # noqa: BLE001

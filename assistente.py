@@ -199,8 +199,11 @@ def perguntar(cfg, pergunta):
     pedido = (REGRAS.replace("{HOJE}", datetime.now().strftime("%d/%m/%Y %H:%M")) +
               (f"\nCONVERSA ATÉ AGORA:\n{historico}\n" if historico else "") +
               f"\nPERGUNTA DO USUÁRIO: {pergunta}")
+    import custos_ia
+    custos_ia.contexto("pergunta", "", pergunta[:100])
     md, modelo, _ = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), [("txt", "DADOS DO SISTEMA", dados)], pedido)
+    custo = custos_ia.ultimo()
     hist += [{"papel": "voce", "texto": pergunta, "quando": datetime.now().strftime("%d/%m %H:%M")},
-             {"papel": "ia", "texto": md.strip(), "quando": datetime.now().strftime("%d/%m %H:%M"), "modelo": modelo}]
+             {"papel": "ia", "texto": md.strip(), "quando": datetime.now().strftime("%d/%m %H:%M"), "modelo": modelo, "custo": custo}]
     salvar_conversa(hist)
-    return md.strip(), modelo
+    return md.strip(), modelo, custo

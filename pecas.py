@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import analise
+import custos_ia
 import documentos
 
 PASTA = Path(__file__).resolve().parent
@@ -229,7 +230,9 @@ def _rodar(pid, cfg, pedido):
         if pedido["tipo"] == "habilitacao":
             if not partes:
                 raise RuntimeError("Não achei os arquivos deste edital para ler de novo.")
+            custos_ia.contexto("habilitacao", "", pedido.get("titulo", ""))
             md, modelo, usados = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes, PROMPT_HAB)
+            base["custo"] = custos_ia.ultimo()
             m = re.search(r"\{.*\}", md, re.S)
             res = json.loads(m.group(0)) if m else {}
             docs = [{"nome": str(x.get("nome", ""))[:200], "categoria": str(x.get("categoria", "outra"))[:20],
@@ -242,7 +245,9 @@ def _rodar(pid, cfg, pedido):
             if not partes:
                 raise RuntimeError("Escolha um edital já analisado ou envie o PDF do edital.")
             ids = ", ".join(f"{i} ({t})" for i, t, _ in documentos.DECLARACOES)
+            custos_ia.contexto("declaracoes", pedido.get("empresa", ""), pedido.get("titulo", ""))
             md, modelo, usados = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes, PROMPT_DECL % ids)
+            base["custo"] = custos_ia.ultimo()
             m = re.search(r"\{.*\}", md, re.S)
             res = json.loads(m.group(0)) if m else {}
             validos = {i for i, _, _ in documentos.DECLARACOES}
@@ -266,7 +271,9 @@ def _rodar(pid, cfg, pedido):
                      "concorrente, ata, pedido de diligência). Redija agora a peça completa.")
             if not partes:
                 partes = [("txt", "observação", "Nenhum arquivo do edital foi enviado; use apenas o histórico e os pontos.")]
+            custos_ia.contexto("peca", pedido.get("empresa", ""), f"{titulo} – {pedido.get('titulo', '')}")
             md, modelo, usados = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes, texto)
+            base["custo"] = custos_ia.ultimo()
             peca, _, notas = md.partition("\n---")
             base.update(status="pronto", md=peca.strip(), notas=notas.strip().lstrip("-").strip(), modelo=modelo,
                         arquivos=usados or nomes, fim=datetime.now().strftime("%d/%m/%Y %H:%M"))
