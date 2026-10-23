@@ -185,7 +185,7 @@ def nomes_permitidos():
     cache = getattr(_REQ, "perm", None)
     if cache and cache[0] == u["login"]:
         return cache[1]
-    ok = {x.upper().strip() for x in u.get("empresas") or []}
+    ok = set()   # só as empresas que o próprio usuário cadastrou – nunca as de outro usuário
     for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
         c = ler_env(a)
         if (c.get("EMPRESA_DONO") or "").lower() == u["login"]:
@@ -225,7 +225,7 @@ def nomes_do_usuario(login):
     u = usuarios.obter(login)
     if not u or u["papel"] == "admin":
         return None
-    ok = {x.upper().strip() for x in u.get("empresas") or []}
+    ok = set()   # só as empresas que o próprio usuário cadastrou – nunca as de outro usuário
     for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
         c = ler_env(a)
         if (c.get("EMPRESA_DONO") or "").lower() == login:
@@ -1599,7 +1599,7 @@ def pg_empresas(aviso="", erro=False):
         pausar = (botao(ue(f"/empresas/{x['id']}/pausar"), "Pausar", "sec") if x["ativo"]
                   else botao(ue(f"/empresas/{x['id']}/retomar"), "Retomar"))
         meu = pode_editar_empresa(x["id"])
-        dono = f' · 👤 {e(x["cfg"].get("EMPRESA_DONO", "") or "sem dono")}' if eh_admin() else ("" if meu else " · compartilhada com você")
+        dono = f' · 👤 {e(x["cfg"].get("EMPRESA_DONO", "") or "sem dono")}' if eh_admin() else ""
         if not meu:
             linhas += f"""<tr><td><b>{e(x['nome'])}</b> <span class="tag parado">{e(x['plat'])}</span><div class="sub">{dono}</div></td>
 <td><span class="tag {cls}">{e(txt)}</span></td><td class="ocultar">—</td><td>—</td></tr>"""
@@ -2908,7 +2908,7 @@ def pg_admin(q, aviso="", erro=False, f=None):
     for lg, u in sorted(us.items(), key=lambda t: (t[1]["papel"] != "admin", t[0])):
         proprias = sorted({(ler_env(a).get("EMPRESA_NOME") or a.stem).upper() for a in EMPRESAS.glob("*.env")
                            if (ler_env(a).get("EMPRESA_DONO") or "").lower() == lg}) if EMPRESAS.exists() else []
-        emps = "todas" if u["papel"] == "admin" else (", ".join(proprias) or "nenhuma") + (f" (+{len(u.get('empresas') or [])} liberada(s))" if u.get("empresas") else "")
+        emps = "todas" if u["papel"] == "admin" else (", ".join(proprias) or "nenhuma ainda")
         linhas += (f'<tr class="{"" if u.get("ativo", True) else "inativo"}"><td><a href="/admin/usuario/{e(lg)}"><b>{e(lg)}</b></a>'
                    f'<div class="sub">{e(u.get("nome", ""))}{"" if u.get("ativo", True) else " · DESATIVADO"}</div></td>'
                    f'<td>{tag_papel(u["papel"])}</td><td class="ocultar">{e(emps if len(emps) < 80 else emps[:77] + "…")}</td>'
@@ -2944,8 +2944,7 @@ def pg_admin(q, aviso="", erro=False, f=None):
 <input class="campo" name="login" required pattern="[a-z0-9._-]{{3,32}}" value="{e(f.get("login", ""))}" placeholder="ex.: maria.silva">
 <label>Nome</label><input class="campo" name="nome" value="{e(f.get("nome", ""))}" placeholder="Maria Silva">
 <label>Papel</label><select class="campo" name="papel">{opcoes_papel(f.get("papel", "operador"))}</select>
-<label>Empresas de outros usuários que ele também pode ver <small>(opcional; ele já vê as que ele mesmo cadastrar)</small></label>
-{caixas_empresas([])}
+<p class="sub">O usuário cadastra as próprias empresas no login dele e só vê essas – nunca as de outro usuário.</p>
 <label class="ck"><input type="checkbox" name="ia" value="1" {"" if f and f.get("ia") != "1" else "checked"}> Pode usar recursos com IA (têm custo)</label>
 <label>Senha inicial</label><input class="campo" type="password" name="senha" required minlength="8" autocomplete="new-password">
 <label>Repita a senha</label><input class="campo" type="password" name="senha2" required minlength="8" autocomplete="new-password">
@@ -2974,7 +2973,7 @@ def pg_usuario(lg, aviso="", erro=False):
 <label>Nome</label><input class="campo" name="nome" value="{e(u.get("nome", ""))}">
 <label>Papel</label><select class="campo" name="papel" {"" if not eu else 'title="Você não pode mudar o seu próprio papel"'}>{opcoes_papel(u["papel"])}</select>
 <p class="sub">Empresas cadastradas por ele: <b>{e(", ".join(sorted({(ler_env(a).get("EMPRESA_NOME") or a.stem).upper() for a in EMPRESAS.glob("*.env") if (ler_env(a).get("EMPRESA_DONO") or "").lower() == lg})) or "nenhuma")}</b></p>
-<label>Empresas de outros usuários que ele também pode ver <small>(opcional)</small></label>{caixas_empresas(u.get("empresas") or [])}
+<p class="sub">Ele só vê as empresas que ele mesmo cadastrou.</p>
 <label class="ck"><input type="checkbox" name="ia" value="1" {"checked" if u.get("ia", True) else ""}> Pode usar recursos com IA (têm custo)</label>
 <label class="ck"><input type="checkbox" name="ativo" value="1" {"checked" if u.get("ativo", True) else ""}> Ativo (desmarque para bloquear o acesso)</label>
 <div class="acoes"><button>Salvar</button><a class="btn sec" href="/admin">Voltar</a></div></form></div>
@@ -4654,7 +4653,7 @@ class Painel(BaseHTTPRequestHandler):
                     if f.get("senha", "") != f.get("senha2", ""):
                         raise ValueError("As duas senhas não são iguais.")
                     usuarios.criar(f.get("login", ""), f.get("nome", ""), f.get("senha", ""), f.get("papel", "operador"),
-                                   multi.get("empresas", []), f.get("ia") == "1", login_atual(), f.get("trocar") == "1")
+                                   [], f.get("ia") == "1", login_atual(), f.get("trocar") == "1")
                 except ValueError as ex:
                     return self.enviar(pg_admin({}, str(ex), True, f))
                 return self.redirecionar("/admin?ok=usuario_criado")
@@ -4667,7 +4666,7 @@ class Painel(BaseHTTPRequestHandler):
                         if lg == login_atual() and (not ativo_novo or f.get("papel") != "admin"):
                             raise ValueError("Você não pode tirar o seu próprio acesso de administrador nem se desativar.")
                         usuarios.atualizar(lg, nome=f.get("nome", "").strip() or lg, papel=f.get("papel", "operador"),
-                                           empresas=multi.get("empresas", []), ia=f.get("ia") == "1", ativo=ativo_novo)
+                                           empresas=[], ia=f.get("ia") == "1", ativo=ativo_novo)
                         if not ativo_novo:
                             encerrar_do_usuario(lg)
                         return self.redirecionar(f"/admin/usuario/{lg}?ok=feito")
@@ -5113,6 +5112,9 @@ class Painel(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     print(f"Painel em http://{HOST}:{PORTA}")
     migrar_donos()
+    for _lg, _u in usuarios.carregar().items():   # liberação de empresas de outro usuário não existe mais
+        if _u.get("empresas"):
+            usuarios.atualizar(_lg, empresas=[])
     threading.Thread(target=resumo_usuarios, daemon=True).start()
     threading.Thread(target=buscas.ciclo, args=(telegram_geral, minutos_busca), daemon=True).start()
     threading.Thread(target=vigiar, daemon=True).start()
