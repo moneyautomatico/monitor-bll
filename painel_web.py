@@ -761,7 +761,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     abas = ABAS
     nav = "".join(f'<a href="{x}" class="{"on" if x == aba else ""}" title="{"Minhas configurações" if x == "/preferencias" else n}">{n}</a>' for x, n in abas)
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
-    if u and u.get("trocar_senha") and aba != "/conta":
+    if False:   # troca obrigatória de senha no 1º acesso foi retirada
         msg += ('<div class="msg erro">🛡️ ' + ("Defina uma senha nova (a atual foi criada pelo administrador). " if u.get("trocar_senha") else
                 "A sua senha é curta (recomendado: 12 ou mais caracteres). ") +
                 '<a href="/conta">Trocar agora em Minha conta</a>.</div>')
@@ -3198,7 +3198,6 @@ def pg_admin(q, aviso="", erro=False, f=None):
 <label>Senha inicial</label><input class="campo" type="password" name="senha" required minlength="8" autocomplete="new-password">
 <label>Repita a senha</label><input class="campo" type="password" name="senha2" required minlength="8" autocomplete="new-password">
 <p class="sub mostra-senha"></p>
-<label class="ck"><input type="checkbox" name="trocar" value="1" checked> Pedir para a pessoa trocar a senha no 1º acesso</label>
 <div class="acoes"><button>Criar usuário</button><button type="button" class="sec" onclick="gerarSenha(this.form)">🎲 Gerar senha forte</button></div>
 </form></div></div></div>
 <h3>Recuperação</h3><p class="sub">Se perder o acesso de administrador, no servidor rode:
@@ -3215,7 +3214,7 @@ def pg_usuario(lg, aviso="", erro=False):
                        f'<div class="sub">{e(r.get("detalhe", ""))}</div></td><td class="ocultar">{e(r.get("ip", ""))}</td></tr>' for r in hist)
     corpo = f"""{ESTILO_ADM}<h2>👤 {e(u.get("nome") or lg)} <small class="sub">({e(lg)})</small></h2>{abas_admin("usu")}
 <p class="sub">Criado em {e(u.get("criado", ""))}{" por " + e(u["criado_por"]) if u.get("criado_por") else ""} · último acesso
-{e(u.get("ultimo_acesso") or "nunca")} {e(u.get("ultimo_ip", ""))} · sessões abertas: <b>{ses}</b>{" · <b>deve trocar a senha</b>" if u.get("trocar_senha") else ""}</p>
+{e(u.get("ultimo_acesso") or "nunca")} {e(u.get("ultimo_ip", ""))} · sessões abertas: <b>{ses}</b></p>
 <div class="duas-adm"><div class="form">
 <h3>Dados e permissões</h3>
 <form method="post" action="/admin/usuario/{e(lg)}/salvar"><input type="hidden" name="csrf" value="{CSRF}">
@@ -3231,7 +3230,6 @@ def pg_usuario(lg, aviso="", erro=False):
 <label>Senha nova</label><input class="campo" type="password" name="senha" required minlength="8" autocomplete="new-password">
 <label>Repita</label><input class="campo" type="password" name="senha2" required minlength="8" autocomplete="new-password">
 <p class="sub mostra-senha"></p>
-<label class="ck"><input type="checkbox" name="trocar" value="1" {"" if eu else "checked"}> Pedir para trocar no próximo acesso</label>
 <div class="acoes"><button>Redefinir</button><button type="button" class="sec" onclick="gerarSenha(this.form)">🎲 Gerar</button></div></form></div>
 <div class="acoes" style="margin-top:12px">{botao(f"/admin/usuario/{lg}/sessoes", "🔌 Desconectar dos aparelhos", "sec", "Desconectar este usuário de todos os aparelhos?")}
 {"" if eu else botao(f"/admin/usuario/{lg}/excluir", "🗑 Excluir usuário", "perigo", "Excluir este usuário? Isso não pode ser desfeito.")}</div></div></div>
@@ -4495,8 +4493,6 @@ class Painel(BaseHTTPRequestHandler):
             _REQ.user = u
             caminho = urllib.parse.urlparse(self.path).path.rstrip("/") or "/"
             q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
-            if u.get("trocar_senha") and self.command == "GET" and caminho != "/conta":
-                return self.redirecionar("/conta") and False
             return self.permitido(caminho, q0)
         _REQ.user = None
         if self.command == "GET" and not self.path.startswith(("/mensagens/processo", "/mensagens/busca")):
@@ -4942,7 +4938,7 @@ class Painel(BaseHTTPRequestHandler):
                     if f.get("senha", "") != f.get("senha2", ""):
                         raise ValueError("As duas senhas não são iguais.")
                     usuarios.criar(f.get("login", ""), f.get("nome", ""), f.get("senha", ""), f.get("papel", "operador"),
-                                   [], f.get("ia") == "1", login_atual(), f.get("trocar") == "1")
+                                   [], f.get("ia") == "1", login_atual(), False)
                 except ValueError as ex:
                     return self.enviar(pg_admin({}, str(ex), True, f))
                 return self.redirecionar("/admin?ok=usuario_criado")
@@ -4962,7 +4958,7 @@ class Painel(BaseHTTPRequestHandler):
                     if acao == "senha":
                         if f.get("senha", "") != f.get("senha2", ""):
                             raise ValueError("As duas senhas não são iguais.")
-                        usuarios.trocar_senha(lg, f.get("senha", ""), obrigar_troca=f.get("trocar") == "1")
+                        usuarios.trocar_senha(lg, f.get("senha", ""))
                         encerrar_do_usuario(lg, menos=self.tok() if lg == login_atual() else "")
                         return self.redirecionar(f"/admin/usuario/{lg}?ok=senha_redefinida")
                     if acao == "sessoes":
@@ -5455,6 +5451,8 @@ if __name__ == "__main__":
     for _lg, _u in usuarios.carregar().items():   # liberação de empresas de outro usuário não existe mais
         if _u.get("empresas"):
             usuarios.atualizar(_lg, empresas=[])
+        if _u.get("trocar_senha"):   # troca obrigatória no 1º acesso não existe mais
+            usuarios.atualizar(_lg, trocar_senha=False)
     threading.Thread(target=resumo_usuarios, daemon=True).start()
     threading.Thread(target=buscas.ciclo, args=(telegram_geral, minutos_busca), daemon=True).start()
     threading.Thread(target=vigiar, daemon=True).start()
