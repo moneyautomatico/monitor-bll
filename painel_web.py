@@ -30,6 +30,7 @@ import backup
 import urgencia
 import buscas
 import concorrentes
+import copiloto
 import resumo
 import documentos
 import geo
@@ -50,6 +51,7 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "busca_rodando": "Verificando agora. Se houver novidades, chegam no Telegram em instantes.",
           "doc_dados": "Dados da empresa salvos.",
           "doc_cnpj": "Dados preenchidos pela Receita e salvos. Confira e complete o CPF do representante (não vem da Receita).",
+          "piso": "Piso salvo. O copiloto usa este valor na disputa.",
           "resumo_enviado": "Resumo enviado agora no Telegram geral.",
           "prazo": "Prazo salvo. Você recebe aviso no Telegram 24 h e 2 h antes.",
           "agendado": "Prazo colocado na Agenda.",
@@ -447,7 +449,7 @@ ESTILO = """
 *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--txt)}
 header{background:#173f2c;color:#fff;padding:0 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
 header b{font-size:17px;padding:14px 0}nav{display:flex;gap:2px;flex-wrap:wrap}
-nav a{color:#cfe3d7;text-decoration:none;padding:16px 12px;font-size:14px;border-bottom:3px solid transparent}
+nav a{color:#cfe3d7;text-decoration:none;padding:16px 9px;font-size:13.5px;white-space:nowrap;border-bottom:3px solid transparent}
 header .sair{color:#cfe3d7;text-decoration:none;font-size:13px;border:1px solid rgba(255,255,255,.25);padding:6px 12px;border-radius:8px}header .sair:hover{background:rgba(255,255,255,.1)}
 nav a.on{color:#fff;border-bottom-color:#7fd3a5}main{max-width:1250px;margin:auto;padding:18px 16px 60px}
 h2{font-size:19px;margin:6px 0 14px}h3{font-size:15px;margin:18px 0 8px}
@@ -556,12 +558,13 @@ mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.a
 @media (max-width:700px){.ocultar{display:none}nav a{padding:12px 8px}}
 """
 
-ABAS = [("/", "Visão geral"), ("/mensagens", "Mensagens"), ("/processos", "Processos"), ("/agenda", "Agenda"), ("/concorrentes", "Concorrentes"),
-        ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/documentos", "Documentos"), ("/empresas", "Empresas"), ("/config", "Configurações")]
+ABAS = [("/", "Início"), ("/mensagens", "Mensagens"), ("/processos", "Processos"), ("/disputa", "🎯 Disputa"), ("/agenda", "Agenda"),
+        ("/concorrentes", "Concorrentes"), ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais"),
+        ("/documentos", "Documentos"), ("/empresas", "Empresas"), ("/config", "⚙️")]
 
 
 def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
-    nav = "".join(f'<a href="{u}" class="{"on" if u == aba else ""}">{n}</a>' for u, n in ABAS)
+    nav = "".join(f'<a href="{u}" class="{"on" if u == aba else ""}" title="{"Configurações" if u == "/config" else n}">{n}</a>' for u, n in ABAS)
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
     if aba in ("/", "/config") and SENHA and senha_fraca(SENHA):
         msg += ('<div class="msg erro">🛡️ A senha do painel é fraca (menos de 12 caracteres ou sem letras e números). '
@@ -2074,6 +2077,129 @@ quem fica à frente e por quanto. Quanto mais processos lidos, mais confiável.<
     return pagina("Concorrentes", corpo, "/concorrentes")
 
 
+# ------------------------------------------------------------------ copiloto da disputa
+def _num(v):
+    try:
+        return float(str(v).replace(".", "").replace(",", ".")) if v not in (None, "") else None
+    except ValueError:
+        return None
+
+
+def _sparkline(vals, larg=160, alt=34):
+    vals = [v for v in vals if v]
+    if len(vals) < 2:
+        return ""
+    mi, ma = min(vals), max(vals)
+    faixa = (ma - mi) or 1
+    pts = " ".join(f"{i * larg / (len(vals) - 1):.1f},{alt - 3 - (v - mi) / faixa * (alt - 6):.1f}" for i, v in enumerate(vals))
+    return (f'<svg width="{larg}" height="{alt}" viewBox="0 0 {larg} {alt}" aria-label="evolução do melhor lance">'
+            f'<polyline points="{pts}" fill="none" stroke="#1565c0" stroke-width="2"/></svg>')
+
+
+def disputas_ao_vivo():
+    """Lotes em disputa lidos pelo copiloto nos últimos 10 min, de todas as empresas BLL/BNC."""
+    out = []
+    limite = datetime.now() - timedelta(minutes=10)
+    for nome, ids in nomes_empresas().items():
+        for eid in ids:
+            db = EMPRESAS / eid / "bll_monitor.db"
+            if not db.exists():
+                continue
+            try:
+                con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+                rows = con.execute("SELECT chave, processo, promotor, lote, descricao, fase, primeiro, melhor, nos_primeiro, lido_em FROM ao_vivo").fetchall()
+                for r in rows:
+                    lido = para_data(r[9])
+                    if lido < limite:
+                        continue
+                    hist = [h[0] for h in con.execute("SELECT melhor FROM ao_vivo_hist WHERE chave=? ORDER BY rowid DESC LIMIT 40", (r[0],))][::-1]
+                    out.append({"empresa": nome, "eid": eid, "chave": r[0], "processo": r[1], "promotor": r[2], "lote": r[3],
+                                "descricao": r[4], "fase": r[5], "primeiro": r[6], "melhor": r[7], "somos": bool(r[8]),
+                                "lido": lido, "hist": hist})
+                con.close()
+            except Exception:  # noqa: BLE001  (tabela ainda não existe: copiloto nunca rodou)
+                pass
+    return sorted(out, key=lambda x: (x["somos"], x["processo"], x["lote"]))
+
+
+def form_piso(emp, proc, prom, lote, atual, compacto=False):
+    k = copiloto.chave_piso(emp, proc, prom, lote)
+    p = copiloto.pisos().get(k) or {}
+    v = lambda x: "" if p.get(x) in (None, "") else f'{p[x]:.2f}'.replace(".", ",")  # noqa: E731
+    return (f'<form method="post" action="/disputa/piso" class="linha piso" style="gap:6px;flex-wrap:wrap;align-items:flex-end">'
+            f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="k" value="{e(k)}"><input type="hidden" name="voltar" value="{e(atual)}">'
+            f'<label class="sub">custo (R$)<input class="campo" name="custo" value="{v("custo")}" inputmode="decimal" style="width:120px"></label>'
+            f'<label class="sub">margem mín. %<input class="campo" name="margem" value="{v("margem")}" inputmode="decimal" style="width:80px"></label>'
+            f'<label class="sub">ou piso direto (R$)<input class="campo" name="piso" value="{v("piso") if not p.get("custo") else ""}" inputmode="decimal" style="width:120px"></label>'
+            f'<button class="sec">Salvar piso</button>'
+            + (f'<span class="sub">piso atual: <b>R$ {copiloto._br(p["piso"])}</b></span>' if p.get("piso") else "") + '</form>')
+
+
+def pg_disputa(q, aviso=""):
+    vivos = disputas_ao_vivo()
+    agora = datetime.now()
+    cards = ""
+    for d in vivos:
+        piso = (copiloto.pisos().get(copiloto.chave_piso(d["empresa"], d["processo"], d["promotor"], d["lote"])) or {}).get("piso")
+        melhor = _num(d["melhor"])
+        txt, folga = copiloto.analise_piso(melhor, piso, d["somos"])
+        cor = "#2e7d32" if d["somos"] else ("#ef6c00" if folga is not None and folga > 0 else "#c62828" if folga is not None else "#607d8b")
+        idade = int((agora - d["lido"]).total_seconds())
+        lote = str(int(d["lote"])) if str(d["lote"]).isdigit() else d["lote"]
+        chat = "/mensagens?" + urllib.parse.urlencode({"eid": d["eid"], "processo": d["processo"], "promotor": d["promotor"]})
+        cards += f"""<div class="dv" style="border-left-color:{cor}">
+<div class="dv-cab"><b>{e(d["processo"])} · L{e(lote)}</b> <span class="sub">{e(d["descricao"][:70])}</span>
+<span class="tag" style="background:{cor};color:#fff">{"🟢 VOCÊ EM 1º" if d["somos"] else "🥊 fora do 1º"}</span>
+<span class="sub" style="margin-left:auto">{e(d["empresa"])} · {e(d["fase"])} · lido há {idade}s</span></div>
+<div class="dv-num"><div><small>1º colocado</small><b>{e(d["primeiro"] or "—")}</b></div><div><small>melhor lance</small><b>R$ {e(d["melhor"] or "—")}</b></div>
+<div><small>seu piso</small><b>{"R$ " + copiloto._br(piso) if piso else "—"}</b></div><div>{_sparkline(d["hist"])}</div></div>
+<div class="dv-txt" style="color:{cor}">{e(txt)}</div>
+<details><summary class="sub" style="cursor:pointer">definir/alterar piso</summary>{form_piso(d["empresa"], d["processo"], d["promotor"], d["lote"], "/disputa")}</details>
+<div class="sub"><a href="{e(chat)}">abrir o chat do processo</a> · {e(d["promotor"][:70])}</div></div>"""
+    # preparar pisos antes da sessão
+    emps = nomes_empresas()
+    opcoes, linhas_prep = [], ""
+    for nome, ids in sorted(emps.items()):
+        for eid in ids:
+            if ler_env(EMPRESAS / f"{eid}.env").get("PLATAFORMA", "bll").lower() not in ("bll", "bnc"):
+                continue
+            for proc, prom, sit in processos_empresa([eid]):
+                opcoes.append((f"{nome}||{eid}||{proc}||{prom}", f"{nome} · {proc} – {prom[:50]}{' · ' + sit if sit else ''}"))
+    sel_q = q.get("prep", "")
+    sel = ('<option value="">— escolha o processo —</option>' +
+           "".join(f'<option value="{e(v)}" {"selected" if v == sel_q else ""}>{e(t)}</option>' for v, t in opcoes))
+    if sel_q.count("||") == 3:
+        nome, eid, proc, prom = sel_q.split("||")
+        volta = "/disputa?" + urllib.parse.urlencode({"prep": sel_q})
+        for r in classif(eid, proc, prom):
+            lote = nlote(r[2])
+            linhas_prep += (f'<tr><td><b>L{e(lote)}</b><div class="sub">{e((r[3] or "")[:80])}</div></td><td class="ocultar">{e(r[4] or "")}</td>'
+                            f'<td>{e(r[6] or "—")}<div class="sub">nosso: {e(r[9] or "—")}</div></td>'
+                            f'<td>{form_piso(nome, proc, prom, r[2], volta)}</td></tr>')
+        if not linhas_prep:
+            linhas_prep = '<tr><td colspan="4">O monitor ainda não leu os lotes deste processo.</td></tr>'
+    corpo = f"""<style>.dv{{background:var(--card);border:1px solid var(--borda);border-left:7px solid;border-radius:12px;padding:12px 16px;margin:10px 0}}
+.dv-cab{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}.dv-num{{display:flex;gap:22px;flex-wrap:wrap;align-items:center;margin:8px 0}}
+.dv-num small{{display:block;color:var(--sub);font-size:12px}}.dv-num b{{font-size:20px}}.dv-txt{{font-weight:700;margin:4px 0 6px}}
+.piso label{{display:flex;flex-direction:column;font-weight:400}}</style>
+<h2>🎯 Disputa ao vivo (copiloto)</h2>
+<p class="sub">Durante a fase de lances (BLL/BNC), o monitor relê a sala a cada ~25 s e avisa no Telegram/ntfy quando vocês são
+superados, quando voltam ao 1º e se ainda dá para cobrir sem passar do <b>piso</b> (custo + margem mínima). <b>Os lances
+continuam sendo dados por vocês</b> – o sistema só lê. Esta página atualiza sozinha.</p>
+<div id="ao-vivo">{cards or '<div class="msg">Nenhuma disputa ao vivo agora. Quando um lote entrar em disputa, ele aparece aqui (e chega aviso no Telegram).</div>'}</div>
+<h2 style="margin-top:26px">Preparar os pisos antes da sessão</h2>
+<p class="sub">Informe o <b>custo</b> do lote/item e a <b>margem mínima</b> (o sistema calcula o piso) ou digite o piso direto.
+O copiloto usa o piso para dizer se ainda dá para cobrir o concorrente.</p>
+<div class="form" style="max-width:none"><select class="campo" onchange="location.href='/disputa?prep='+encodeURIComponent(this.value)">{sel}</select>
+{f'<table style="margin-top:10px"><tr><th>Lote</th><th class="ocultar">Fase</th><th>Melhor lance</th><th>Piso</th></tr>{linhas_prep}</table>' if sel_q else ''}</div>
+<script>setInterval(()=>{{const a=document.activeElement; if(a&&['INPUT','SELECT','TEXTAREA'].includes(a.tagName))return;
+ if(document.querySelector('details[open] .piso'))return;
+ fetch(location.pathname+'?parcial=1',{{credentials:'same-origin'}}).then(r=>r.ok?r.text():null).then(h=>{{if(h!==null)document.getElementById('ao-vivo').innerHTML=h;}});}},10000);</script>"""
+    if q.get("parcial") == "1":
+        return cards or '<div class="msg">Nenhuma disputa ao vivo agora.</div>'
+    return pagina("Disputa ao vivo", corpo, "/disputa", aviso)
+
+
 def pg_config(aviso=""):
     c = CFG_ATUAL()
     g = lambda k, d="": e(c.get(k, d))  # noqa: E731
@@ -3101,6 +3227,8 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_config(AVISOS.get(q.get("ok", ""), "")))
             if p == "/documentos":
                 return self.enviar(pg_documentos(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/disputa":
+                return self.enviar(pg_disputa(q, AVISOS.get(q.get("ok", ""), "")))
             if p == "/concorrentes":
                 return self.enviar(pg_concorrentes(q))
             if p == "/agenda":
@@ -3362,6 +3490,14 @@ class Painel(BaseHTTPRequestHandler):
                 pecas.iniciar(pid, CFG_ATUAL(), {"tipo": "habilitacao", "edital": ch, "ctx": {}, "empresa": "",
                                                  "titulo": d_an.get("titulo", ""), "anexos": []})
                 return self.redirecionar(f"/analise/{ch}#hab")
+            if p == "/disputa/piso":
+                k = f.get("k", "")
+                if k.count("|") == 3:
+                    custo, margem, piso = _num(f.get("custo")), _num(f.get("margem")), _num(f.get("piso"))
+                    copiloto.salvar_piso(k, custo, margem if margem is not None else 0, None if custo is not None else piso)
+                volta = f.get("voltar", "/disputa")
+                return self.redirecionar((volta if volta.startswith("/") and not volta.startswith("//") else "/disputa")
+                                         + ("&" if "?" in volta else "?") + "ok=piso")
             if p == "/config/resumo":
                 gravar_env(CONFIG, {"RESUMO_ATIVO": "1" if f.get("RESUMO_ATIVO") else "0",
                                     "RESUMO_HORA": re.sub(r"\D", "", f.get("RESUMO_HORA", "7"))[:2] or "7"})

@@ -2451,6 +2451,13 @@ def rodar(uma_vez=False, visivel=False, diag=False):
                         gerar_painel(db, f"Erro no último ciclo: {e}")
             else:
                 gerar_painel(db, "Fora do horário de monitoramento")
+        usado = 0
+        if not uma_vez and dentro_do_horario():
+            try:  # copiloto: se há disputa ao vivo, relê as salas a cada ~25 s em vez de esperar o próximo ciclo
+                import copiloto
+                usado = copiloto.janela_rapida(sys.modules[__name__], db, page, intervalo * 60)
+            except Exception as e:  # noqa: BLE001
+                log(f"Copiloto: {e!r}")
         try:
             arq_cookies.write_text(json.dumps(ctx.cookies()), encoding="utf-8")
             os.chmod(arq_cookies, 0o600)
@@ -2462,6 +2469,7 @@ def rodar(uma_vez=False, visivel=False, diag=False):
           break
       base = intervalo * 60
       espera = int(base + random.uniform(-0.15, 0.15) * base)  # variação de ±15% para não parecer robô
+      espera = max(5, espera - usado)   # o tempo do copiloto já conta como espera
       log(f"Próxima verificação em {espera} s.")
       time.sleep(espera)
 
