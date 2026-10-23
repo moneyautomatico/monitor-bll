@@ -138,3 +138,8 @@ def resumo_mes(mes):
 
 def brl(v):
     return "R$ " + f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def usos_usuario(login, mes="", dono_antigo=""):
+    """Usos de um usuário. Os registros de antes dos usuários (sem login) contam para o usuário antigo."""
+    return [r for r in usos(mes) if (r.get("usuario") or dono_antigo) == login]

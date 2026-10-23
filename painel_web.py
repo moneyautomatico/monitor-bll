@@ -2691,6 +2691,61 @@ def pg_conta(aviso="", erro=False):
     return pagina("Minha conta", corpo, "/conta", aviso, erro)
 
 
+def valor_usuario(r):
+    """O que o usuário paga por um uso: com repasse ligado, o valor ao licitante; senão, o custo."""
+    p = custos_ia.precos()
+    return r.get("cliente", 0) if p["cobrar"] and p["acrescimo"] else r.get("brl", 0)
+
+
+def cartao_meu_consumo(lg, uc):
+    mes = datetime.now().strftime("%Y-%m")
+    rs = custos_ia.usos_usuario(lg, mes, DONO_PADRAO)
+    total = sum(valor_usuario(r) for r in rs)
+    return (f'<div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">💳 Meu consumo de IA</h3>'
+            f'<div class="kpis" style="margin:6px 0"><div class="kpi"><div class="v">{custos_ia.brl(total)}</div><div class="l">neste mês</div></div>'
+            f'<div class="kpi"><div class="v">{len(rs)}</div><div class="l">usos de IA no mês</div></div></div>'
+            + ('<p class="sub">Você usa a <b>sua própria chave</b> do Gemini: a cobrança real vem do Google na sua conta; os valores aqui são estimativa.</p>'
+               if uc.get("gemini_key") else "") +
+            '<div class="acoes"><a class="btn sec" href="/meu-consumo">Ver detalhes</a></div></div>')
+
+
+def pg_meu_consumo(q):
+    lg = login_atual()
+    uc = usuarios.cfg(lg)
+    mes = q.get("mes", "") if re.fullmatch(r"\d{4}-\d{2}", q.get("mes", "")) else datetime.now().strftime("%Y-%m")
+    todos = custos_ia.usos_usuario(lg, "", DONO_PADRAO)
+    rs = [r for r in todos if r.get("quando", "").startswith(mes)]
+    meses = sorted({r["quando"][:7] for r in todos} | {datetime.now().strftime("%Y-%m")}, reverse=True)
+    sel = ('<select class="campo" style="max-width:180px" onchange="location.href=\'/meu-consumo?mes=\'+this.value">' +
+           "".join(f'<option value="{m}" {"selected" if m == mes else ""}>{m[5:]}/{m[:4]}</option>' for m in meses) + "</select>")
+    por = {}
+    for r in rs:
+        a = por.setdefault(r.get("recurso", "outro"), [0, 0.0])
+        a[0] += 1
+        a[1] += valor_usuario(r)
+    linhas_rec = "".join(
+        f'<tr><td>{e(custos_ia.RECURSOS.get(k, (k, 0))[0])}</td><td>{n}</td><td>{custos_ia.brl(v / n if n else 0)}</td><td><b>{custos_ia.brl(v)}</b></td></tr>'
+        for k, (n, v) in sorted(por.items(), key=lambda t: -t[1][1]))
+    linhas = "".join(
+        f'<tr><td>{e(r["quando"][8:10] + "/" + r["quando"][5:7] + " " + r["quando"][11:16])}</td>'
+        f'<td>{e(custos_ia.RECURSOS.get(r.get("recurso"), (r.get("recurso"), 0))[0])}<div class="sub">{e(r.get("ref", ""))}</div></td>'
+        f'<td class="ocultar">{e(r.get("empresa") or "—")}</td><td>{custos_ia.brl(valor_usuario(r))}</td></tr>' for r in reversed(rs[-200:]))
+    tabela_valores = "".join(
+        f'<tr><td>{e(nome)}</td><td>~{custos_ia.brl(custos_ia.estimativa(k)[1] if custos_ia.precos()["cobrar"] and custos_ia.precos()["acrescimo"] else custos_ia.estimativa(k)[0])}</td></tr>'
+        for k, (nome, _) in custos_ia.RECURSOS.items())
+    corpo = f"""{ESTILO_IA}<h2>💳 Meu consumo de IA</h2>
+<p class="sub">Os recursos com inteligência artificial (análise de edital, “Posso participar?”, declarações, peças e “Pergunte ao Licitatudo”)
+têm custo por uso. Aqui aparecem só os <b>seus</b> usos. Os demais recursos do sistema não têm custo de IA.</p>
+{'<div class="aviso-ia">Você usa a <b>sua própria chave</b> do Google Gemini: a cobrança real vem do Google na sua conta – os valores aqui são estimativa.</div>' if uc.get("gemini_key") else ''}
+<div class="acoes">{sel}<a class="btn sec" href="/meu-consumo.csv?mes={mes}">⬇ Exportar CSV</a><a class="btn sec" href="/preferencias">⚙️ Voltar</a></div>
+<div class="kpis"><div class="kpi"><div class="v">{custos_ia.brl(sum(valor_usuario(r) for r in rs))}</div><div class="l">total no mês</div></div>
+<div class="kpi"><div class="v">{len(rs)}</div><div class="l">usos no mês</div></div></div>
+<h3>Por recurso</h3><table><tr><th>Recurso</th><th>Usos</th><th>Média por uso</th><th>Total</th></tr>{linhas_rec or '<tr><td colspan="4">Nenhum uso neste mês.</td></tr>'}</table>
+<h3>Quanto custa cada uso (estimativa)</h3><table><tr><th>Recurso</th><th>Valor por uso</th></tr>{tabela_valores}</table>
+<h3>Meus usos</h3><table><tr><th>Quando</th><th>Recurso</th><th class="ocultar">Empresa</th><th>Valor</th></tr>{linhas or '<tr><td colspan="4">—</td></tr>'}</table>"""
+    return pagina("Meu consumo de IA", corpo, "/preferencias")
+
+
 def pg_preferencias(aviso="", erro=False):
     u = usuario_atual()
     lg = u["login"]
@@ -2780,6 +2835,7 @@ No celular, este link já abre o app: <a href="ntfy://ntfy.sh/{e(topico)}">ntfy:
 <p class="sub">{"Você está usando a <b>sua própria chave</b> do Google Gemini: o custo vai para a sua conta Google." if uc.get("gemini_key") else "Você usa a chave de IA do sistema."}
 O texto “Sobre a empresa” e as instruções da análise ficam em <a href="/editais">Editais</a>.</p>
 {form_ia}</div>
+{cartao_meu_consumo(lg, uc)}
 <div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">🔑 Conta</h3>
 <p class="sub">Login <b>{e(lg)}</b> · {tag_papel(u["papel"])}</p><div class="acoes"><a class="btn sec" href="/conta">Trocar minha senha</a>
 <a class="btn sec" href="/empresas">Minhas empresas</a></div></div>
@@ -4289,6 +4345,15 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_conta(AVISOS.get(q.get("ok", ""), "")))
             if p == "/preferencias":
                 return self.enviar(pg_preferencias(AVISOS.get(q.get("ok", ""), "")))
+            if p == "/meu-consumo":
+                return self.enviar(pg_meu_consumo(q))
+            if p == "/meu-consumo.csv":
+                mes = q.get("mes", "") if re.fullmatch(r"\d{4}-\d{2}", q.get("mes", "")) else ""
+                linhas = ["quando;recurso;empresa;referencia;valor_brl"]
+                for r in custos_ia.usos_usuario(login_atual(), mes, DONO_PADRAO):
+                    linhas.append(";".join(str(x).replace(";", ",") for x in (r.get("quando", ""), r.get("recurso", ""), r.get("empresa", ""),
+                                                                                 r.get("ref", ""), f"{valor_usuario(r):.4f}".replace(".", ","))))
+                return self.baixar(("\n".join(linhas)).encode("utf-8-sig"), f"meu_consumo_ia_{mes or 'tudo'}.csv", "text/csv; charset=utf-8")
             if p == "/admin":
                 return self.enviar(pg_admin(q, AVISOS.get(q.get("ok", ""), "")))
             if p == "/admin/auditoria":
