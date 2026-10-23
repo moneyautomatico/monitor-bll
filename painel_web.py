@@ -1737,7 +1737,7 @@ def form_empresa(eid=None):
 <label>Chat do Telegram próprio <small>(chat_id; use “Descobrir conversas” em Configurações)</small></label>
 <input class="campo" name="tg_chat" value="{g('EMPRESA_TELEGRAM_CHAT_ID')}">
 <label>Token de bot próprio <small>(opcional; em branco = mesmo bot geral; {"já configurado, " if cfg.get("EMPRESA_TELEGRAM_TOKEN") else ""}deixe vazio para manter)</small></label>
-<input class="campo" type="password" name="tg_token" autocomplete="off">
+<input class="campo" type="password" name="tg_token" autocomplete="new-password">
 <label>Tópico ntfy próprio <small>(opcional, alarme no celular)</small></label>
 <input class="campo" name="ntfy" value="{g('EMPRESA_NTFY_TOPICO')}">
 <div class="acoes"><button>Salvar</button><a class="btn sec" href="{ue('/empresas')}">Cancelar</a></div></form>{remover}</div>
@@ -3138,7 +3138,7 @@ No celular, este link já abre o app: <a href="ntfy://ntfy.sh/{e(topico)}">ntfy:
     pronto = tem_bot and chat
     form_ia = "" if leitura else f"""<form method="post" action="/preferencias/ia"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Minha chave do Gemini <small>(opcional; gere em aistudio.google.com; vazio = manter)</small></label>
-<input class="campo" type="password" name="gemini_key" autocomplete="off">
+<input class="campo" type="password" name="gemini_key" autocomplete="new-password">
 {'<label class="ck"><input type="checkbox" name="tirar_chave" value="1"> Remover minha chave e usar a do sistema</label>' if uc.get("gemini_key") else ''}
 <label>Modelo <small>(vazio = o do sistema: {e(CFG_ATUAL().get("GEMINI_MODELO") or "automático")})</small></label>
 <input class="campo" name="gemini_modelo" value="{e(uc.get("gemini_modelo", ""))}" placeholder="ex.: gemini-flash-latest">
@@ -3366,7 +3366,7 @@ def pg_config(aviso=""):
 <form method="post" action="/config"><input type="hidden" name="csrf" value="{CSRF}">
 <h3>Telegram do sistema <small class="sub">(opcional – só avisos do sistema: segurança e backup. Cada usuário conecta o próprio bot em ⚙️)</small></h3>
 <label>Token do bot <small>({"configurado; " if c.get("TELEGRAM_TOKEN") else ""}deixe vazio para manter)</small></label>
-<input class="campo" type="password" name="TELEGRAM_TOKEN" autocomplete="off">
+<input class="campo" type="password" name="TELEGRAM_TOKEN" autocomplete="new-password">
 <label>Chat ID</label><input class="campo" name="TELEGRAM_CHAT_ID" value="{g('TELEGRAM_CHAT_ID')}">
 <h3>Alarme e ligação</h3>
 <label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" name="ALARME_SO_URGENTE" value="1" {"checked" if c.get("ALARME_SO_URGENTE", "1") != "0" else ""}>
@@ -3381,7 +3381,7 @@ def pg_config(aviso=""):
 <h3>Inteligência artificial (análise de editais)</h3>
 <p class="sub">Chave gratuita do Google Gemini: entre em <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>, faça login com uma conta Google e clique em “Create API key”.</p>
 <label>Chave do Gemini <small>({"configurada; " if c.get("GEMINI_API_KEY") else ""}deixe vazio para manter)</small></label>
-<input class="campo" type="password" name="GEMINI_API_KEY" autocomplete="off">
+<input class="campo" type="password" name="GEMINI_API_KEY" autocomplete="new-password">
 <label>Modelo <small>(vazio = automático: usa o modelo “flash” mais novo que a sua chave tiver)</small></label><input class="campo" name="GEMINI_MODELO" value="{g('GEMINI_MODELO')}" placeholder="automático">
 <h3>Ritmo</h3>
 <label>Avisar se uma empresa ficar sem verificação por mais de (minutos)</label>
@@ -3437,7 +3437,7 @@ sessões abertas: <b>{len(_sessoes())}</b> · usuários: <b>{len(usuarios.carreg
 <h2 style="margin-top:22px">Descobrir conversas do Telegram</h2><div class="form">
 <p class="sub">Mande uma mensagem ao bot (ou num grupo onde ele está) e clique abaixo para ver o chat_id.</p>
 <form method="post" action="/telegram"><input type="hidden" name="csrf" value="{CSRF}">
-<label>Token <small>(vazio = bot geral)</small></label><input class="campo" type="password" name="token" autocomplete="off">
+<label>Token <small>(vazio = bot geral)</small></label><input class="campo" type="password" name="token" autocomplete="new-password">
 <div class="acoes"><button>Descobrir conversas</button></div></form></div>"""
     return pagina("Configurações", abas_admin_topo(corpo, "cfg"), "/config", aviso)
 
@@ -5127,8 +5127,14 @@ class Painel(BaseHTTPRequestHandler):
                 v["ALARME_SO_URGENTE"] = "1" if f.get("ALARME_SO_URGENTE") else "0"
                 v["CHAT_URGENTE"] = "1" if f.get("CHAT_URGENTE") else "0"
                 if f.get("TELEGRAM_TOKEN", "").strip():
-                    v["TELEGRAM_TOKEN"] = f["TELEGRAM_TOKEN"].strip()
+                    tk = limpar_token(f["TELEGRAM_TOKEN"])
+                    if not tk:   # ex.: o navegador preencheu sozinho com a senha do painel
+                        return self.enviar(pg_config("O token do Telegram do sistema não parece válido (formato 123456789:AAH…). "
+                                                     "Nada foi alterado – apague o campo ou cole o token certo."), 400)
+                    v["TELEGRAM_TOKEN"] = tk
                 if f.get("GEMINI_API_KEY", "").strip():
+                    if not re.fullmatch(r"[\w-]{30,60}", f["GEMINI_API_KEY"].strip()):
+                        return self.enviar(pg_config("A chave do Gemini não parece válida. Nada foi alterado – apague o campo ou cole a chave certa."), 400)
                     v["GEMINI_API_KEY"] = f["GEMINI_API_KEY"].strip()
                 v["GEMINI_MODELO"] = f.get("GEMINI_MODELO", "").strip()
                 gravar_env(CONFIG, v)
