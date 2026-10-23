@@ -139,8 +139,17 @@ def _intro(ctx):
             f"**{fmt_cpf(ctx['rep_cpf'])}**, DECLARA, sob as penas da lei, ")
 
 
-def montar(ids, ctx, unificada=False):
-    """Lista de documentos: cada um é uma lista de blocos (tipo, texto)."""
+def preencher_modelo(texto, ctx):
+    """Modelo vindo do edital (lido pela IA) com {RAZAO}, {CNPJ}... trocados pelos dados."""
+    trocas = {"RAZAO": f"**{ctx.get('razao', '')}**", "CNPJ": f"**{fmt_cnpj(ctx.get('cnpj'))}**",
+              "ENDERECO": ctx.get("endereco", ""), "REP_NOME": f"**{ctx.get('rep_nome', '')}**",
+              "REP_CPF": f"**{fmt_cpf(ctx.get('rep_cpf'))}**", "ORGAO": ctx.get("orgao", "") or "________",
+              "PROCESSO": ctx.get("processo", "") or "____/____"}
+    return re.sub(r"\{(RAZAO|CNPJ|ENDERECO|REP_NOME|REP_CPF|ORGAO|PROCESSO)\}", lambda m: trocas[m.group(1)], texto)
+
+
+def montar(ids, ctx, unificada=False, extras=()):
+    """Lista de documentos: cada um é uma lista de blocos (tipo, texto). extras = [(titulo, texto do modelo do edital)]"""
     escolhidas = [d for d in DECLARACOES if d[0] in ids and (d[0] != "meepp" or ctx.get("porte") in ("ME", "EPP"))]
     porte = PORTES.get(ctx.get("porte", ""), "")
     ref = []
@@ -159,12 +168,16 @@ def montar(ids, ctx, unificada=False):
     docs = []
     for _, titulo, txt in escolhidas:
         docs.append((titulo, ref + [("titulo", titulo.upper()), ("p", _intro(ctx) + txt.replace("{PORTE}", porte))] + fim))
+    for titulo, txt in extras:   # modelos próprios do edital
+        corpo = [("p", par.strip()) for par in preencher_modelo(txt, ctx).split("\n") if par.strip()]
+        docs.append((titulo, ref + [("titulo", (titulo or "DECLARAÇÃO").upper())] + corpo + fim))
     return docs
 
 
 # ------------------------------------------------------------------ saída HTML (visualizar / imprimir em PDF)
 def _neg_html(t):
-    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escape(t)).replace("\n", "<br>")
+    t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escape(t)).replace("\n", "<br>")
+    return re.sub(r"(\[(?:CONFERIR|inserir)[^\]]*\])", r'<mark style="background:#fff59d">\1</mark>', t)
 
 
 def _assinatura_linhas(ctx):
@@ -182,6 +195,8 @@ def html(docs, ctx):
                 partes.append(f'<h2>{escape(txt)}</h2>')
             elif tipo == "dir":
                 partes.append(f'<p class="ref">{_neg_html(txt)}</p>')
+            elif tipo == "secao":
+                partes.append(f'<h3>{_neg_html(txt)}</h3>')
             elif tipo == "data":
                 partes.append(f'<p class="data">{escape(txt)}</p>')
             elif tipo == "assinatura":
@@ -229,6 +244,8 @@ def docx(docs, ctx):
                 corpo.append(_par(txt, "center", True, 360, quebra=q))
             elif tipo == "dir":
                 corpo.append(_par(txt, "left", False, 200, quebra=q))
+            elif tipo == "secao":
+                corpo.append(_par(txt, "left", True, 160, quebra=q))
             elif tipo == "data":
                 corpo.append(_par(txt, "right", quebra=q))
             elif tipo == "assinatura":

@@ -31,6 +31,7 @@ import buscas
 import documentos
 import geo
 import oportunidades
+import pecas
 
 PASTA = Path(__file__).resolve().parent
 EMPRESAS = PASTA / "empresas"
@@ -547,7 +548,7 @@ mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.a
 """
 
 ABAS = [("/", "Visão geral"), ("/mensagens", "Mensagens"), ("/processos", "Processos"),
-        ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/documentos", "Declarações"), ("/empresas", "Empresas"), ("/config", "Configurações")]
+        ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/documentos", "Documentos"), ("/empresas", "Empresas"), ("/config", "Configurações")]
 
 
 def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
@@ -915,7 +916,9 @@ def html_conversa(g, cfg_chat, mapa=None):
             f'<div><b>Órgão:</b> {e(g["promotor"])}</div><div class="sub"><b>Empresa:</b> {e(g["nome"])} · '
             f'<b>Situação:</b> <span class="cv-sit">{e(situacao_proc(g["eid"], g["processo"], g["promotor"]) or "—")}</span>'
             f'</div></div><a class="btn cv-doc" href="/documentos?{e(urllib.parse.urlencode({"emp": g["nome"].upper().strip(), "proc": g["processo"] + "||" + g["promotor"]}))}" '
-            f'title="Gerar as declarações deste processo">📄 Declarações</a></div>' + barra_classif(g) +
+            f'title="Gerar as declarações deste processo">📄 Declarações</a>'
+            f'<a class="btn cv-doc" style="margin-left:6px" href="/pecas?{e(urllib.parse.urlencode({"emp": g["nome"].upper().strip(), "proc": g["processo"] + "||" + g["promotor"]}))}" '
+            f'title="Rascunho de recurso, contrarrazões, resposta a diligência… com IA">⚖️ Peça (IA)</a></div>' + barra_classif(g) +
             f'<div class="cv-filtro">'
             + menu("lote", "Lotes (mensagens)", "Todos os lotes", padrao=True)
             + menu("dilig", "Diligências", "Todas as diligências")
@@ -1477,6 +1480,36 @@ def pg_documentos(q, aviso=""):
                 "".join(f'<option value="{e(p + "||" + o)}" {"selected" if (p + "||" + o) == proc_q else ""}>'
                         f'{e(p)} – {e(o)}{" · " + e(sit) if sit else ""}</option>' for p, o, sit in procs))
     marcadas = set(q.get("ids", "").split(",")) if q.get("ids") else set(documentos.PADRAO)
+    leitura = pecas.ler(q.get("leitura", "")) if re.fullmatch(r"[0-9a-f]{14}", q.get("leitura", "")) else None
+    bloco_ia, extras_html = "", ""
+    if leitura and leitura.get("status") == "gerando":
+        bloco_ia = ('<div class="msg">🤖 Lendo o edital para descobrir quais declarações ele exige… (1 a 3 minutos – a página '
+                    'atualiza sozinha)</div><script>setTimeout(()=>location.reload(),8000)</script>')
+    elif leitura and leitura.get("status") == "erro":
+        bloco_ia = f'<div class="msg erro">A IA não conseguiu ler o edital: {e(leitura.get("erro", ""))}</div>'
+    elif leitura and leitura.get("status") == "pronto":
+        r = leitura.get("resultado") or {}
+        if not q.get("ids"):
+            marcadas = set(r.get("exigidas") or []) | {f"x{i}" for i in range(len(r.get("especificas") or []))}
+        bloco_ia = ('<div class="msg">🤖 <b>A IA leu o edital</b> e marcou abaixo as declarações que ele exige'
+                    + (f' (veja: {e(r.get("onde"))})' if r.get("onde") else "") + '.'
+                    + (f'<br>⚠️ {e(r.get("observacoes"))}' if r.get("observacoes") else "")
+                    + '<br><small>Confira no edital – a IA pode errar.</small></div>')
+        extras_html = "".join(
+            f'<label class="dec"><input type="checkbox" name="d" value="x{i}" {"checked" if f"x{i}" in marcadas else ""}> '
+            f'<span>📎 <b>Modelo do edital:</b> {e(x.get("titulo") or "Declaração")}</span></label>'
+            for i, x in enumerate(r.get("especificas") or []))
+    analisados = [a for a in analise.listar() if a.get("status") == "pronto"]
+    sel_edital = ('<option value="">— escolha um edital já analisado em Editais (IA) —</option>' +
+                  "".join(f'<option value="{e(a["chave"])}">{e((a.get("titulo") or a["chave"])[:110])}</option>' for a in analisados))
+    form_ia = f"""<details class="op-perfil" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if not leitura else ""}>
+<summary style="display:block;cursor:pointer;padding:10px 14px">🤖 <b>Ler o edital com IA</b> e marcar sozinho as declarações que ele exige
+(inclusive os modelos próprios dos anexos)</summary>
+<form method="post" action="/pecas/declaracoes" enctype="multipart/form-data" style="padding:0 14px 12px">
+<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="emp" value="{e(nome)}"><input type="hidden" name="proc" value="{e(proc_q)}">
+<div class="duas"><div><label>Edital já analisado</label><select class="campo" name="edital">{sel_edital}</select></div>
+<div><label>…ou envie o PDF do edital</label><input type="file" name="arquivo" accept=".pdf,.docx,.zip" multiple></div></div>
+<div class="acoes"><button>🤖 Ler o edital</button></div></form></details>"""
     caixas = "".join(
         f'<label class="dec"><input type="checkbox" name="d" value="{i}" {"checked" if i in marcadas else ""}'
         f'{" disabled" if i == "meepp" and ctx.get("porte") not in ("ME", "EPP") else ""}> {e(t)}'
@@ -1490,10 +1523,10 @@ def pg_documentos(q, aviso=""):
     corpo = f"""<style>.dec{{display:flex;gap:8px;align-items:flex-start;font-weight:400;margin:6px 0}}
 .dec input{{margin-top:3px}}.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}
 @media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}</style>
-<h2>📄 Declarações</h2>
+<h2>📄 Documentos</h2>
 <p class="sub">Modelos padrão da Lei 14.133/2021 preenchidos com os dados da empresa e do processo. Saem prontos para assinar
 (Word ou PDF). <b>Se o edital trouxer modelo próprio nos anexos, use o do edital</b> – e confira sempre antes de enviar.</p>
-{aviso_falta}
+{abas_doc("dec")}{aviso_falta}{bloco_ia}{form_ia}
 <div class="form" style="max-width:none">
 <form method="get" action="/documentos/ver" target="_blank" id="fdoc">
 <div class="duas"><div><label>Empresa</label>
@@ -1507,8 +1540,8 @@ def pg_documentos(q, aviso=""):
 <h3>Quais declarações</h3>
 <div class="linha" style="gap:8px;margin-bottom:6px"><button type="button" class="sec" onclick="marcar(true)">Marcar todas</button>
 <button type="button" class="sec" onclick="marcar(false)">Desmarcar todas</button></div>
-{caixas}
-<input type="hidden" name="ids" id="ids">
+{caixas}{extras_html}
+<input type="hidden" name="ids" id="ids"><input type="hidden" name="leitura" value="{e(q.get('leitura', ''))}">
 <label class="dec" style="margin-top:12px"><input type="checkbox" name="unificada" value="1"> <b>Juntar tudo numa “Declaração unificada”</b> (um documento só, com os itens a, b, c…)</label>
 <div class="acoes"><button {"disabled" if falta else ""} onclick="return enviar('/documentos/ver')">👁 Visualizar / imprimir (PDF)</button>
 <button class="sec" {"disabled" if falta else ""} onclick="return enviar('/documentos/docx')">⬇ Baixar Word (.docx)</button></div>
@@ -1544,7 +1577,119 @@ function enviar(acao){{const f=document.getElementById('fdoc');
 def gerar_docs(q):
     nome, ctx = ctx_doc(q)
     ids = [x for x in q.get("ids", "").split(",") if x]
-    return ctx, documentos.montar(ids, ctx, q.get("unificada") == "1")
+    extras = []
+    if re.fullmatch(r"[0-9a-f]{14}", q.get("leitura", "")):
+        esp = ((pecas.ler(q["leitura"]) or {}).get("resultado") or {}).get("especificas") or []
+        extras = [(x.get("titulo", ""), x.get("texto", "")) for i, x in enumerate(esp) if f"x{i}" in ids]
+    return ctx, documentos.montar(ids, ctx, q.get("unificada") == "1", extras)
+
+
+def abas_doc(atual):
+    return ('<div class="acoes" style="margin:6px 0 12px">'
+            f'<a class="btn {"" if atual == "dec" else "sec"}" href="/documentos">📄 Declarações</a>'
+            f'<a class="btn {"" if atual == "pec" else "sec"}" href="/pecas">⚖️ Peças com IA (recurso, contrarrazões…)</a></div>')
+
+
+def pg_pecas(q, aviso=""):
+    emps = nomes_empresas()
+    if not emps:
+        return pagina("Peças", "<h2>Peças com IA</h2><p>Cadastre uma empresa primeiro.</p>", "/documentos")
+    nome, ctx = ctx_doc(q)
+    procs = processos_empresa(emps[nome])
+    proc_q = q.get("proc", "")
+    sel_emp = "".join(f'<option value="{e(n)}" {"selected" if n == nome else ""}>{e(n)}</option>' for n in sorted(emps))
+    sel_proc = ('<option value="">— sem processo do monitor (preencha órgão e número) —</option>' +
+                "".join(f'<option value="{e(p + "||" + o)}" {"selected" if (p + "||" + o) == proc_q else ""}>'
+                        f'{e(p)} – {e(o)}{" · " + e(sit) if sit else ""}</option>' for p, o, sit in procs))
+    tipo_q = q.get("tipo", "recurso")
+    sel_tipo = "".join(f'<option value="{k}" {"selected" if k == tipo_q else ""}>{e(t)}</option>' for k, (t, _) in pecas.TIPOS.items())
+    analisados = [a for a in analise.listar() if a.get("status") == "pronto"]
+    sel_edital = ('<option value="">— nenhum (usar só o histórico e os pontos) —</option>' +
+                  "".join(f'<option value="{e(a["chave"])}">{e((a.get("titulo") or a["chave"])[:110])}</option>' for a in analisados))
+    falta = [x for x in documentos.faltando(ctx) if x in ("razão social", "CNPJ")]
+    linhas = "".join(
+        f'<tr><td><a href="/pecas/{e(x["id"])}">{e(pecas.TIPOS.get(x.get("tipo"), (x.get("tipo"), ""))[0])}</a>'
+        f'<div class="sub">{e(x.get("empresa", ""))} · {e(x.get("titulo", ""))}</div></td>'
+        f'<td>{ {"pronto": "✅ Pronta", "gerando": "⏳ Gerando", "erro": "❌ Erro"}.get(x.get("status"), "")}</td>'
+        f'<td class="ocultar">{e(x.get("fim") or x.get("inicio") or "")}</td></tr>'
+        for x in pecas.listar() if x.get("tipo") != "declaracoes")
+    corpo = f"""<style>.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}@media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}</style>
+<h2>📄 Documentos</h2>{abas_doc("pec")}
+<p class="sub">A IA escreve um <b>rascunho</b> usando o edital, o histórico que o monitor registrou no processo (chat, registros
+da sessão, classificação, diligências) e os pontos que você indicar. <b>Revise sempre</b> (ou peça ao advogado) antes de
+protocolar – a IA marca com [CONFERIR] o que não encontrou. O sistema não envia nada à plataforma.</p>
+{f'<div class="msg erro">Antes, preencha os dados da empresa (razão social e CNPJ) em <a href="/documentos?emp={e(urllib.parse.quote(nome))}">Declarações → Dados da empresa</a>.</div>' if falta else ''}
+<div class="form" style="max-width:none">
+<form method="post" action="/pecas/gerar" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{CSRF}">
+<div class="duas"><div><label>Tipo de peça</label><select class="campo" name="tipo">{sel_tipo}</select></div>
+<div><label>Empresa</label><select class="campo" name="emp" onchange="location.href='/pecas?emp='+encodeURIComponent(this.value)">{sel_emp}</select></div>
+<div><label>Processo <small>(o histórico dele vai para a IA)</small></label><select class="campo" name="proc">{sel_proc}</select></div>
+<div><label>Edital <small>(já analisado em Editais (IA))</small></label><select class="campo" name="edital">{sel_edital}</select></div>
+<div><label>Órgão <small>(vazio = o do processo)</small></label><input class="campo" name="orgao" placeholder="ex.: MUNICÍPIO DE RUY BARBOSA"></div>
+<div><label>Nº do processo/edital <small>(vazio = o do processo)</small></label><input class="campo" name="processo" placeholder="ex.: 033/2026"></div></div>
+<label>Documentos de apoio <small>(opcional: recurso do concorrente, ata, pedido de diligência, planilha de custos, o PDF do edital… até 18 MB)</small></label>
+<input type="file" name="arquivo" multiple accept=".pdf,.docx,.zip,.txt">
+<label>O que você quer defender ou pedir <small>(quanto mais claro, melhor a peça)</small></label>
+<textarea class="campo" name="pontos" rows="5" style="max-width:100%" placeholder="ex.: A LUCINEIDE (1ª no L3) apresentou atestado que não comprova a quantidade mínima do item 9.4.2; pedir a inabilitação dela e a convocação da VC (2ª)."></textarea>
+<div class="acoes"><button {"disabled" if falta else ""}>🤖 Gerar rascunho</button></div></form></div>
+<h2 style="margin-top:22px">Peças geradas</h2>
+<table><tr><th>Peça</th><th>Situação</th><th class="ocultar">Quando</th></tr>{linhas or '<tr><td colspan="3">Nenhuma ainda.</td></tr>'}</table>
+<p class="sub">IA: Google Gemini (a mesma chave da análise de editais).</p>"""
+    return pagina("Peças com IA", corpo, "/documentos", aviso)
+
+
+def pg_peca(pid):
+    d = pecas.ler(pid)
+    if not d:
+        return pagina("Peça", "<h2>Peça não encontrada</h2>", "/documentos")
+    titulo = pecas.TIPOS.get(d.get("tipo"), (d.get("tipo"), ""))[0]
+    topo = f'<h2>⚖️ {e(titulo)}</h2><p class="sub">{e(d.get("empresa", ""))} · {e(d.get("titulo", ""))}</p>{abas_doc("pec")}'
+    if d.get("status") == "gerando":
+        return pagina("Gerando", topo + f'<div class="msg">🤖 Escrevendo o rascunho desde {e(d.get("inicio", ""))}… (1 a 3 minutos)</div>'
+                      '<script>setTimeout(()=>location.reload(),8000)</script>', "/documentos")
+    if d.get("status") == "erro":
+        return pagina("Erro", topo + f'<div class="msg erro">{e(d.get("erro", ""))}</div><div class="acoes">'
+                      + botao(f"/pecas/{pid}/refazer", "Tentar de novo") + '<a class="btn sec" href="/pecas">Voltar</a></div>', "/documentos")
+    curta = d.get("tipo") == "intencao"
+    notas = analise.md_html(d.get("notas", "")) if d.get("notas") else ""
+    corpo = topo + f"""
+<div class="msg">✅ Rascunho pronto ({e(d.get("fim", ""))} · {e(d.get("modelo", ""))}). <b>Revise tudo</b> – procure por <b>[CONFERIR]</b>.
+Arquivos lidos: {e(", ".join(d.get("arquivos") or []) or "—")}</div>
+{f'<details open class="form" style="max-width:none;margin-bottom:12px"><summary><b>📝 Notas para revisão</b> (não vão no documento)</summary>{notas}</details>' if notas else ''}
+<div class="form" style="max-width:none"><form method="post" action="/pecas/{pid}/salvar"><input type="hidden" name="csrf" value="{CSRF}">
+<label>Texto da peça <small>(pode editar aqui; “# ” = título, “## ” = seção)</small>
+{'<span id="cont" class="sub"></span>' if curta else ''}</label>
+<textarea class="campo" name="md" id="md" rows="{8 if curta else 30}" style="max-width:100%;font-family:Georgia,serif;font-size:14px;line-height:1.5">{e(d.get("md", ""))}</textarea>
+<div class="acoes"><button>💾 Salvar alterações</button>
+{'<button type="button" class="sec" onclick="navigator.clipboard.writeText(document.getElementById(&quot;md&quot;).value);this.textContent=&quot;Copiado!&quot;">📋 Copiar para o chat</button>' if curta else
+ f'<a class="btn sec" target="_blank" href="/pecas/{pid}/ver">👁 Visualizar / imprimir (PDF)</a><a class="btn sec" href="/pecas/{pid}/docx">⬇ Baixar Word</a>'}
+</div></form>
+<div class="acoes">{botao(f"/pecas/{pid}/refazer", "🔄 Gerar de novo", "sec", "Gerar um novo rascunho? O texto atual será substituído.")}
+<a class="btn sec" href="/pecas">Voltar</a></div></div>
+{'<script>const t=document.getElementById("md"),c=document.getElementById("cont");function n(){{c.textContent=" – "+t.value.length+" caracteres";}}t.oninput=n;n();</script>' if curta else ''}"""
+    return pagina(titulo, corpo, "/documentos")
+
+
+def pg_peca_ver(pid):
+    d = pecas.ler(pid) or {}
+    blocos = pecas.blocos_md(d.get("md", ""))
+    titulo = pecas.TIPOS.get(d.get("tipo"), ("Peça", ""))[0]
+    corpo = documentos.html([(titulo, blocos)], {})
+    return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{e(titulo)}</title><style>
+body{{background:#e9edf0;margin:0;font-family:Arial,Helvetica,sans-serif;color:#111}}
+.barra{{position:sticky;top:0;background:#1b3a2a;color:#fff;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}}
+.barra button,.barra a{{background:#fff;color:#1b3a2a;border:0;border-radius:6px;padding:8px 14px;font-weight:700;cursor:pointer;text-decoration:none;font-size:14px}}
+.folha{{background:#fff;width:210mm;min-height:297mm;margin:16px auto;padding:30mm 20mm 20mm 30mm;box-sizing:border-box;
+ box-shadow:0 2px 10px rgba(0,0,0,.15);font-size:12pt;line-height:1.6;outline:none}}
+.folha h2{{text-align:center;font-size:13pt;margin:10px 0 18px}}.folha h3{{font-size:12pt;margin:16px 0 6px}}
+.folha .corpo{{text-align:justify;text-indent:12.5mm;margin:0 0 8px}}.folha .item{{text-align:justify;margin:4px 0 4px 8mm}}
+@media print{{body{{background:#fff}}.barra{{display:none}}.folha{{margin:0;box-shadow:none;width:auto;min-height:0;padding:0}}
+ @page{{size:A4;margin:30mm 20mm 20mm 30mm}}}}
+@media(max-width:820px){{.folha{{width:auto;margin:10px;padding:18px}}}}
+</style></head><body><div class="barra"><button onclick="window.print()">🖨 Imprimir / Salvar em PDF</button>
+<a href="/pecas/{e(pid)}/docx">⬇ Baixar Word</a><span style="font-size:13px">Rascunho – revise antes de protocolar.</span></div>
+{corpo}</body></html>"""
 
 
 def pg_documentos_ver(q):
@@ -2571,6 +2716,25 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_config(AVISOS.get(q.get("ok", ""), "")))
             if p == "/documentos":
                 return self.enviar(pg_documentos(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/pecas":
+                return self.enviar(pg_pecas(q, AVISOS.get(q.get("ok", ""), "")))
+            m = re.fullmatch(r"/pecas/([0-9a-f]{14})(/ver|/docx)?", p)
+            if m:
+                if m.group(2) == "/ver":
+                    return self.enviar(pg_peca_ver(m.group(1)))
+                if m.group(2) == "/docx":
+                    d = pecas.ler(m.group(1)) or {}
+                    dados = documentos.docx([("peça", pecas.blocos_md(d.get("md", "")))], {})
+                    nome_arq = re.sub(r"[^\w.-]+", "_", f"{d.get('tipo', 'peca')}_{d.get('titulo', '')[:40]}").strip("_") + ".docx"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                    self.send_header("Content-Disposition", f'attachment; filename="{nome_arq}"')
+                    self.send_header("Content-Length", str(len(dados)))
+                    self.cabecalhos_seguranca()
+                    self.end_headers()
+                    self.wfile.write(dados)
+                    return
+                return self.enviar(pg_peca(m.group(1)))
             if p == "/documentos/ver":
                 return self.enviar(pg_documentos_ver(q))
             if p == "/documentos/docx":
@@ -2646,6 +2810,37 @@ class Painel(BaseHTTPRequestHandler):
                                           '<p><a class="btn sec" href="/processos">Voltar</a></p>', "/processos"))
             return self.redirecionar("/classificacao?" + urllib.parse.urlencode(
                 {"empresa": eid, "processo": chave[0], "promotor": chave[1]}))
+        if self.path.rstrip("/") in ("/pecas/gerar", "/pecas/declaracoes"):
+            if tam > 40 * 1024 * 1024:
+                return self.enviar(pagina("Erro", "<h2>Arquivos grandes demais (máx. 40 MB).</h2>", "/documentos"), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            emps = nomes_empresas()
+            nome, ctx = ctx_doc(campos)
+            proc, _, prom = campos.get("proc", "").partition("||")
+            edital = campos.get("edital", "") if re.fullmatch(r"[\w-]{3,60}", campos.get("edital", "")) else ""
+            arqs = [(n, d) for n, d in arqs if d][:8]
+            pid = pecas.novo_id(nome, proc, campos.get("tipo", ""))
+            declaracoes = self.path.rstrip("/") == "/pecas/declaracoes"
+            pedido = {"tipo": "declaracoes" if declaracoes else campos.get("tipo", ""), "empresa": nome, "ctx": ctx,
+                      "ids_empresa": emps.get(nome, []), "proc": proc, "prom": prom, "edital": edital,
+                      "pontos": campos.get("pontos", "").strip()[:4000], "anexos": arqs,
+                      "titulo": f"{ctx.get('processo') or ''} – {ctx.get('orgao') or ''}".strip(" –")}
+            if not declaracoes and pedido["tipo"] not in pecas.TIPOS:
+                return self.redirecionar("/pecas")
+            if declaracoes and not (edital or arqs):
+                return self.enviar(pg_documentos({"emp": nome, "proc": campos.get("proc", "")},
+                                                 "Escolha um edital já analisado ou envie o PDF do edital."))
+            pasta = pecas.DIR / pid
+            if arqs:   # guarda os anexos para poder "Gerar de novo"
+                pasta.mkdir(parents=True, exist_ok=True)
+                for n, d in arqs:
+                    (pasta / re.sub(r"[^\w.\- ]", "_", n)[:120]).write_bytes(d)
+            pecas.iniciar(pid, CFG_ATUAL(), pedido)
+            if declaracoes:
+                return self.redirecionar("/documentos?" + urllib.parse.urlencode({"emp": nome, "proc": campos.get("proc", ""), "leitura": pid}))
+            return self.redirecionar(f"/pecas/{pid}")
         if self.path.rstrip("/") == "/analise/upload":
             if tam > 40 * 1024 * 1024:
                 return self.enviar(pg_editais("Arquivos grandes demais (máx. 40 MB).", True), 413)
@@ -2735,6 +2930,22 @@ class Painel(BaseHTTPRequestHandler):
                 else:
                     analise.salvar_config_ia(f.get("instrucoes", ""), f.get("empresa", ""))
                 return self.redirecionar("/editais?ok=ia")
+            m = re.fullmatch(r"/pecas/([0-9a-f]{14})/(salvar|refazer)", p)
+            if m:
+                pid = m.group(1)
+                d = pecas.ler(pid)
+                if not d:
+                    return self.redirecionar("/pecas")
+                if m.group(2) == "salvar":
+                    d["md"] = f.get("md", "")[:200000]
+                    pecas.gravar(pid, d)
+                    return self.redirecionar(f"/pecas/{pid}?ok=feito")
+                pasta = pecas.DIR / pid
+                anexos = [(x.name, x.read_bytes()) for x in sorted(pasta.glob("*"))] if pasta.is_dir() else []
+                pedido = {k: d.get(k) for k in ("tipo", "empresa", "ctx", "ids_empresa", "proc", "prom", "edital", "pontos", "titulo")}
+                pedido["anexos"] = anexos
+                pecas.iniciar(pid, CFG_ATUAL(), pedido)
+                return self.redirecionar(f"/pecas/{pid}")
             if p == "/documentos/dados":
                 nome = f.get("emp", "")
                 if nome in nomes_empresas():
