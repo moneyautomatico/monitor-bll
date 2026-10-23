@@ -201,7 +201,11 @@ def historico(ids_empresa, processo, promotor, limite=60000):
 
 
 # ------------------------------------------------------------------ execução
+QUEM = lambda: ""   # noqa: E731 – o painel troca por "login de quem pediu"
+
+
 def iniciar(pid, cfg, pedido):
+    pedido["usuario"] = QUEM() or pedido.get("usuario", "")
     gravar(pid, {**{k: v for k, v in pedido.items() if k != "anexos"}, "status": "gerando",
                  "inicio": datetime.now().strftime("%d/%m/%Y %H:%M"),
                  "anexos": [n for n, _ in pedido.get("anexos", [])]})
@@ -230,7 +234,7 @@ def _rodar(pid, cfg, pedido):
         if pedido["tipo"] == "habilitacao":
             if not partes:
                 raise RuntimeError("Não achei os arquivos deste edital para ler de novo.")
-            custos_ia.contexto("habilitacao", "", pedido.get("titulo", ""))
+            custos_ia.contexto("habilitacao", "", pedido.get("titulo", ""), pedido.get("usuario", ""))
             md, modelo, usados = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes, PROMPT_HAB)
             base["custo"] = custos_ia.ultimo()
             m = re.search(r"\{.*\}", md, re.S)
@@ -245,7 +249,7 @@ def _rodar(pid, cfg, pedido):
             if not partes:
                 raise RuntimeError("Escolha um edital já analisado ou envie o PDF do edital.")
             ids = ", ".join(f"{i} ({t})" for i, t, _ in documentos.DECLARACOES)
-            custos_ia.contexto("declaracoes", pedido.get("empresa", ""), pedido.get("titulo", ""))
+            custos_ia.contexto("declaracoes", pedido.get("empresa", ""), pedido.get("titulo", ""), pedido.get("usuario", ""))
             md, modelo, usados = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes, PROMPT_DECL % ids)
             base["custo"] = custos_ia.ultimo()
             m = re.search(r"\{.*\}", md, re.S)
@@ -271,7 +275,7 @@ def _rodar(pid, cfg, pedido):
                      "concorrente, ata, pedido de diligência). Redija agora a peça completa.")
             if not partes:
                 partes = [("txt", "observação", "Nenhum arquivo do edital foi enviado; use apenas o histórico e os pontos.")]
-            custos_ia.contexto("peca", pedido.get("empresa", ""), f"{titulo} – {pedido.get('titulo', '')}")
+            custos_ia.contexto("peca", pedido.get("empresa", ""), f"{titulo} – {pedido.get('titulo', '')}", pedido.get("usuario", ""))
             md, modelo, usados = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes, texto)
             base["custo"] = custos_ia.ultimo()
             peca, _, notas = md.partition("\n---")

@@ -34,21 +34,25 @@ REGRAS:
 
 
 # ------------------------------------------------------------------ conversa (histórico curto)
-def conversa():
+def _arq(login=""):
+    return PASTA / f"conversa_ia_{login}.json" if re.fullmatch(r"[a-z0-9._-]{3,32}", login or "") else ARQ
+
+
+def conversa(login=""):
     try:
-        return json.loads(ARQ.read_text(encoding="utf-8"))
+        return json.loads(_arq(login).read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         return []
 
 
-def salvar_conversa(msgs):
+def salvar_conversa(msgs, login=""):
     with TRAVA:
-        ARQ.write_text(json.dumps(msgs[-30:], ensure_ascii=False), encoding="utf-8")
-        ARQ.chmod(0o600)
+        _arq(login).write_text(json.dumps(msgs[-30:], ensure_ascii=False), encoding="utf-8")
+        _arq(login).chmod(0o600)
 
 
-def limpar_conversa():
-    salvar_conversa([])
+def limpar_conversa(login=""):
+    salvar_conversa([], login)
 
 
 # ------------------------------------------------------------------ dados para a IA
@@ -72,7 +76,11 @@ def _termos(pergunta):
     return [re.sub(r"\s", "", p) for p in procs], palavras[:12]
 
 
-def montar_dados(pergunta):
+def montar_dados(pergunta, permitidos=None):
+    def ok(nomes):
+        lista = [x.strip().upper() for x in (nomes or "").split(",") if x.strip()]
+        return permitidos is None or not lista or any(x in permitidos for x in lista)
+
     procs_q, palavras = _termos(pergunta)
     blocos = []
     agora = datetime.now()
@@ -82,6 +90,8 @@ def montar_dados(pergunta):
     for env in sorted(EMPRESAS.glob("*.env")) if EMPRESAS.exists() else []:
         c = _env(env)
         nome = (c.get("EMPRESA_NOME") or env.stem).upper()
+        if permitidos is not None and nome.strip() not in permitidos:
+            continue
         plat = (c.get("PLATAFORMA") or "bll").upper()
         emps.append(f"- {nome} ({plat})")
         db = EMPRESAS / env.stem / "bll_monitor.db"
@@ -139,12 +149,14 @@ def montar_dados(pergunta):
     pz = []
     for it in agenda.prazos()["itens"].values():
         q = datetime.fromisoformat(it["quando"])
-        if it.get("status") == "aberto" and q > agora - timedelta(days=7):
+        if it.get("status") == "aberto" and q > agora - timedelta(days=7) and ok(it.get("empresa")):
             pz.append(f"{q:%d/%m/%Y %H:%M} | {it.get('titulo')} | {it.get('empresa')} | {it.get('promotor', '')[:50]}"
                       f"{' | estimado' if it.get('estimado') else ''}")
     blocos.append("PRAZOS ABERTOS (agenda):\n" + ("\n".join(sorted(pz)) or "nenhum"))
     ct = []
     for c in agenda.certidoes()["itens"].values():
+        if not ok(c.get("empresa")):
+            continue
         st, dias = agenda.status_cert(c)
         ct.append(f"{c.get('empresa')} | {agenda.NOME_CERT.get(c.get('tipo'), c.get('tipo'))} | validade {c.get('validade') or '—'} | "
                   f"{ {'ok': 'válida', 'vence': 'vence em breve', 'vencida': 'VENCIDA', 'sem': 'sem validade'}[st] }"
@@ -154,7 +166,7 @@ def montar_dados(pergunta):
     # concorrentes
     try:
         import concorrentes
-        d = concorrentes.analisar("")
+        d = concorrentes.analisar("", permitidos)
         r = d["resumo"]
         linhas = [f"Resumo: {r['lotes']} lotes disputados, {r['ganhos']} em 1º, gap médio quando perde: {r['gap_medio']}"]
         for x in d["concorrentes"][:60]:
@@ -166,7 +178,8 @@ def montar_dados(pergunta):
 
     # oportunidades
     try:
-        ops = [r for r in oportunidades.ler().get("itens", {}).values() if not r.get("descartado") and r.get("nivel") in ("alto", "medio")]
+        ops = [r for r in oportunidades.ler().get("itens", {}).values() if not r.get("descartado") and r.get("nivel") in ("alto", "medio")
+               and (permitidos is None or not r.get("empresas") or set(r.get("empresas")) & permitidos)]
         ops.sort(key=lambda r: -r.get("pontos", 0))
         blocos.append("OPORTUNIDADES ABERTAS NO PNCP (encaixe alto/médio):\n" + "\n".join(
             f"{r.get('nivel')} | {r.get('orgao', '')[:50]} | {r.get('municipio')}/{r.get('uf')} | {(r.get('objeto') or '')[:140]} | "
@@ -189,21 +202,21 @@ def montar_dados(pergunta):
     return texto[:LIMITE_CONTEXTO]
 
 
-def perguntar(cfg, pergunta):
+def perguntar(cfg, pergunta, login="", permitidos=None):
     api = cfg.get("GEMINI_API_KEY", "")
     if not api:
         raise RuntimeError("Falta a chave do Gemini. Cadastre em ⚙️ Configurações → Inteligência artificial.")
-    hist = conversa()
-    dados = montar_dados(pergunta + " " + " ".join(m["texto"] for m in hist[-4:] if m["papel"] == "voce"))
+    hist = conversa(login)
+    dados = montar_dados(pergunta + " " + " ".join(m["texto"] for m in hist[-4:] if m["papel"] == "voce"), permitidos)
     historico = "\n".join(f"{'USUÁRIO' if m['papel'] == 'voce' else 'ASSISTENTE'}: {m['texto'][:2000]}" for m in hist[-8:])
     pedido = (REGRAS.replace("{HOJE}", datetime.now().strftime("%d/%m/%Y %H:%M")) +
               (f"\nCONVERSA ATÉ AGORA:\n{historico}\n" if historico else "") +
               f"\nPERGUNTA DO USUÁRIO: {pergunta}")
     import custos_ia
-    custos_ia.contexto("pergunta", "", pergunta[:100])
+    custos_ia.contexto("pergunta", "", pergunta[:100], login)
     md, modelo, _ = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), [("txt", "DADOS DO SISTEMA", dados)], pedido)
     custo = custos_ia.ultimo()
     hist += [{"papel": "voce", "texto": pergunta, "quando": datetime.now().strftime("%d/%m %H:%M")},
              {"papel": "ia", "texto": md.strip(), "quando": datetime.now().strftime("%d/%m %H:%M"), "modelo": modelo, "custo": custo}]
-    salvar_conversa(hist)
+    salvar_conversa(hist, login)
     return md.strip(), modelo, custo

@@ -59,21 +59,21 @@ def calcular(modelo, entrada, saida):
     return round(usd, 5), round(brl, 4), round(brl * (1 + p["acrescimo"] / 100), 4)
 
 
-def contexto(recurso, empresa="", referencia=""):
+def contexto(recurso, empresa="", referencia="", usuario=""):
     """Define o que a PRÓXIMA chamada à IA nesta thread está fazendo (para registrar o custo no lugar certo)."""
-    _LOCAL.ctx = {"recurso": recurso, "empresa": empresa or "", "ref": referencia or ""}
+    _LOCAL.ctx = {"recurso": recurso, "empresa": empresa or "", "ref": referencia or "", "usuario": usuario or ""}
 
 
 def registrar(modelo, uso_google):
     """Chamado pelo analise.gemini com o 'usageMetadata' da resposta. Devolve o registro (com o custo)."""
-    ctx = getattr(_LOCAL, "ctx", None) or {"recurso": "outro", "empresa": "", "ref": ""}
+    ctx = getattr(_LOCAL, "ctx", None) or {"recurso": "outro", "empresa": "", "ref": "", "usuario": ""}
     _LOCAL.ctx = None
     u = uso_google or {}
     entrada = int(u.get("promptTokenCount") or 0)
     saida = int(u.get("candidatesTokenCount") or 0) + int(u.get("thoughtsTokenCount") or 0)
     usd, brl, cliente = calcular(modelo, entrada, saida)
     reg = {"quando": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), "recurso": ctx["recurso"], "empresa": ctx["empresa"],
-           "ref": ctx["ref"][:120], "modelo": modelo, "entrada": entrada, "saida": saida, "usd": usd, "brl": brl, "cliente": cliente}
+           "ref": ctx["ref"][:120], "usuario": ctx.get("usuario", ""), "modelo": modelo, "entrada": entrada, "saida": saida, "usd": usd, "brl": brl, "cliente": cliente}
     with TRAVA:
         with ARQ.open("a", encoding="utf-8") as f:
             f.write(json.dumps(reg, ensure_ascii=False) + "\n")
@@ -116,6 +116,7 @@ def resumo_mes(mes):
     rs = usos(mes)
     por_rec = defaultdict(lambda: {"n": 0, "brl": 0.0, "cliente": 0.0, "tokens": 0})
     por_emp = defaultdict(lambda: {"n": 0, "brl": 0.0, "cliente": 0.0})
+    por_usu = defaultdict(lambda: {"n": 0, "brl": 0.0, "cliente": 0.0})
     for r in rs:
         a = por_rec[r.get("recurso", "outro")]
         a["n"] += 1
@@ -126,7 +127,11 @@ def resumo_mes(mes):
         b["n"] += 1
         b["brl"] += r.get("brl", 0)
         b["cliente"] += r.get("cliente", 0)
-    return {"usos": rs, "por_recurso": dict(por_rec), "por_empresa": dict(por_emp),
+        c = por_usu[r.get("usuario") or "(antes dos usuários)"]
+        c["n"] += 1
+        c["brl"] += r.get("brl", 0)
+        c["cliente"] += r.get("cliente", 0)
+    return {"por_usuario": dict(por_usu), "usos": rs, "por_recurso": dict(por_rec), "por_empresa": dict(por_emp),
             "total_brl": sum(r.get("brl", 0) for r in rs), "total_cliente": sum(r.get("cliente", 0) for r in rs),
             "total_usd": sum(r.get("usd", 0) for r in rs)}
 

@@ -325,8 +325,12 @@ def gemini(chave_api, modelo, partes, pedido):
 
 
 # ------------------------------------------------------------------ execução
+QUEM = lambda: ""   # noqa: E731 – o painel troca por "login de quem pediu"
+
+
 def iniciar(chave, cfg, origem):
     """origem = {'tipo': 'pncp', 'cnpj','ano','seq', 'titulo'} ou {'tipo': 'upload', 'arquivos': [(nome, bytes)], 'titulo'}"""
+    origem["usuario"] = QUEM() or origem.get("usuario", "")
     with TRAVA:
         if chave in EM_ANDAMENTO:
             return
@@ -350,7 +354,7 @@ def _rodar(chave, cfg, origem):
             nomes = [n for n, _ in origem["arquivos"]]
             contexto = ""
         import custos_ia
-        custos_ia.contexto("analise", "", origem.get("titulo", ""))
+        custos_ia.contexto("analise", "", origem.get("titulo", ""), origem.get("usuario", ""))
         md, modelo, usados = gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes,
                                     montar_pedido(contexto, origem.get("extra", "")))
         base.update(custo=custos_ia.ultimo())

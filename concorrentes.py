@@ -60,7 +60,7 @@ def _data_iso(br):
     return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else ""
 
 
-def analisar(empresa=""):
+def analisar(empresa="", permitidos=None):
     """Estatísticas da empresa (NOME) escolhida – vazio = todas as nossas empresas."""
     proprias = empresas_proprias()
     todos_apelidos = [e for e in proprias.values()]
@@ -71,6 +71,8 @@ def analisar(empresa=""):
     vistos = set()
     for eid, emp in proprias.items():
         if empresa and emp["nome"] != empresa:
+            continue
+        if permitidos is not None and emp["nome"] not in permitidos:
             continue
         db = EMPRESAS / eid / "bll_monitor.db"
         if not db.exists():

@@ -29,6 +29,7 @@ import analise
 import assistente
 import backup
 import urgencia
+import usuarios
 import buscas
 import concorrentes
 import copiloto
@@ -45,6 +46,9 @@ CONFIG = PASTA / "config.env"
 PY = PASTA / "venv" / "bin" / "python"
 CSRF = secrets.token_hex(16)
 AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
+          "usuario_criado": "Usuário criado. Passe o login e a senha para a pessoa (de preferência pessoalmente ou por telefone).",
+          "usuario_excluido": "Usuário excluído e desconectado.", "senha": "Senha trocada. Os seus outros aparelhos foram desconectados.",
+          "senha_redefinida": "Senha redefinida e a pessoa foi desconectada dos aparelhos.",
           "cadastrada": "Empresa cadastrada. Em alguns minutos chega o “Monitor BLL ativo” com o nome dela.",
           "atualizada": "Empresa atualizada.", "feito": "Feito.",
           "config": "Configurações salvas e monitores reiniciados.",
@@ -101,6 +105,76 @@ def gravar_env(arq, valores, remover=()):
 CFG = ler_env(CONFIG)
 USUARIO = CFG.get("PAINEL_USUARIO", "bll")
 SENHA = CFG.get("PAINEL_SENHA", "")
+if usuarios.migrar_de_senha_unica(USUARIO, SENHA):   # 1ª vez com vários usuários: o login antigo vira o administrador
+    print(f"Usuários: administrador '{USUARIO}' criado a partir da senha antiga do painel.", flush=True)
+if usuarios.carregar() and SENHA:   # a senha não fica mais em texto no config.env (agora só o hash em usuarios.json)
+    gravar_env(CONFIG, {}, remover=("PAINEL_SENHA",))
+    SENHA = ""
+_REQ = threading.local()   # usuário da requisição atual
+ROTAS_ADMIN = ("/admin", "/empresas", "/config", "/consumo", "/backup", "/telegram", "/migrar", "/e/")
+ROTAS_IA = ("/analise", "/pecas/gerar", "/pecas/declaracoes", "/pergunte/enviar")
+ROTAS_IA_RE = re.compile(r"/pecas/[0-9a-f]{14}/refazer")
+
+
+def empresa_liberada(valor):
+    """valor = id (eid) ou NOME da empresa."""
+    ok = nomes_permitidos()
+    if ok is None:
+        return True
+    v = (valor or "").strip()
+    arq = EMPRESAS / f"{v}.env"
+    if re.fullmatch(r"[a-z0-9-]+", v) and arq.exists():
+        return (ler_env(arq).get("EMPRESA_NOME") or v).upper().strip() in ok
+    return v.upper() in ok or not any((ler_env(a).get("EMPRESA_NOME") or a.stem).upper().strip() == v.upper()
+                                      for a in EMPRESAS.glob("*.env"))
+
+
+def usuario_atual():
+    return getattr(_REQ, "user", None)
+
+
+def login_atual():
+    u = usuario_atual()
+    return u["login"] if u else ""
+
+
+analise.QUEM = login_atual
+pecas.QUEM = login_atual
+
+
+def visivel(nomes):
+    """Item ligado a empresa(s) ('A, B') – visível se for de alguma empresa liberada ao usuário (ou de nenhuma)."""
+    ok = nomes_permitidos()
+    lista = [x.strip().upper() for x in (nomes or "").split(",") if x.strip()]
+    return ok is None or not lista or any(x in ok for x in lista)
+
+
+def oport_visiveis(d):
+    ok = nomes_permitidos()
+    if ok is None:
+        return d
+    d = dict(d)
+    d["perfis"] = {k: v for k, v in d.get("perfis", {}).items() if k in ok}
+    d["itens"] = {k: r for k, r in d.get("itens", {}).items() if not r.get("empresas") or set(r["empresas"]) & ok}
+    return d
+
+
+def eh_admin():
+    u = usuario_atual()
+    return bool(u) and u["papel"] == "admin"
+
+
+def nomes_permitidos():
+    """None = todas as empresas; senão o conjunto de NOMES que o usuário pode ver."""
+    u = usuario_atual()
+    if not u or u["papel"] == "admin" or not u.get("empresas"):
+        return None
+    return set(u["empresas"])
+
+
+def pode_empresa(nome):
+    ok = nomes_permitidos()
+    return ok is None or (nome or "").upper().strip() in ok
 PORTA = int(CFG.get("PAINEL_PORTA", "8080"))
 HOST = CFG.get("PAINEL_HOST", "0.0.0.0")  # 127.0.0.1 = só pelo HTTPS (Caddy)
 ARQ_SESSOES = PASTA / "sessoes.json"
@@ -117,7 +191,8 @@ def _sessoes():
     except Exception:  # noqa: BLE001
         d = {}
     agora = datetime.now().timestamp()
-    return {k: v for k, v in d.items() if isinstance(v, (int, float)) and v > agora and len(k) == 64}
+    # valor = [validade, login]; formato antigo (só a validade) deixa de valer – todos entram de novo com o próprio login
+    return {k: v for k, v in d.items() if isinstance(v, list) and len(v) == 2 and v[0] > agora and len(k) == 64}
 
 
 def _gravar_sessoes(d):
@@ -125,17 +200,28 @@ def _gravar_sessoes(d):
     os.chmod(ARQ_SESSOES, 0o600)
 
 
-def criar_sessao(dias):
+def criar_sessao(dias, login):
     """O arquivo guarda só o 'hash' do código da sessão: quem ler o arquivo não consegue entrar."""
     tok = secrets.token_urlsafe(32)
     d = _sessoes()
-    d[_h(tok)] = datetime.now().timestamp() + dias * 86400
+    d[_h(tok)] = [datetime.now().timestamp() + dias * 86400, login]
     _gravar_sessoes(d)
     return tok
 
 
+def sessao_usuario(tok):
+    """Login dono da sessão (ou None)."""
+    v = _sessoes().get(_h(tok)) if tok else None
+    return v[1] if v else None
+
+
 def sessao_valida(tok):
-    return bool(tok) and _h(tok) in _sessoes()
+    return bool(sessao_usuario(tok))
+
+
+def encerrar_do_usuario(login, menos=""):
+    d = _sessoes()
+    _gravar_sessoes({k: v for k, v in d.items() if v[1] != login or (menos and k == _h(menos))})
 
 
 def encerrar_sessao(tok):
@@ -335,6 +421,8 @@ def empresas():
     for arq in sorted(EMPRESAS.glob("*.env")):
         eid = arq.stem
         cfg = ler_env(arq)
+        if not pode_empresa(cfg.get("EMPRESA_NOME", eid)):
+            continue
         d = {"id": eid, "nome": cfg.get("EMPRESA_NOME", eid), "cfg": cfg, "ativo": ativo(eid),
              "plat": {"licitanet": "Licitanet", "pcp": "Portal de Compras", "bnc": "BNC"}.get(cfg.get("PLATAFORMA", "bll").lower(), "BLL"),
              "status": "Aguardando primeira verificação", "ultima": "", "duracao": 0,
@@ -566,6 +654,7 @@ ABAS = [("/", "Início"), ("/mensagens", "Mensagens"), ("/processos", "Processos
         ("/documentos", "Documentos"), ("/empresas", "Empresas"), ("/config", "⚙️")]
 
 
+PAPEL_NOME = usuarios.PAPEIS
 BOTAO_IA = ('<a href="/pergunte" class="fab-ia" title="Pergunte ao Licitatudo (IA)">💬<span>Pergunte</span></a>'
             '<style>.fab-ia{position:fixed;right:18px;bottom:18px;z-index:1500;background:#1b5e20;color:#fff;text-decoration:none;'
             'border-radius:999px;padding:12px 16px;font-weight:700;box-shadow:0 6px 18px rgba(0,0,0,.3);display:flex;gap:6px;align-items:center}'
@@ -573,15 +662,20 @@ BOTAO_IA = ('<a href="/pergunte" class="fab-ia" title="Pergunte ao Licitatudo (I
 
 
 def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
-    nav = "".join(f'<a href="{u}" class="{"on" if u == aba else ""}" title="{"Configurações" if u == "/config" else n}">{n}</a>' for u, n in ABAS)
+    u = usuario_atual()
+    abas = [(x, n) for x, n in ABAS if eh_admin() or x not in ("/empresas", "/config")]
+    if eh_admin():
+        abas.append(("/admin", "🛡️ Admin"))
+    nav = "".join(f'<a href="{x}" class="{"on" if x == aba else ""}" title="{"Configurações" if x == "/config" else n}">{n}</a>' for x, n in abas)
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
-    if aba in ("/", "/config") and SENHA and senha_fraca(SENHA):
-        msg += ('<div class="msg erro">🛡️ A senha do painel é fraca (menos de 12 caracteres ou sem letras e números). '
-                '<a href="/config#seguranca">Troque em Configurações → Segurança</a>.</div>')
+    if u and (u.get("senha_fraca") or u.get("trocar_senha")) and aba != "/conta":
+        msg += ('<div class="msg erro">🛡️ ' + ("Defina uma senha nova (a atual foi criada pelo administrador). " if u.get("trocar_senha") else
+                "A sua senha é fraca (menos de 12 caracteres ou sem letras e números). ") +
+                '<a href="/conta">Trocar agora em Minha conta</a>.</div>')
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
-{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{'' if aba == "/pergunte" else BOTAO_IA}</body></html>"""
+{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{'' if aba == "/pergunte" else BOTAO_IA}</body></html>"""
 
 
 def tag_status(emp):
@@ -620,12 +714,12 @@ O histórico e o login atuais são mantidos.</p>
     capacidade = int(vagas * intervalo * 60 / max(media, 20))
     ativos = [x for x in emps if x["ativo"]]
     uso = min(100, int(100 * len(ativos) / max(capacidade, 1)))
-    _sts = [agenda.situacao_prazo(it) for it in agenda.prazos()["itens"].values()]
+    _sts = [agenda.situacao_prazo(it) for it in agenda.prazos()["itens"].values() if visivel(it.get("empresa"))]
     n_prazo_urg = sum(1 for x in _sts if x in ("atrasado", "hoje"))
     n_prazo_sem = sum(1 for x in _sts if x == "semana")
-    n_cert = sum(1 for c in agenda.certidoes()["itens"].values() if agenda.status_cert(c)[0] in ("vence", "vencida"))
+    n_cert = sum(1 for c in agenda.certidoes()["itens"].values() if agenda.status_cert(c)[0] in ("vence", "vencida") and visivel(c.get("empresa")))
     kpis = f"""<div class="kpis">
-<a class="kpi" href="/consumo" style="text-decoration:none;color:inherit"><div class="v">{custos_ia.brl(custos_ia.resumo_mes(datetime.now().strftime("%Y-%m"))["total_brl"])}</div><div class="l">💳 IA neste mês</div></a>
+{f'<a class="kpi" href="/consumo" style="text-decoration:none;color:inherit"><div class="v">{custos_ia.brl(custos_ia.resumo_mes(datetime.now().strftime("%Y-%m"))["total_brl"])}</div><div class="l">💳 IA neste mês</div></a>' if eh_admin() else ""}
 <a class="kpi" href="/agenda" style="text-decoration:none;color:inherit{';border-color:#c62828' if n_prazo_urg else ''}"><div class="v">{n_prazo_urg}</div><div class="l">📅 prazos atrasados ou para hoje · {n_prazo_sem} na semana</div></a>
 <a class="kpi" href="/certidoes" style="text-decoration:none;color:inherit{';border-color:#c62828' if n_cert else ''}"><div class="v">{n_cert}</div><div class="l">📑 certidões vencidas ou vencendo (15 dias)</div></a>
 <div class="kpi"><div class="v">{len(ativos)}/{len(emps)}</div><div class="l">empresas ativas</div></div>
@@ -1463,7 +1557,8 @@ def nomes_empresas():
     out = {}
     for arq in sorted(EMPRESAS.glob("*.env")) if EMPRESAS.exists() else []:
         c = ler_env(arq)
-        out.setdefault((c.get("EMPRESA_NOME") or arq.stem).upper().strip(), []).append(arq.stem)
+        if pode_empresa(c.get("EMPRESA_NOME") or arq.stem):
+            out.setdefault((c.get("EMPRESA_NOME") or arq.stem).upper().strip(), []).append(arq.stem)
     return out
 
 
@@ -1657,7 +1752,7 @@ def pg_pecas(q, aviso=""):
         f'<div class="sub">{e(x.get("empresa", ""))} · {e(x.get("titulo", ""))}</div></td>'
         f'<td>{ {"pronto": "✅ Pronta", "gerando": "⏳ Gerando", "erro": "❌ Erro"}.get(x.get("status"), "")}</td>'
         f'<td class="ocultar">{e(x.get("fim") or x.get("inicio") or "")}</td></tr>'
-        for x in pecas.listar() if x.get("tipo") != "declaracoes")
+        for x in pecas.listar() if x.get("tipo") != "declaracoes" and visivel(x.get("empresa")))
     corpo = f"""<style>.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}@media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}</style>
 {ESTILO_IA}<h2>📄 Documentos</h2>{abas_doc("pec")}{aviso_custo("peca")}
 <p class="sub">A IA escreve um <b>rascunho</b> usando o edital, o histórico que o monitor registrou no processo (chat, registros
@@ -1778,7 +1873,7 @@ def pg_agenda(q, aviso=""):
     d = agenda.prazos()
     agora = datetime.now()
     emp_f = q.get("emp", "")
-    itens = [(pid, it) for pid, it in d["itens"].items()
+    itens = [(pid, it) for pid, it in d["itens"].items() if visivel(it.get("empresa"))
              if not emp_f or emp_f in [x.strip().upper() for x in it.get("empresa", "").split(",")]]
     grupos = {"atrasado": [], "hoje": [], "semana": [], "depois": [], "feito": []}
     for pid, it in itens:
@@ -2028,11 +2123,13 @@ def _rs(v):
 
 def pg_concorrentes(q):
     emp = q.get("emp", "")
-    dados = concorrentes.analisar(emp)
+    if emp and not pode_empresa(emp):
+        emp = ""
+    dados = concorrentes.analisar(emp, nomes_permitidos())
     r, lista = dados["resumo"], dados["concorrentes"]
     sel = ('<select class="campo" style="max-width:280px" onchange="location.href=\'/concorrentes?emp=\'+encodeURIComponent(this.value)">'
            '<option value="">Todas as nossas empresas</option>' +
-           "".join(f'<option value="{e(n)}" {"selected" if n == emp else ""}>{e(n)}</option>' for n in dados["empresas"]) + "</select>")
+           "".join(f'<option value="{e(n)}" {"selected" if n == emp else ""}>{e(n)}</option>' for n in dados["empresas"] if pode_empresa(n)) + "</select>")
     alvo = q.get("c", "")
     if alvo:
         c = next((x for x in lista if x["chave"] == alvo), None)
@@ -2218,7 +2315,7 @@ SUGESTOES = ["Quais processos estão em habilitação ou recurso agora?", "Em qu
 
 
 def pg_pergunte():
-    hist = assistente.conversa()
+    hist = assistente.conversa(login_atual())
     bolhas = "".join(
         (f'<div class="bl voce"><div>{e(m["texto"])}</div><small>{e(m.get("quando", ""))}</small></div>' if m["papel"] == "voce" else
          f'<div class="bl ia"><div class="analise">{analise.md_html(m["texto"])}</div><small>{e(m.get("quando", ""))} · {e(m.get("modelo", ""))} {custo_uso(m.get("custo"))}</small></div>')
@@ -2315,9 +2412,12 @@ def pg_consumo(q, aviso=""):
     linhas_emp = "".join(
         f'<tr><td>{e(k)}</td><td>{v["n"]}</td><td><b>{custos_ia.brl(v["brl"])}</b></td>{f"<td>{custos_ia.brl(v[CL])}</td>" if repassa else ""}</tr>'
         for k, v in sorted(r["por_empresa"].items(), key=lambda t: -t[1]["brl"]))
+    linhas_usu = "".join(
+        f'<tr><td>{e(k)}</td><td>{v["n"]}</td><td><b>{custos_ia.brl(v["brl"])}</b></td>{f"<td>{custos_ia.brl(v[CL])}</td>" if repassa else ""}</tr>'
+        for k, v in sorted(r.get("por_usuario", {}).items(), key=lambda t: -t[1]["brl"]))
     ult = "".join(
         f'<tr><td>{e(u["quando"][8:10] + "/" + u["quando"][5:7] + " " + u["quando"][11:16])}</td>'
-        f'<td>{e(custos_ia.RECURSOS.get(u.get("recurso"), (u.get("recurso"), 0))[0])}<div class="sub">{e(u.get("ref", ""))}</div></td>'
+        f'<td>{e(custos_ia.RECURSOS.get(u.get("recurso"), (u.get("recurso"), 0))[0])}<div class="sub">{e(u.get("ref", ""))}{" · 👤 " + e(u["usuario"]) if u.get("usuario") else ""}</div></td>'
         f'<td class="ocultar">{e(u.get("empresa") or "—")}</td><td class="ocultar">{milhar(u.get("entrada", 0) + u.get("saida", 0))}</td>'
         f'<td>{custos_ia.brl(u.get("brl", 0))}</td>{f"<td>{custos_ia.brl(u.get(CL, 0))}</td>" if repassa else ""}</tr>'
         for u in reversed(r["usos"][-150:]))
@@ -2338,6 +2438,7 @@ Os demais recursos (monitor, alertas, agenda, certidões, concorrentes, copiloto
 {f'<div class="kpi"><div class="v">{custos_ia.brl(r["total_cliente"])}</div><div class="l">valor ao licitante (+{p["acrescimo"]:g}%)</div></div>' if repassa else ''}</div>
 <h3>Por recurso</h3><table><tr><th>Recurso</th><th>Usos</th><th>Custo médio por uso</th><th>Total</th>{col_cli}<th class="ocultar">Tokens</th></tr>
 {linhas_rec or '<tr><td colspan="6">Nenhum uso neste mês.</td></tr>'}</table>
+<h3>Por usuário</h3><table><tr><th>Usuário</th><th>Usos</th><th>Total</th>{col_cli}</tr>{linhas_usu or '<tr><td colspan="4">—</td></tr>'}</table>
 <h3>Por empresa</h3><table><tr><th>Empresa</th><th>Usos</th><th>Total</th>{col_cli}</tr>{linhas_emp or '<tr><td colspan="4">—</td></tr>'}</table>
 <p class="sub">Análises de edital, “Posso participar?” e perguntas não são ligadas a uma empresa específica e aparecem como “(sem empresa)”.</p>
 <h3>Últimos usos</h3><table><tr><th>Quando</th><th>Recurso</th><th class="ocultar">Empresa</th><th class="ocultar">Tokens</th><th>Custo</th>{col_cli}</tr>
@@ -2397,6 +2498,164 @@ def pg_comunicado_imprimir():
 <style>body{{font-family:Georgia,serif;max-width:720px;margin:30px auto;padding:0 20px;line-height:1.6;color:#111}}
 pre{{white-space:pre-wrap;font-family:inherit;font-size:15px}}button{{padding:8px 14px}}@media print{{button{{display:none}}}}</style></head>
 <body><button onclick="window.print()">🖨 Imprimir / Salvar em PDF</button><pre>{e(txt)}</pre></body></html>"""
+
+
+# ------------------------------------------------------------------ usuários: Minha conta e painel do administrador
+ESTILO_ADM = """<style>.adm-tab{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 14px}.adm-tab a{padding:6px 12px;border-radius:999px;
+border:1px solid var(--borda);text-decoration:none;color:inherit;font-size:14px}.adm-tab a.on{background:var(--verde);color:#fff;border-color:var(--verde)}
+.emps-ck{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:4px 12px;margin:6px 0 10px}
+.emps-ck label,.ck{display:flex;gap:6px;align-items:center;font-weight:400;margin:0}.emps-ck input,.ck input{width:auto}
+.papel{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:var(--verde2);color:var(--verde)}
+.papel.admin{background:#ede7f6;color:#4527a0}.papel.leitura{background:#eceff1;color:#455a64}.inativo{opacity:.55}
+.duas-adm{display:grid;grid-template-columns:1.3fr 1fr;gap:16px}@media(max-width:900px){.duas-adm{grid-template-columns:1fr}}</style>
+<script>function gerarSenha(f){const c='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';const a=new Uint32Array(16);crypto.getRandomValues(a);
+let s='';a.forEach((x,i)=>{s+=c[x%c.length];if(i==7)s+='-'});s=s.slice(0,15)+(a[0]%10);f.senha.value=s;f.senha2.value=s;f.senha.type='text';
+const p=f.querySelector('.mostra-senha');if(p)p.textContent='Senha gerada: '+s+' – anote e passe para a pessoa.';}</script>"""
+
+
+def abas_admin(atual):
+    return '<div class="adm-tab">' + "".join(
+        f'<a href="{u}" class="{"on" if k == atual else ""}">{n}</a>' for k, u, n in (
+            ("usu", "/admin", "👥 Usuários"), ("aud", "/admin/auditoria", "📜 Auditoria"), ("emp", "/empresas", "🏢 Empresas"),
+            ("cfg", "/config", "⚙️ Configurações"), ("ia", "/consumo", "💳 Consumo de IA"))) + "</div>"
+
+
+def opcoes_papel(atual="operador"):
+    return "".join(f'<option value="{k}" {"selected" if k == atual else ""}>{e(n)} – {e(usuarios.DESCR_PAPEL[k])}</option>'
+                   for k, n in usuarios.PAPEIS.items())
+
+
+def caixas_empresas(marcadas=()):
+    todos = sorted({(ler_env(a).get("EMPRESA_NOME") or a.stem).upper().strip() for a in EMPRESAS.glob("*.env")} if EMPRESAS.exists() else set())
+    marc = {x.upper() for x in marcadas}
+    if not todos:
+        return '<p class="sub">Nenhuma empresa cadastrada ainda.</p>'
+    return '<div class="emps-ck">' + "".join(
+        f'<label><input type="checkbox" name="empresas" value="{e(n)}" {"checked" if n in marc else ""}> {e(n)}</label>' for n in todos) + "</div>"
+
+
+def tag_papel(p):
+    return f'<span class="papel {e(p)}">{e(usuarios.PAPEIS.get(p, p))}</span>'
+
+
+def pg_conta(aviso="", erro=False):
+    u = usuario_atual()
+    emps = ", ".join(u.get("empresas") or []) or "todas"
+    corpo = f"""{ESTILO_ADM}<h2>👤 Minha conta</h2>
+<div class="form"><p><b>{e(u.get("nome", ""))}</b> · login <b>{e(u["login"])}</b> · {tag_papel(u["papel"])}</p>
+<p class="sub">Empresas que você vê: <b>{e(emps)}</b> · Recursos com IA: <b>{"liberados" if u.get("ia", True) and u["papel"] != "leitura" else "não liberados"}</b>
+· Último acesso: {e(u.get("ultimo_acesso") or "—")}</p>
+<h3>Trocar a minha senha</h3>
+<form method="post" action="/conta/senha"><input type="hidden" name="csrf" value="{CSRF}">
+<label>Senha atual</label><input class="campo" type="password" name="atual" required autocomplete="current-password">
+<label>Senha nova <small>(12 ou mais caracteres, com letras e números)</small></label>
+<input class="campo" type="password" name="nova" required minlength="12" autocomplete="new-password">
+<label>Repita a senha nova</label><input class="campo" type="password" name="nova2" required minlength="12" autocomplete="new-password">
+<div class="acoes"><button>Trocar senha</button></div></form>
+<p class="sub">Ao trocar, os seus outros aparelhos são desconectados. Esqueceu a senha? Peça ao administrador para redefinir.</p></div>"""
+    return pagina("Minha conta", corpo, "/conta", aviso, erro)
+
+
+def pg_admin(q, aviso="", erro=False, f=None):
+    f = f or {}
+    us = usuarios.carregar()
+    ses = _sessoes()
+    por_login = {}
+    for v in ses.values():
+        por_login[v[1]] = por_login.get(v[1], 0) + 1
+    gasto = custos_ia.resumo_mes(datetime.now().strftime("%Y-%m")).get("por_usuario", {})
+    linhas = ""
+    for lg, u in sorted(us.items(), key=lambda t: (t[1]["papel"] != "admin", t[0])):
+        emps = ", ".join(u.get("empresas") or []) or "todas"
+        linhas += (f'<tr class="{"" if u.get("ativo", True) else "inativo"}"><td><a href="/admin/usuario/{e(lg)}"><b>{e(lg)}</b></a>'
+                   f'<div class="sub">{e(u.get("nome", ""))}{"" if u.get("ativo", True) else " · DESATIVADO"}</div></td>'
+                   f'<td>{tag_papel(u["papel"])}</td><td class="ocultar">{e(emps if len(emps) < 80 else emps[:77] + "…")}</td>'
+                   f'<td>{"✅" if u.get("ia", True) and u["papel"] != "leitura" else "—"}</td>'
+                   f'<td class="ocultar">{e(u.get("ultimo_acesso") or "nunca")}<div class="sub">{e(u.get("ultimo_ip", ""))}</div></td>'
+                   f'<td>{por_login.get(lg, 0)}</td><td class="ocultar">{custos_ia.brl(gasto.get(lg, {}).get("brl", 0))}</td>'
+                   f'<td><a class="btn sec" href="/admin/usuario/{e(lg)}">Editar</a></td></tr>')
+    emps_all = empresas()
+    ativos = sum(1 for x in emps_all if x["ativo"])
+    https = "✅ ligado" if Path("/etc/caddy/Caddyfile").exists() else "⚠️ não encontrado"
+    corpo = f"""{ESTILO_ADM}<h2>🛡️ Painel do administrador</h2>{abas_admin("usu")}
+<div class="kpis"><div class="kpi"><div class="v">{len(us)}</div><div class="l">usuários ({sum(1 for u in us.values() if u.get("ativo", True))} ativos)</div></div>
+<div class="kpi"><div class="v">{len(ses)}</div><div class="l">sessões abertas agora</div></div>
+<a class="kpi" href="/empresas" style="text-decoration:none;color:inherit{';border-color:#c62828' if ativos < len(emps_all) else ''}"><div class="v">{ativos}/{len(emps_all)}</div><div class="l">monitores ligados</div></a>
+<a class="kpi" href="/consumo" style="text-decoration:none;color:inherit"><div class="v">{custos_ia.brl(sum(v["brl"] for v in gasto.values()))}</div><div class="l">💳 IA neste mês</div></a>
+<div class="kpi"><div class="v" style="font-size:18px">{https}</div><div class="l">HTTPS (Caddy)</div></div></div>
+<div class="duas-adm"><div><h3>Usuários</h3>
+<table><tr><th>Login</th><th>Papel</th><th class="ocultar">Empresas</th><th>IA</th><th class="ocultar">Último acesso</th><th>Sessões</th><th class="ocultar">IA no mês</th><th></th></tr>
+{linhas}</table>
+<p class="sub"><b>Papéis:</b> {" · ".join(f"<b>{e(n)}</b>: {e(usuarios.DESCR_PAPEL[k])}" for k, n in usuarios.PAPEIS.items())}.</p></div>
+<div><h3>➕ Novo usuário</h3><div class="form">
+<form method="post" action="/admin/usuarios/novo" autocomplete="off"><input type="hidden" name="csrf" value="{CSRF}">
+<label>Login <small>(3 a 32: letras minúsculas, números, . _ -)</small></label>
+<input class="campo" name="login" required pattern="[a-z0-9._-]{{3,32}}" value="{e(f.get("login", ""))}" placeholder="ex.: maria.silva">
+<label>Nome</label><input class="campo" name="nome" value="{e(f.get("nome", ""))}" placeholder="Maria Silva">
+<label>Papel</label><select class="campo" name="papel">{opcoes_papel(f.get("papel", "operador"))}</select>
+<label>Empresas que pode ver <small>(nenhuma marcada = todas; o administrador sempre vê todas)</small></label>
+{caixas_empresas([])}
+<label class="ck"><input type="checkbox" name="ia" value="1" {"" if f and f.get("ia") != "1" else "checked"}> Pode usar recursos com IA (têm custo)</label>
+<label>Senha inicial</label><input class="campo" type="password" name="senha" required minlength="12" autocomplete="new-password">
+<label>Repita a senha</label><input class="campo" type="password" name="senha2" required minlength="12" autocomplete="new-password">
+<p class="sub mostra-senha"></p>
+<label class="ck"><input type="checkbox" name="trocar" value="1" checked> Pedir para a pessoa trocar a senha no 1º acesso</label>
+<div class="acoes"><button>Criar usuário</button><button type="button" class="sec" onclick="gerarSenha(this.form)">🎲 Gerar senha forte</button></div>
+</form></div></div></div>
+<h3>Recuperação</h3><p class="sub">Se perder o acesso de administrador, no servidor rode:
+<code>cd ~/monitor-bll && venv/bin/python usuarios.py --nova-senha LOGIN</code> (ou <code>--novo-admin LOGIN</code> para criar outro).</p>"""
+    return pagina("Administrador", corpo, "/admin", aviso, erro)
+
+
+def pg_usuario(lg, aviso="", erro=False):
+    u = usuarios.obter(lg)
+    eu = lg == login_atual()
+    ses = sum(1 for v in _sessoes().values() if v[1] == lg)
+    hist = usuarios.auditoria(25, f'"usuario": "{lg}"')
+    linhas_h = "".join(f'<tr><td>{e(r["quando"][8:10] + "/" + r["quando"][5:7] + " " + r["quando"][11:16])}</td><td>{e(r["acao"])}'
+                       f'<div class="sub">{e(r.get("detalhe", ""))}</div></td><td class="ocultar">{e(r.get("ip", ""))}</td></tr>' for r in hist)
+    corpo = f"""{ESTILO_ADM}<h2>👤 {e(u.get("nome") or lg)} <small class="sub">({e(lg)})</small></h2>{abas_admin("usu")}
+<p class="sub">Criado em {e(u.get("criado", ""))}{" por " + e(u["criado_por"]) if u.get("criado_por") else ""} · último acesso
+{e(u.get("ultimo_acesso") or "nunca")} {e(u.get("ultimo_ip", ""))} · sessões abertas: <b>{ses}</b>{" · <b>deve trocar a senha</b>" if u.get("trocar_senha") else ""}</p>
+<div class="duas-adm"><div class="form">
+<h3>Dados e permissões</h3>
+<form method="post" action="/admin/usuario/{e(lg)}/salvar"><input type="hidden" name="csrf" value="{CSRF}">
+<label>Nome</label><input class="campo" name="nome" value="{e(u.get("nome", ""))}">
+<label>Papel</label><select class="campo" name="papel" {"" if not eu else 'title="Você não pode mudar o seu próprio papel"'}>{opcoes_papel(u["papel"])}</select>
+<label>Empresas que pode ver <small>(nenhuma marcada = todas)</small></label>{caixas_empresas(u.get("empresas") or [])}
+<label class="ck"><input type="checkbox" name="ia" value="1" {"checked" if u.get("ia", True) else ""}> Pode usar recursos com IA (têm custo)</label>
+<label class="ck"><input type="checkbox" name="ativo" value="1" {"checked" if u.get("ativo", True) else ""}> Ativo (desmarque para bloquear o acesso)</label>
+<div class="acoes"><button>Salvar</button><a class="btn sec" href="/admin">Voltar</a></div></form></div>
+<div><div class="form"><h3>Redefinir senha</h3>
+<form method="post" action="/admin/usuario/{e(lg)}/senha" autocomplete="off"><input type="hidden" name="csrf" value="{CSRF}">
+<label>Senha nova</label><input class="campo" type="password" name="senha" required minlength="12" autocomplete="new-password">
+<label>Repita</label><input class="campo" type="password" name="senha2" required minlength="12" autocomplete="new-password">
+<p class="sub mostra-senha"></p>
+<label class="ck"><input type="checkbox" name="trocar" value="1" {"" if eu else "checked"}> Pedir para trocar no próximo acesso</label>
+<div class="acoes"><button>Redefinir</button><button type="button" class="sec" onclick="gerarSenha(this.form)">🎲 Gerar</button></div></form></div>
+<div class="acoes" style="margin-top:12px">{botao(f"/admin/usuario/{lg}/sessoes", "🔌 Desconectar dos aparelhos", "sec", "Desconectar este usuário de todos os aparelhos?")}
+{"" if eu else botao(f"/admin/usuario/{lg}/excluir", "🗑 Excluir usuário", "perigo", "Excluir este usuário? Isso não pode ser desfeito.")}</div></div></div>
+<h3>Últimas ações deste usuário</h3><table><tr><th>Quando</th><th>Ação</th><th class="ocultar">IP</th></tr>{linhas_h or '<tr><td colspan="3">—</td></tr>'}</table>
+<p><a href="/admin/auditoria?q={urllib.parse.quote(lg)}">Ver tudo na auditoria →</a></p>"""
+    return pagina("Usuário", corpo, "/admin", aviso, erro)
+
+
+def pg_auditoria(q):
+    filtro = q.get("q", "")[:80]
+    regs = usuarios.auditoria(300, filtro)
+    linhas = "".join(
+        f'<tr><td>{e(r["quando"][8:10] + "/" + r["quando"][5:7] + "/" + r["quando"][:4] + " " + r["quando"][11:19])}</td>'
+        f'<td><a href="/admin/auditoria?q={urllib.parse.quote(r["usuario"])}">{e(r["usuario"])}</a></td>'
+        f'<td>{"❌ " if "recusado" in r["acao"] else ""}{e(r["acao"])}<div class="sub">{e(r.get("detalhe", ""))}</div></td>'
+        f'<td class="ocultar">{e(r.get("ip", ""))}</td></tr>' for r in regs)
+    corpo = f"""{ESTILO_ADM}<h2>📜 Auditoria</h2>{abas_admin("aud")}
+<p class="sub">Quem entrou, quem saiu, tentativas de senha errada e cada ação que altera algo (cadastros, configurações,
+documentos, IA, agenda…). Senhas e chaves nunca são gravadas aqui.</p>
+<form method="get" action="/admin/auditoria" class="acoes"><input class="campo" name="q" value="{e(filtro)}" placeholder="Filtrar: login, ação, IP…" style="max-width:320px">
+<button>Filtrar</button>{'<a class="btn sec" href="/admin/auditoria">Limpar</a>' if filtro else ''}</form>
+<table><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th class="ocultar">IP</th></tr>{linhas or '<tr><td colspan="4">Nada registrado ainda.</td></tr>'}</table>
+<p class="sub">Mostrando os {len(regs)} mais recentes.</p>"""
+    return pagina("Auditoria", corpo, "/admin")
 
 
 def pg_config(aviso=""):
@@ -2469,15 +2728,10 @@ Mandar todo dia um resumo: prazos de hoje/amanhã, certidões vencendo, o que mu
 <div class="acoes"><button>Salvar</button><button class="sec" name="acao" value="agora">📨 Enviar um resumo agora</button></div></form></div>
 <h2 style="margin-top:22px" id="seguranca">🛡️ Segurança</h2><div class="form">
 <p class="sub">Acesso ao painel: {"<b>HTTPS (cadeado) ativo</b>" if HOST == "127.0.0.1" else "<b style='color:var(--erro)'>sem HTTPS</b> – rode <code>bash seguranca.sh</code> no servidor"} ·
-sessões abertas: <b>{len(_sessoes())}</b> · senha {"<b style='color:var(--erro)'>fraca</b>" if senha_fraca(SENHA) else "<b>forte</b>"}</p>
-<form method="post" action="/config/senha"><input type="hidden" name="csrf" value="{CSRF}">
-<h3>Trocar a senha do painel</h3>
-<label>Senha atual</label><input class="campo" type="password" name="atual" autocomplete="current-password" required>
-<label>Nova senha <small>(12+ caracteres, com letras e números)</small></label><input class="campo" type="password" name="nova" autocomplete="new-password" minlength="12" required>
-<label>Repita a nova senha</label><input class="campo" type="password" name="nova2" autocomplete="new-password" minlength="12" required>
-<div class="acoes"><button>Trocar senha</button></div></form>
+sessões abertas: <b>{len(_sessoes())}</b> · usuários: <b>{len(usuarios.carregar())}</b></p>
+<p class="sub">A senha de cada pessoa agora é trocada em <a href="/conta">👤 Minha conta</a>. Usuários e permissões: <a href="/admin">🛡️ Admin</a>.</p>
 <form method="post" action="/config/sessoes" onsubmit="return confirm('Desconectar todos os outros aparelhos?')"><input type="hidden" name="csrf" value="{CSRF}">
-<p class="sub" style="margin-top:14px">Trocar a senha já desconecta os outros aparelhos. Use o botão abaixo se suspeitar que alguém entrou.</p>
+<p class="sub" style="margin-top:14px">Use o botão abaixo se suspeitar que alguém entrou: desconecta TODOS os usuários (menos você).</p>
 <div class="acoes"><button class="perigo">Encerrar todas as outras sessões</button></div></form></div>
 <h2 style="margin-top:22px">Descobrir conversas do Telegram</h2><div class="form">
 <p class="sub">Mande uma mensagem ao bot (ou num grupo onde ele está) e clique abaixo para ver o chat_id.</p>
@@ -2762,7 +3016,7 @@ if(min){{box.classList.add('min');document.getElementById('btMin').textContent='
 
 
 def pg_oportunidades(q, aviso=""):
-    d = oportunidades.ler()
+    d = oport_visiveis(oportunidades.ler())
     cfg = d["cfg"]
     filtro = q.get("f", "boas")
     emp_f = q.get("emp", "")
@@ -2969,7 +3223,7 @@ def mapa_busca(itens, qs):
                       "objeto": it.get("description") or "", "titulo": it.get("title") or "",
                       "valor": it.get("valor_total_estimado"), "link": buscas.link_pncp(it), "fim": it.get("data_fim_vigencia") or ""})
     try:
-        nomes = sorted(oportunidades.ler().get("perfis", {}))
+        nomes = sorted(oport_visiveis(oportunidades.ler()).get("perfis", {}))
         sedes = sedes_empresas(nomes, oportunidades.ler()["cfg"])
     except Exception:  # noqa: BLE001
         sedes = {}
@@ -3326,9 +3580,63 @@ class Painel(BaseHTTPRequestHandler):
                 return v
         return ""
 
+    def auditar(self, acao, detalhe=""):
+        u = usuario_atual()
+        usuarios.auditar(u["login"] if u else "-", self.ip(), acao, detalhe)
+
+    def negar(self, motivo):
+        if self.command == "POST" and self.path.startswith(("/pergunte/enviar",)):
+            dados = json.dumps({"ok": False, "erro": motivo}, ensure_ascii=False).encode()
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.cabecalhos_seguranca()
+            self.end_headers()
+            self.wfile.write(dados)
+        else:
+            self.enviar(pagina("Sem permissão", f'<h2>🔒 Sem permissão</h2><p>{e(motivo)}</p><p><a class="btn" href="/">Voltar ao início</a></p>'), 403)
+        return False
+
+    def permitido(self, caminho, campos=None):
+        """Regras por papel: admin tudo; operador sem empresas/config/usuários; leitura só consulta. + empresas liberadas."""
+        u = usuario_atual()
+        if not u:
+            return False
+        if caminho.startswith(ROTAS_ADMIN) and u["papel"] != "admin":
+            return self.negar("Esta área é só do administrador.")
+        if self.command == "POST":
+            if u["papel"] == "leitura" and not caminho.startswith(("/mensagens/lidas", "/conta/")):
+                return self.negar("O seu usuário é só de consulta: não pode alterar nada.")
+            if (caminho.startswith(ROTAS_IA) and not caminho.endswith("/telegram") or ROTAS_IA_RE.fullmatch(caminho)) and not u.get("ia", True):
+                return self.negar("O seu usuário não tem permissão para usar os recursos com IA (que têm custo). Fale com o administrador.")
+        if nomes_permitidos() is not None:
+            m = re.match(r"/(agenda|certidoes|pecas)/([0-9a-f]{12,14})(/|$)", caminho)
+            if m:
+                if m.group(1) == "agenda":
+                    dono = (agenda.prazos()["itens"].get(m.group(2)) or {}).get("empresa", "")
+                elif m.group(1) == "certidoes":
+                    dono = (agenda.certidoes()["itens"].get(m.group(2)) or {}).get("empresa", "")
+                else:
+                    dono = (pecas.ler(m.group(2)) or {}).get("empresa", "")
+                if not visivel(dono):
+                    return self.negar("Você não tem acesso a esta empresa.")
+        for k, v in (campos or {}).items():
+            if k in ("eid", "empresa", "emp") and v and not empresa_liberada(v):
+                return self.negar("Você não tem acesso a esta empresa.")
+            if k == "k" and v.count("|") == 3 and not pode_empresa(v.split("|")[0]):
+                return self.negar("Você não tem acesso a esta empresa.")
+        return True
+
     def autorizado(self):
-        if SENHA and sessao_valida(self.cookie("lt_sessao")):
-            return True
+        login = sessao_usuario(self.cookie("lt_sessao"))
+        u = usuarios.obter(login) if login else None
+        if u and u.get("ativo", True):
+            _REQ.user = u
+            caminho = urllib.parse.urlparse(self.path).path.rstrip("/") or "/"
+            q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
+            if u.get("trocar_senha") and self.command == "GET" and caminho != "/conta":
+                return self.redirecionar("/conta") and False
+            return self.permitido(caminho, q0)
+        _REQ.user = None
         if self.command == "GET" and not self.path.startswith(("/mensagens/processo", "/mensagens/busca")):
             return self.redirecionar("/login?destino=" + urllib.parse.quote(self.path)) and False
         self.send_response(401)
@@ -3354,10 +3662,10 @@ class Painel(BaseHTTPRequestHandler):
             alerta_seguranca("geral", "<b>Login do painel trancado por 15 minutos</b>: mais de 20 senhas erradas "
                                       "vindas de vários endereços. Pode ser uma tentativa de invasão.")
             return self.enviar(pg_login("Login temporariamente bloqueado por segurança. Tente em 15 minutos.", destino), 429)
-        usu_ok = hmac.compare_digest(f.get("usuario", "").strip().encode(), USUARIO.encode())
-        sen_ok = hmac.compare_digest(f.get("senha", "").encode(), SENHA.encode())
-        ok = bool(SENHA) and usu_ok and sen_ok
+        u = usuarios.autenticar(f.get("usuario", ""), f.get("senha", ""))
+        ok = u is not None
         if not ok:
+            usuarios.auditar(f.get("usuario", "")[:32], ip, "login recusado")
             TENTATIVAS[ip].append(agora)
             FALHAS_GERAIS.append(agora)
             time.sleep(1)   # deixa o "chute" de senhas lento
@@ -3367,8 +3675,10 @@ class Painel(BaseHTTPRequestHandler):
             return self.enviar(pg_login("Usuário ou senha incorretos.", destino), 401)
         TENTATIVAS.pop(ip, None)
         acesso_novo(ip, self.headers.get("User-Agent", ""))
+        usuarios.marcar_acesso(u["login"], ip)
+        usuarios.auditar(u["login"], ip, "entrou no painel")
         dias = 30 if f.get("lembrar") else 1
-        tok = criar_sessao(dias)
+        tok = criar_sessao(dias, u["login"])
         self.send_response(303)
         validade = f"; Max-Age={dias * 86400}" if f.get("lembrar") else ""
         seguro = "; Secure" if self.https() else ""
@@ -3410,6 +3720,9 @@ class Painel(BaseHTTPRequestHandler):
             q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
             return self.enviar(pg_login("", q0.get("destino", "/")))
         if caminho == "/sair":
+            lg = sessao_usuario(self.cookie("lt_sessao"))
+            if lg:
+                usuarios.auditar(lg, self.ip(), "saiu")
             encerrar_sessao(self.cookie("lt_sessao"))
             self.send_response(303)
             self.send_header("Set-Cookie", "lt_sessao=; Path=/; Max-Age=0")
@@ -3446,13 +3759,22 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_comunicado_imprimir())
             if p == "/consumo.csv":
                 mes = q.get("mes", "")
-                linhas = ["quando;recurso;empresa;referencia;modelo;tokens_entrada;tokens_saida;custo_usd;custo_brl;valor_licitante"]
+                linhas = ["quando;usuario;recurso;empresa;referencia;modelo;tokens_entrada;tokens_saida;custo_usd;custo_brl;valor_licitante"]
                 for u in custos_ia.usos(mes if re.fullmatch(r"\d{4}-\d{2}", mes) else ""):
                     linhas.append(";".join(str(u.get(k, "")).replace(";", ",") for k in
-                                           ("quando", "recurso", "empresa", "ref", "modelo", "entrada", "saida", "usd", "brl", "cliente")))
+                                           ("quando", "usuario", "recurso", "empresa", "ref", "modelo", "entrada", "saida", "usd", "brl", "cliente")))
                 return self.baixar(("\n".join(linhas)).encode("utf-8-sig"), f"consumo_ia_{mes or 'tudo'}.csv", "text/csv; charset=utf-8")
             if p == "/pergunte":
                 return self.enviar(pg_pergunte())
+            if p == "/conta":
+                return self.enviar(pg_conta(AVISOS.get(q.get("ok", ""), "")))
+            if p == "/admin":
+                return self.enviar(pg_admin(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/admin/auditoria":
+                return self.enviar(pg_auditoria(q))
+            m = re.fullmatch(r"/admin/usuario/([a-z0-9._-]{3,32})", p)
+            if m and usuarios.obter(m.group(1)):
+                return self.enviar(pg_usuario(m.group(1), AVISOS.get(q.get("ok", ""), "")))
             if p == "/disputa":
                 return self.enviar(pg_disputa(q, AVISOS.get(q.get("ok", ""), "")))
             if p == "/concorrentes":
@@ -3559,6 +3881,9 @@ class Painel(BaseHTTPRequestHandler):
             campos, arqs = ler_multipart(self, tam)
             if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
                 return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido(urllib.parse.urlparse(self.path).path.rstrip("/"), campos):
+                return
+            self.auditar("ação " + urllib.parse.urlparse(self.path).path, f"{len(arqs)} arquivo(s)")
             eid = campos.get("empresa", "")
             if not arqs or not (EMPRESAS / f"{eid}.env").exists():
                 return self.enviar(pagina("Erro", "<h2>Escolha a empresa e o PDF.</h2>", "/processos"))
@@ -3574,6 +3899,9 @@ class Painel(BaseHTTPRequestHandler):
             campos, arqs = ler_multipart(self, tam)
             if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
                 return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido(urllib.parse.urlparse(self.path).path.rstrip("/"), campos):
+                return
+            self.auditar("ação " + urllib.parse.urlparse(self.path).path, f"{len(arqs)} arquivo(s)")
             if campos.get("empresa", "") not in nomes_empresas():
                 return self.redirecionar("/certidoes")
             arq = next(((n, d) for n, d in arqs if d), None)
@@ -3594,6 +3922,9 @@ class Painel(BaseHTTPRequestHandler):
             campos, arqs = ler_multipart(self, tam)
             if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
                 return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido(urllib.parse.urlparse(self.path).path.rstrip("/"), campos):
+                return
+            self.auditar("ação " + urllib.parse.urlparse(self.path).path, f"{len(arqs)} arquivo(s)")
             emps = nomes_empresas()
             nome, ctx = ctx_doc(campos)
             proc, _, prom = campos.get("proc", "").partition("||")
@@ -3625,6 +3956,9 @@ class Painel(BaseHTTPRequestHandler):
             campos, arqs = ler_multipart(self, tam)
             if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
                 return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido(urllib.parse.urlparse(self.path).path.rstrip("/"), campos):
+                return
+            self.auditar("ação " + urllib.parse.urlparse(self.path).path, f"{len(arqs)} arquivo(s)")
             if not arqs:
                 return self.enviar(pg_editais("Escolha ao menos um arquivo.", True))
             ch = analise.chave_upload(arqs)
@@ -3641,7 +3975,65 @@ class Painel(BaseHTTPRequestHandler):
         if not hmac.compare_digest(f.get("csrf", ""), CSRF):
             return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
         p = urllib.parse.urlparse(self.path).path.rstrip("/")
+        if not self.permitido(p, f):
+            return
+        if not p.startswith(("/mensagens/lidas", "/pergunte/enviar")):
+            self.auditar("ação " + p, ", ".join(f"{k}={str(v)[:40]}" for k, v in f.items()
+                                                if k not in ("csrf", "nova", "nova2", "atual", "md") and not re.search(r"senha|token|key|pass|secret|chave", k, re.I)))
         try:
+            if p == "/conta/senha":
+                u = usuario_atual()
+                if not usuarios.autenticar(u["login"], f.get("atual", "")):
+                    return self.enviar(pg_conta("A senha atual não confere.", True))
+                if f.get("nova", "") != f.get("nova2", ""):
+                    return self.enviar(pg_conta("As duas senhas novas não são iguais.", True))
+                if f.get("nova", "") == f.get("atual", ""):
+                    return self.enviar(pg_conta("A senha nova precisa ser diferente da atual.", True))
+                try:
+                    usuarios.trocar_senha(u["login"], f.get("nova", ""))
+                except ValueError as ex:
+                    return self.enviar(pg_conta(str(ex), True))
+                encerrar_do_usuario(u["login"], menos=self.cookie("lt_sessao"))
+                self.auditar("trocou a própria senha")
+                return self.redirecionar("/conta?ok=senha")
+            if p == "/admin/usuarios/novo":
+                try:
+                    if f.get("senha", "") != f.get("senha2", ""):
+                        raise ValueError("As duas senhas não são iguais.")
+                    usuarios.criar(f.get("login", ""), f.get("nome", ""), f.get("senha", ""), f.get("papel", "operador"),
+                                   multi.get("empresas", []), f.get("ia") == "1", login_atual(), f.get("trocar") == "1")
+                except ValueError as ex:
+                    return self.enviar(pg_admin({}, str(ex), True, f))
+                return self.redirecionar("/admin?ok=usuario_criado")
+            m = re.fullmatch(r"/admin/usuario/([a-z0-9._-]{3,32})/(salvar|senha|sessoes|excluir)", p)
+            if m and usuarios.obter(m.group(1)):
+                lg, acao = m.groups()
+                try:
+                    if acao == "salvar":
+                        ativo_novo = f.get("ativo") == "1"
+                        if lg == login_atual() and (not ativo_novo or f.get("papel") != "admin"):
+                            raise ValueError("Você não pode tirar o seu próprio acesso de administrador nem se desativar.")
+                        usuarios.atualizar(lg, nome=f.get("nome", "").strip() or lg, papel=f.get("papel", "operador"),
+                                           empresas=multi.get("empresas", []), ia=f.get("ia") == "1", ativo=ativo_novo)
+                        if not ativo_novo:
+                            encerrar_do_usuario(lg)
+                        return self.redirecionar(f"/admin/usuario/{lg}?ok=feito")
+                    if acao == "senha":
+                        if f.get("senha", "") != f.get("senha2", ""):
+                            raise ValueError("As duas senhas não são iguais.")
+                        usuarios.trocar_senha(lg, f.get("senha", ""), obrigar_troca=f.get("trocar") == "1")
+                        encerrar_do_usuario(lg, menos=self.cookie("lt_sessao") if lg == login_atual() else "")
+                        return self.redirecionar(f"/admin/usuario/{lg}?ok=senha_redefinida")
+                    if acao == "sessoes":
+                        encerrar_do_usuario(lg, menos=self.cookie("lt_sessao") if lg == login_atual() else "")
+                        return self.redirecionar(f"/admin/usuario/{lg}?ok=sessoes")
+                    if lg == login_atual():
+                        raise ValueError("Você não pode excluir o seu próprio usuário.")
+                    usuarios.excluir(lg)
+                    encerrar_do_usuario(lg)
+                    return self.redirecionar("/admin?ok=usuario_excluido")
+                except ValueError as ex:
+                    return self.enviar(pg_usuario(lg, str(ex), True))
             if p == "/migrar":
                 migrar(f.get("nome", "EMPRESA").strip() or "EMPRESA")
                 return self.redirecionar("/empresas?ok=migrado")
@@ -3730,7 +4122,7 @@ class Painel(BaseHTTPRequestHandler):
                 try:
                     if not perg:
                         raise RuntimeError("Escreva uma pergunta.")
-                    md, modelo, custo = assistente.perguntar(CFG_ATUAL(), perg)
+                    md, modelo, custo = assistente.perguntar(CFG_ATUAL(), perg, login_atual(), nomes_permitidos())
                     res = {"ok": True, "html": analise.md_html(md), "modelo": modelo, "custo": custo_uso(custo)}
                 except Exception as ex:  # noqa: BLE001
                     res = {"ok": False, "erro": str(ex)[:400]}
@@ -3743,7 +4135,7 @@ class Painel(BaseHTTPRequestHandler):
                 self.wfile.write(dados)
                 return
             if p == "/pergunte/limpar":
-                assistente.limpar_conversa()
+                assistente.limpar_conversa(login_atual())
                 return self.redirecionar("/pergunte")
             if p == "/disputa/piso":
                 k = f.get("k", "")
@@ -3854,25 +4246,9 @@ class Painel(BaseHTTPRequestHandler):
                     return self.redirecionar("/buscar?ok=busca_rodando")
                 buscas.alterar_busca(m.group(1), m.group(2))
                 return self.redirecionar("/buscar?ok=feito")
-            if p == "/config/senha":
-                global SENHA
-                if not hmac.compare_digest(f.get("atual", "").encode(), SENHA.encode()):
-                    time.sleep(1)
-                    return self.enviar(pg_config("Senha atual incorreta."))
-                nova = f.get("nova", "")
-                if nova != f.get("nova2", ""):
-                    return self.enviar(pg_config("As duas senhas novas não são iguais."))
-                if senha_fraca(nova):
-                    return self.enviar(pg_config("A nova senha precisa ter 12 ou mais caracteres, com letras e números."))
-                if "\n" in nova or "\r" in nova:
-                    return self.enviar(pg_config("Senha inválida."))
-                gravar_env(CONFIG, {"PAINEL_SENHA": nova})
-                SENHA = nova
-                encerrar_todas(menos=self.cookie("lt_sessao"))
-                alerta_seguranca("senha", f"<b>Senha do painel trocada</b> (IP {e(self.ip())}). Os outros aparelhos foram desconectados.", 0)
-                return self.redirecionar("/config?ok=senha")
             if p == "/config/sessoes":
                 encerrar_todas(menos=self.cookie("lt_sessao"))
+                self.auditar("encerrou todas as sessões")
                 return self.redirecionar("/config?ok=sessoes")
             if p == "/config/backup":
                 v = {"BACKUP_HORA": re.sub(r"\D", "", f.get("BACKUP_HORA", "3")) or "3"}
