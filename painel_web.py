@@ -28,6 +28,7 @@ import analise
 import backup
 import urgencia
 import buscas
+import documentos
 import geo
 import oportunidades
 
@@ -43,6 +44,8 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "ia": "Instruções da IA salvas. Valem para as próximas análises.",
           "busca_salva": "Busca salva. Vou mandar no Telegram um resumo agora e, depois, só as licitações novas.",
           "busca_rodando": "Verificando agora. Se houver novidades, chegam no Telegram em instantes.",
+          "doc_dados": "Dados da empresa salvos.",
+          "doc_cnpj": "Dados preenchidos pela Receita e salvos. Confira e complete o CPF do representante (não vem da Receita).",
           "senha": "Senha do painel trocada. Os outros aparelhos foram desconectados.",
           "sessoes": "Todas as outras sessões foram encerradas.",
           "op_rodando": "Atualizando as oportunidades no PNCP. Leva 1 a 3 minutos; recarregue a página depois.",
@@ -485,13 +488,14 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .selo{color:#fff;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap}
 .mc-dir{background:var(--card);border:1px solid var(--borda);border-radius:12px;display:flex;flex-direction:column;min-height:0;min-width:0}
 .cv-vazio{padding:40px;text-align:center;color:var(--sub)}
-.cv-cab{background:#173f2c;color:#fff;padding:14px 18px;border-radius:12px 12px 0 0;font-size:13.5px}.cv-cab .sub{color:#cfe3d7}
+.cv-cab{display:flex;gap:12px;align-items:flex-start;background:#173f2c;color:#fff;padding:14px 18px;border-radius:12px 12px 0 0;font-size:13.5px}.cv-cab .sub{color:#cfe3d7}
 .mc-emp{flex-basis:100%;width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--borda);border-radius:8px;background:var(--card);color:inherit;font-size:14px}
 .cv-classif{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;background:var(--nova);border-bottom:1px solid var(--borda)}
 .cl-tit{font-weight:800;margin-right:4px}.cl-chip{border-radius:999px;padding:4px 12px;font-size:14px;border:1px solid var(--borda);background:var(--card);cursor:default}
 .cl-chip.c-1{background:#2e7d32;color:#fff;border-color:#2e7d32}.cl-chip.c-23{background:#f9a825;color:#1b1b1b;border-color:#f9a825}
 .cl-chip.c-n{background:var(--card)}.cl-chip.c-x{background:#c62828;color:#fff;border-color:#c62828}.cl-chip.c-0{opacity:.6}
 .cl-ver{margin-left:auto;padding:6px 12px;font-size:13px}.cl-quando{font-size:12px}
+.cv-doc{margin-left:auto;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.35);padding:6px 12px;font-size:13px;align-self:flex-start}
 .cv-sit{background:rgba(255,255,255,.18);padding:1px 8px;border-radius:999px;font-weight:700;color:#fff}
 .cv-num{font-size:18px;font-weight:700;margin-bottom:4px;display:flex;gap:8px;align-items:center}
 .cv-filtro{display:flex;gap:10px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--borda)}.cv-filtro select{min-width:0;width:100%}.cv-filtro{flex-wrap:wrap}.fm-l{flex:1 1 200px;display:flex;flex-direction:column;gap:4px;margin:0;font-size:12px;font-weight:700;color:var(--sub)}
@@ -543,7 +547,7 @@ mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.a
 """
 
 ABAS = [("/", "Visão geral"), ("/mensagens", "Mensagens"), ("/processos", "Processos"),
-        ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/empresas", "Empresas"), ("/config", "Configurações")]
+        ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/documentos", "Declarações"), ("/empresas", "Empresas"), ("/config", "Configurações")]
 
 
 def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
@@ -910,7 +914,8 @@ def html_conversa(g, cfg_chat, mapa=None):
     return (f'<div class="cv-cab" data-proc="{e(cp)}"><div><div class="cv-num">{e(g["processo"])} {selo_plat(g["plat"])}</div>'
             f'<div><b>Órgão:</b> {e(g["promotor"])}</div><div class="sub"><b>Empresa:</b> {e(g["nome"])} · '
             f'<b>Situação:</b> <span class="cv-sit">{e(situacao_proc(g["eid"], g["processo"], g["promotor"]) or "—")}</span>'
-            f'</div></div></div>' + barra_classif(g) +
+            f'</div></div><a class="btn cv-doc" href="/documentos?{e(urllib.parse.urlencode({"emp": g["nome"].upper().strip(), "proc": g["processo"] + "||" + g["promotor"]}))}" '
+            f'title="Gerar as declarações deste processo">📄 Declarações</a></div>' + barra_classif(g) +
             f'<div class="cv-filtro">'
             + menu("lote", "Lotes (mensagens)", "Todos os lotes", padrao=True)
             + menu("dilig", "Diligências", "Todas as diligências")
@@ -1403,6 +1408,170 @@ def form_empresa(eid=None):
 document.querySelectorAll('.so-bll').forEach(x=>x.style.display=bll?'':'none');
 document.querySelectorAll('.so-ln').forEach(x=>x.style.display=ln?'':'none');}}trocaPlat();</script>"""
     return pagina("Empresa", corpo, "/empresas")
+
+
+# ------------------------------------------------------------------ declarações
+def nomes_empresas():
+    """{NOME: [ids...]} – a mesma empresa em plataformas diferentes vira um nome só."""
+    out = {}
+    for arq in sorted(EMPRESAS.glob("*.env")) if EMPRESAS.exists() else []:
+        c = ler_env(arq)
+        out.setdefault((c.get("EMPRESA_NOME") or arq.stem).upper().strip(), []).append(arq.stem)
+    return out
+
+
+def dados_doc(nome, ids):
+    d = documentos.dados(nome)
+    if not d["cnpj"]:
+        for eid in ids:
+            c = ler_env(EMPRESAS / f"{eid}.env").get("EMPRESA_CNPJ", "")
+            if c:
+                d["cnpj"] = documentos.fmt_cnpj(c)
+                break
+    return d
+
+
+def processos_empresa(ids):
+    out = []
+    for eid in ids:
+        db = EMPRESAS / eid / "bll_monitor.db"
+        if not db.exists():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+            out += [(r[0], r[1], r[2] or "") for r in con.execute("SELECT processo, promotor, situacao FROM processos")]
+            con.close()
+        except Exception:  # noqa: BLE001
+            pass
+    vistos, res = set(), []
+    for x in sorted(out, key=lambda x: x[0], reverse=True):
+        if (x[0], x[1]) not in vistos:
+            vistos.add((x[0], x[1]))
+            res.append(x)
+    return res
+
+
+def ctx_doc(q):
+    emps = nomes_empresas()
+    nome = q.get("emp", "") if q.get("emp", "") in emps else (sorted(emps)[0] if emps else "")
+    ctx = dados_doc(nome, emps.get(nome, [])) if nome else {k: "" for k in documentos.CAMPOS}
+    proc, _, prom = q.get("proc", "").partition("||")
+    ctx["processo"] = q.get("processo", "").strip() or proc
+    ctx["orgao"] = q.get("orgao", "").strip() or prom
+    ctx["modalidade"] = q.get("modalidade", "").strip() or "Pregão Eletrônico"
+    ctx["cidade_data"] = q.get("cidade_data", "").strip() or ctx.get("cidade", "")
+    ctx["data"] = q.get("data", "").strip() or documentos.data_extenso()
+    return nome, ctx
+
+
+def pg_documentos(q, aviso=""):
+    emps = nomes_empresas()
+    if not emps:
+        return pagina("Declarações", "<h2>Declarações</h2><p>Cadastre uma empresa primeiro.</p>", "/documentos")
+    nome, ctx = ctx_doc(q)
+    procs = processos_empresa(emps[nome])
+    falta = documentos.faltando(ctx)
+    sel_emp = "".join(f'<option value="{e(n)}" {"selected" if n == nome else ""}>{e(n)}</option>' for n in sorted(emps))
+    proc_q = q.get("proc", "")
+    sel_proc = ('<option value="">— escolha um processo (ou preencha abaixo) —</option>' +
+                "".join(f'<option value="{e(p + "||" + o)}" {"selected" if (p + "||" + o) == proc_q else ""}>'
+                        f'{e(p)} – {e(o)}{" · " + e(sit) if sit else ""}</option>' for p, o, sit in procs))
+    marcadas = set(q.get("ids", "").split(",")) if q.get("ids") else set(documentos.PADRAO)
+    caixas = "".join(
+        f'<label class="dec"><input type="checkbox" name="d" value="{i}" {"checked" if i in marcadas else ""}'
+        f'{" disabled" if i == "meepp" and ctx.get("porte") not in ("ME", "EPP") else ""}> {e(t)}'
+        f'{" <small>(só para ME/EPP – defina o porte abaixo)</small>" if i == "meepp" and ctx.get("porte") not in ("ME", "EPP") else ""}</label>'
+        for i, t, _ in documentos.DECLARACOES)
+    g = lambda k: e(ctx.get(k, ""))  # noqa: E731
+    porte_sel = "".join(f'<option value="{k}" {"selected" if ctx.get("porte") == k else ""}>{r}</option>'
+                        for k, r in (("", "Demais (não é ME/EPP)"), ("ME", "Microempresa (ME)"), ("EPP", "Empresa de Pequeno Porte (EPP)")))
+    aviso_falta = (f'<div class="msg erro">Para gerar, preencha em “Dados da empresa”: <b>{e(", ".join(falta))}</b>.</div>'
+                   if falta else "")
+    corpo = f"""<style>.dec{{display:flex;gap:8px;align-items:flex-start;font-weight:400;margin:6px 0}}
+.dec input{{margin-top:3px}}.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}
+@media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}</style>
+<h2>📄 Declarações</h2>
+<p class="sub">Modelos padrão da Lei 14.133/2021 preenchidos com os dados da empresa e do processo. Saem prontos para assinar
+(Word ou PDF). <b>Se o edital trouxer modelo próprio nos anexos, use o do edital</b> – e confira sempre antes de enviar.</p>
+{aviso_falta}
+<div class="form" style="max-width:none">
+<form method="get" action="/documentos/ver" target="_blank" id="fdoc">
+<div class="duas"><div><label>Empresa</label>
+<select class="campo" name="emp" onchange="location.href='/documentos?emp='+encodeURIComponent(this.value)">{sel_emp}</select></div>
+<div><label>Processo <small>(lido pelo monitor)</small></label><select class="campo" name="proc">{sel_proc}</select></div>
+<div><label>Órgão <small>(vazio = o do processo escolhido)</small></label><input class="campo" name="orgao" value="{e(q.get('orgao', ''))}" placeholder="ex.: MUNICÍPIO DE RUY BARBOSA"></div>
+<div><label>Nº do processo/edital <small>(vazio = o do processo escolhido)</small></label><input class="campo" name="processo" value="{e(q.get('processo', ''))}" placeholder="ex.: 033/2026"></div>
+<div><label>Modalidade</label><input class="campo" name="modalidade" value="{e(q.get('modalidade', 'Pregão Eletrônico'))}"></div>
+<div><label>Local e data</label><div class="linha" style="gap:8px"><input class="campo" name="cidade_data" value="{g('cidade_data')}" placeholder="Cidade/UF">
+<input class="campo" name="data" value="{g('data')}"></div></div></div>
+<h3>Quais declarações</h3>
+<div class="linha" style="gap:8px;margin-bottom:6px"><button type="button" class="sec" onclick="marcar(true)">Marcar todas</button>
+<button type="button" class="sec" onclick="marcar(false)">Desmarcar todas</button></div>
+{caixas}
+<input type="hidden" name="ids" id="ids">
+<label class="dec" style="margin-top:12px"><input type="checkbox" name="unificada" value="1"> <b>Juntar tudo numa “Declaração unificada”</b> (um documento só, com os itens a, b, c…)</label>
+<div class="acoes"><button {"disabled" if falta else ""} onclick="return enviar('/documentos/ver')">👁 Visualizar / imprimir (PDF)</button>
+<button class="sec" {"disabled" if falta else ""} onclick="return enviar('/documentos/docx')">⬇ Baixar Word (.docx)</button></div>
+</form></div>
+<h2 style="margin-top:22px">Dados da empresa <small class="sub">(usados em todas as declarações de {e(nome)})</small></h2>
+<div class="form" style="max-width:none">
+<form method="post" action="/documentos/dados"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="emp" value="{e(nome)}">
+<div class="linha" style="gap:8px;align-items:flex-end"><div style="flex:1"><label>CNPJ</label>
+<input class="campo" name="cnpj" value="{g('cnpj')}" placeholder="00.000.000/0000-00"></div>
+<button formaction="/documentos/cnpj" class="sec">🔎 Preencher pelo CNPJ (Receita)</button></div>
+<div class="duas"><div><label>Razão social</label><input class="campo" name="razao" value="{g('razao')}"></div>
+<div><label>Porte</label><select class="campo" name="porte">{porte_sel}</select></div></div>
+<label>Endereço completo da sede</label><input class="campo" name="endereco" value="{g('endereco')}" placeholder="Rua, nº, bairro, cidade/UF, CEP">
+<div class="duas"><div><label>Cidade/UF da sede</label><input class="campo" name="cidade" value="{g('cidade')}" placeholder="Feira de Santana/BA"></div>
+<div><label>Cargo do representante</label><input class="campo" name="rep_cargo" value="{g('rep_cargo')}" placeholder="Sócio-Administrador"></div>
+<div><label>Nome do representante legal</label><input class="campo" name="rep_nome" value="{g('rep_nome')}"></div>
+<div><label>CPF do representante</label><input class="campo" name="rep_cpf" value="{g('rep_cpf')}" placeholder="000.000.000-00"></div></div>
+<p class="sub">O CPF não vem da Receita: preencha à mão. Os dados ficam só no seu servidor.</p>
+<div class="acoes"><button>Salvar dados da empresa</button></div></form></div>
+<script>
+function marcar(v){{document.querySelectorAll('#fdoc input[name=d]').forEach(x=>{{if(!x.disabled)x.checked=v;}});}}
+function enviar(acao){{const f=document.getElementById('fdoc');
+ const ids=[...f.querySelectorAll('input[name=d]:checked')].map(x=>x.value);
+ if(!ids.length){{alert('Marque pelo menos uma declaração.');return false;}}
+ document.getElementById('ids').value=ids.join(','); f.querySelectorAll('input[name=d]').forEach(x=>x.disabled=true);
+ f.action=acao; f.target=acao.endsWith('docx')?'_self':'_blank'; f.submit();
+ setTimeout(()=>f.querySelectorAll('input[name=d]').forEach(x=>{{x.disabled=x.value==='meepp'&&{'true' if ctx.get('porte') not in ('ME', 'EPP') else 'false'};}}),300);
+ return false;}}
+</script>"""
+    return pagina("Declarações", corpo, "/documentos", aviso)
+
+
+def gerar_docs(q):
+    nome, ctx = ctx_doc(q)
+    ids = [x for x in q.get("ids", "").split(",") if x]
+    return ctx, documentos.montar(ids, ctx, q.get("unificada") == "1")
+
+
+def pg_documentos_ver(q):
+    ctx, docs = gerar_docs(q)
+    falta = documentos.faltando(ctx)
+    if falta or not docs:
+        return pagina("Declarações", f'<h2>Não deu para gerar</h2><p>Faltam: {e(", ".join(falta) or "declarações marcadas")}.</p>'
+                      '<p><a class="btn" href="/documentos">Voltar</a></p>', "/documentos")
+    url_docx = "/documentos/docx?" + urllib.parse.urlencode(q)
+    return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Declarações – {e(ctx.get('razao', ''))}</title><style>
+body{{background:#e9edf0;margin:0;font-family:Arial,Helvetica,sans-serif;color:#111}}
+.barra{{position:sticky;top:0;background:#1b3a2a;color:#fff;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;z-index:5}}
+.barra button,.barra a{{background:#fff;color:#1b3a2a;border:0;border-radius:6px;padding:8px 14px;font-weight:700;cursor:pointer;text-decoration:none;font-size:14px}}
+.barra span{{font-size:13px;opacity:.9}}
+.folha{{background:#fff;width:210mm;min-height:297mm;margin:16px auto;padding:30mm 20mm 20mm 30mm;box-sizing:border-box;
+ box-shadow:0 2px 10px rgba(0,0,0,.15);font-size:11pt;line-height:1.6;outline:none}}
+.folha h2{{text-align:center;font-size:12pt;margin:18px 0 22px}}.folha .ref{{margin:0 0 12px}}
+.folha .corpo{{text-align:justify;text-indent:12.5mm}}.folha .item{{text-align:justify;margin:6px 0}}
+.folha .data{{text-align:right;margin-top:28px}}.folha .ass{{text-align:center;margin-top:40px}}
+@media print{{body{{background:#fff}}.barra{{display:none}}.folha{{margin:0;box-shadow:none;page-break-after:always;width:auto;min-height:0;padding:0}}
+ @page{{size:A4;margin:30mm 20mm 20mm 30mm}}}}
+@media(max-width:820px){{.folha{{width:auto;margin:10px;padding:18px}}}}
+</style></head><body>
+<div class="barra"><button onclick="window.print()">🖨 Imprimir / Salvar em PDF</button><a href="{e(url_docx)}">⬇ Baixar Word</a>
+<span>Dica: clique no texto para corrigir algo antes de imprimir. No Chrome, escolha “Salvar como PDF”.</span></div>
+{documentos.html(docs, ctx)}</body></html>"""
 
 
 def pg_config(aviso=""):
@@ -2400,6 +2569,24 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(form_empresa())
             if p == "/config":
                 return self.enviar(pg_config(AVISOS.get(q.get("ok", ""), "")))
+            if p == "/documentos":
+                return self.enviar(pg_documentos(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/documentos/ver":
+                return self.enviar(pg_documentos_ver(q))
+            if p == "/documentos/docx":
+                ctx, docs = gerar_docs(q)
+                if documentos.faltando(ctx) or not docs:
+                    return self.redirecionar("/documentos")
+                dados = documentos.docx(docs, ctx)
+                nome_arq = re.sub(r"[^\w.-]+", "_", f"Declaracoes_{ctx.get('processo') or 'processo'}_{ctx.get('razao', '')[:30]}").strip("_") + ".docx"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                self.send_header("Content-Disposition", f'attachment; filename="{nome_arq}"')
+                self.send_header("Content-Length", str(len(dados)))
+                self.cabecalhos_seguranca()
+                self.end_headers()
+                self.wfile.write(dados)
+                return
             if p == "/oportunidades":
                 return self.enviar(pg_oportunidades(q, AVISOS.get(q.get("ok", ""), "")))
             if p == "/buscar":
@@ -2548,6 +2735,26 @@ class Painel(BaseHTTPRequestHandler):
                 else:
                     analise.salvar_config_ia(f.get("instrucoes", ""), f.get("empresa", ""))
                 return self.redirecionar("/editais?ok=ia")
+            if p == "/documentos/dados":
+                nome = f.get("emp", "")
+                if nome in nomes_empresas():
+                    documentos.salvar_dados(nome, f)
+                return self.redirecionar("/documentos?" + urllib.parse.urlencode({"emp": nome, "ok": "doc_dados"}))
+            if p == "/documentos/cnpj":
+                nome = f.get("emp", "")
+                if nome not in nomes_empresas():
+                    return self.redirecionar("/documentos")
+                try:
+                    novo = documentos.consultar_cnpj(f.get("cnpj", ""))
+                except Exception as ex:  # noqa: BLE001
+                    return self.enviar(pg_documentos({"emp": nome}, e(f"Não consegui consultar o CNPJ: {ex}")))
+                atual = documentos.dados(nome)
+                for k in ("rep_cpf",):           # o CPF não vem da Receita: mantém o digitado
+                    novo[k] = atual.get(k, "")
+                if atual.get("rep_nome") and not novo.get("rep_nome"):
+                    novo["rep_nome"], novo["rep_cargo"] = atual["rep_nome"], atual.get("rep_cargo", "")
+                documentos.salvar_dados(nome, novo)
+                return self.redirecionar("/documentos?" + urllib.parse.urlencode({"emp": nome, "ok": "doc_cnpj"}))
             if p == "/oportunidades/atualizar":
                 threading.Thread(target=oportunidades.atualizar, args=(telegram_geral,), daemon=True).start()
                 return self.redirecionar("/oportunidades?ok=op_rodando")

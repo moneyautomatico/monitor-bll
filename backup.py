@@ -26,7 +26,7 @@ PASTA = Path(__file__).resolve().parent
 DIR = PASTA / "backups"
 GUARDAR = 7
 ARQUIVOS_SOLTOS = ["config.env", "buscas_salvas.json", "buscas_vistos.json", "analise_instrucoes.txt",
-                   "analise_empresa.txt", "urgente_palavras.txt", "vigia_estado.json", "oportunidades.json"]
+                   "analise_empresa.txt", "urgente_palavras.txt", "vigia_estado.json", "oportunidades.json", "dados_empresas.json"]
 
 
 def _copia_sqlite(origem, destino):
