@@ -74,7 +74,9 @@ for arq in sorted(EMP.glob("*.env")):
     minutos = int((agora - du).total_seconds() / 60) if du else None
     # só conta o que aconteceu desde que o monitor ligou desta vez (erros antigos, já resolvidos, não contam)
     desde = sh("systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", f"monitor-bll@{eid}") or "-60min"
-    erros = sh("bash", "-c", f"journalctl -u monitor-bll@{eid} --since '{desde}' --no-pager | grep -cE 'Traceback|Error|ERRO|Erro'")
+    # ignora os primeiros 15 s: são as últimas linhas do monitor antigo sendo desligado (ex.: "write EPIPE" do navegador)
+    desde_15 = sh("bash", "-c", f"date -d '{desde} 15 seconds' '+%Y-%m-%d %H:%M:%S'") if desde != "-60min" else desde
+    erros = sh("bash", "-c", f"journalctl -u monitor-bll@{eid} --since '{desde_15}' --no-pager | grep -vE 'EPIPE' | grep -cE 'Traceback|Error|ERRO|Erro'")
     reinicios = sh("bash", "-c", f"journalctl -u monitor-bll@{eid} --since '-60min' --no-pager | grep -c 'Scheduled restart'")
     rodando_desde = sh("bash", "-c", f"date -d '{desde}' '+%d/%m %H:%M'") if desde != "-60min" else "?"
     tg = "sim" if (c.get("EMPRESA_TELEGRAM_CHAT_ID") and (c.get("TELEGRAM_DESTINO") or c.get("ENVIAR_PARA")) in ("proprio", "ambos")) \
