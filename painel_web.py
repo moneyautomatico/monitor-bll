@@ -1526,7 +1526,7 @@ def pg_buscar(qs, aviso=""):
                               for x in it.get("_itens_achados", []))
             cnpj, ano, seq = buscas.ref(it)
             origem = it.get("link_sistema_origem") or ""
-            cards += f"""<div class="card"><div class="sub">{e(it.get('modalidade_licitacao_nome') or '')} · {e(it.get('title') or '')}
+            cards += f"""<div class="card" data-lid="{e(str(it.get('id') or ''))}"><div class="sub">{e(it.get('modalidade_licitacao_nome') or '')} · {e(it.get('title') or '')}
 · publicada {e(buscas.data_br(it.get('data_publicacao_pncp')))}</div>
 <div class="nome" style="margin:4px 0">{e(it.get('orgao_nome') or '')}</div>
 <div class="sub"><b>{e(it.get('municipio_nome') or '')}/{e(it.get('uf') or '')}</b> · {e(it.get('unidade_nome') or '')}</div>
@@ -1639,7 +1639,7 @@ def html_mapa(lista, sedes, base, raio, link, rot_nivel, titulo="Mapa das oportu
                       "url": link(cidade=f'{g["cidade"]}/{g["uf"]}', pagina=""),
                       "it": [{"o": r.get("orgao", "")[:70], "t": (r.get("objeto") or r.get("titulo") or "")[:110],
                               "v": buscas.moeda(r.get("valor")), "l": r.get("link", ""), "nv": r.get("nivel"),
-                              "f": buscas.data_br(r.get("fim"))} for r in g["itens"][:6]]})
+                              "f": buscas.data_br(r.get("fim")), "id": str(r.get("id") or "")} for r in g["itens"][:15]]})
     bases = [{"n": n, "c": s["cidade"], "lat": s["pt"][0], "lon": s["pt"][1], "on": n == base}
              for n, s in sedes.items() if s.get("pt")]
     dados = json.dumps({"pinos": pinos, "bases": bases, "raio": raio, "base": base}, ensure_ascii=False).replace("</", "<\\/")
@@ -1671,6 +1671,12 @@ def html_mapa(lista, sedes, base, raio, link, rot_nivel, titulo="Mapa das oportu
 .mapa-escuro .leaflet-tile-pane{{filter:invert(1) hue-rotate(180deg) brightness(.9) contrast(.9)}}
 .pop h4{{margin:0 0 4px}}.pop ul{{margin:6px 0;padding-left:16px;max-height:220px;overflow:auto}}.pop li{{margin-bottom:6px;font-size:12px}}
 .pop .ponto{{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}}
+.pop-it{{cursor:pointer;border-radius:6px;padding:4px;margin-left:-4px;list-style:none}}.pop-it:hover{{background:rgba(21,101,192,.08)}}
+.pop ul{{padding-left:4px}}.pop-bts{{display:flex;gap:6px;margin-top:4px;flex-wrap:wrap}}
+.pop-bt{{background:#1b5e20;color:#fff!important;text-decoration:none;border-radius:6px;padding:3px 8px;font-size:12px;font-weight:600}}
+.pop-bt.sec{{background:#e8eef0;color:#1b3a2a!important}}
+.card.destaque{{animation:destaque 2.4s ease-out}}
+@keyframes destaque{{0%,40%{{box-shadow:0 0 0 4px #1565c0,0 0 24px rgba(21,101,192,.6)}}100%{{box-shadow:none}}}}
 </style>
 <div class="mapa-box" id="mapaBox"><div class="mapa-cab"><b>🗺️ {e(titulo)}</b><span class="sub">{e(resumo)}</span>
 <div class="mapa-bts"><button type="button" class="sec" id="btMin" onclick="mapaMin()">— Minimizar</button>
@@ -1703,8 +1709,11 @@ function criar(){{
   const g=p.n>=10?' grande':'';
   const ic=L.divIcon({{className:'',iconSize:g?[48,48]:[38,38],iconAnchor:g?[24,48]:[19,38],popupAnchor:[0,-40],
    html:'<div class="pino '+p.nv+g+'"><div class="gota"></div><b>'+p.n+'</b>'+(p.novas?'<span class="nova">'+p.novas+' nova'+(p.novas>1?'s':'')+'</span>':'')+'</div>'}});
-  const lis=p.it.map(i=>'<li><span class="ponto" style="background:'+(cor[i.nv]||'#999')+'"></span><b>'+esc(i.o)+'</b><br>'+esc(i.t)+
-    '<br>'+esc(i.v)+(i.f?' · até '+esc(i.f):'')+(i.l?' · <a href="'+esc(i.l)+'" target="_blank" rel="noopener">edital</a>':'')+'</li>').join('');
+  const lis=p.it.map(i=>'<li class="pop-it" data-lid="'+esc(i.id)+'" data-link="'+esc(i.l)+'" title="Clique para ver a licitação">'+
+    '<span class="ponto" style="background:'+(cor[i.nv]||'#999')+'"></span><b>'+esc(i.o)+'</b><br>'+esc(i.t)+
+    '<br>'+esc(i.v)+(i.f?' · até '+esc(i.f):'')+
+    '<div class="pop-bts"><a href="#" class="pop-bt" data-ver="'+esc(i.id)+'">👁 Ver licitação</a>'+
+    (i.l?'<a class="pop-bt sec" href="'+esc(i.l)+'" target="_blank" rel="noopener">📄 Edital (PNCP)</a>':'')+'</div></li>').join('');
   if(!noBrasil(p.lat,p.lon))return;
   L.marker([p.lat,p.lon],{{icon:ic,qtd:p.n,title:p.c+'/'+p.uf+': '+p.n}}).addTo(camada).bindPopup(
    '<div class="pop"><h4>'+esc(p.c)+'/'+esc(p.uf)+'</h4><div>'+p.n+' licitação(ões) aberta(s)'+(p.km!=null?' · '+p.km+' km':'')+'</div><ul>'+lis+'</ul>'+
@@ -1717,6 +1726,16 @@ function criar(){{
  const ajustar=()=>{{mapa.invalidateSize(); if(pts.length)mapa.fitBounds(pts,{{padding:[40,40],maxZoom:9}});}};
  setTimeout(ajustar,60);
 }}
+// clique numa licitação do pino: vai até o card dela na lista (e destaca); se não estiver nesta página, abre o edital
+window.verLicitacao=function(id,lnk){{
+ const c=[...document.querySelectorAll('[data-lid]')].find(x=>x.classList.contains('card')&&x.dataset.lid===id);
+ if(c){{ if(box.classList.contains('max'))mapaMax(); if(mapa)mapa.closePopup();
+  c.scrollIntoView({{behavior:'smooth',block:'center'}}); c.classList.remove('destaque'); void c.offsetWidth; c.classList.add('destaque'); return;}}
+ if(lnk)window.open(lnk,'_blank','noopener');}};
+document.addEventListener('click',ev=>{{
+ const v=ev.target.closest('[data-ver]'); if(v){{ev.preventDefault(); const li=v.closest('.pop-it'); verLicitacao(v.dataset.ver, li&&li.dataset.link); return;}}
+ if(ev.target.closest('a'))return;
+ const li=ev.target.closest('.pop-it'); if(li)verLicitacao(li.dataset.lid, li.dataset.link);}});
 window.mapaMax=function(){{box.classList.remove('min');const m=box.classList.toggle('max');
  document.getElementById('btMax').textContent=m?'✕ Fechar tela cheia':'⤢ Maximizar';
  document.getElementById('btMin').textContent='— Minimizar';
@@ -1830,7 +1849,7 @@ def pg_oportunidades(q, aviso=""):
         acao_desc = (botao(f"/oportunidades/{r['id']}/voltar", "Restaurar", "sec") if r.get("descartado")
                      else botao(f"/oportunidades/{r['id']}/descartar", "Descartar", "sec"))
         origem = r.get("origem") or ""
-        cards += f"""<div class="card" style="border-left-color:{cor}">
+        cards += f"""<div class="card" data-lid="{e(str(r.get('id') or ''))}" style="border-left-color:{cor}">
 <div class="sub"><b style="color:{cor}">{rot}</b> · {r.get('pontos', 0)} pts {'<span class="tag-nova">NOVA</span>' if nova else ''}
 · {e(r.get('modalidade') or '')} · {e(r.get('titulo') or '')}</div>
 <div class="nome" style="margin:4px 0">{e(r.get('orgao') or '')}</div>
@@ -1909,7 +1928,7 @@ def mapa_busca(itens, qs):
     lista = []
     for it in itens:
         pt = geo.coord(it.get("municipio_nome"), it.get("uf"))
-        lista.append({"municipio": it.get("municipio_nome") or "", "uf": it.get("uf") or "", "_pt": pt, "_km": None,
+        lista.append({"id": str(it.get("id") or ""), "municipio": it.get("municipio_nome") or "", "uf": it.get("uf") or "", "_pt": pt, "_km": None,
                       "nivel": "busca", "pontos": 0, "achada_em": "", "orgao": it.get("orgao_nome") or "",
                       "objeto": it.get("description") or "", "titulo": it.get("title") or "",
                       "valor": it.get("valor_total_estimado"), "link": buscas.link_pncp(it), "fim": it.get("data_fim_vigencia") or ""})
