@@ -112,6 +112,7 @@ if usuarios.carregar() and SENHA:   # a senha não fica mais em texto no config.
     SENHA = ""
 _REQ = threading.local()   # usuário da requisição atual
 ROTAS_ADMIN = ("/admin", "/empresas", "/config", "/consumo", "/backup", "/telegram", "/migrar", "/e/")
+ROTAS_ADM_LAYOUT = ("/admin", "/empresas", "/config")   # abas mostradas no layout da Área do administrador
 ROTAS_IA = ("/analise", "/pecas/gerar", "/pecas/declaracoes", "/pergunte/enviar")
 ROTAS_IA_RE = re.compile(r"/pecas/[0-9a-f]{14}/refazer")
 
@@ -192,7 +193,7 @@ def _sessoes():
         d = {}
     agora = datetime.now().timestamp()
     # valor = [validade, login]; formato antigo (só a validade) deixa de valer – todos entram de novo com o próprio login
-    return {k: v for k, v in d.items() if isinstance(v, list) and len(v) == 2 and v[0] > agora and len(k) == 64}
+    return {k: v for k, v in d.items() if isinstance(v, list) and len(v) in (2, 3) and v[0] > agora and len(k) == 64}
 
 
 def _gravar_sessoes(d):
@@ -200,19 +201,19 @@ def _gravar_sessoes(d):
     os.chmod(ARQ_SESSOES, 0o600)
 
 
-def criar_sessao(dias, login):
+def criar_sessao(dias, login, tipo="painel"):
     """O arquivo guarda só o 'hash' do código da sessão: quem ler o arquivo não consegue entrar."""
     tok = secrets.token_urlsafe(32)
     d = _sessoes()
-    d[_h(tok)] = [datetime.now().timestamp() + dias * 86400, login]
+    d[_h(tok)] = [datetime.now().timestamp() + dias * 86400, login, tipo]
     _gravar_sessoes(d)
     return tok
 
 
-def sessao_usuario(tok):
-    """Login dono da sessão (ou None)."""
+def sessao_usuario(tok, tipo="painel"):
+    """Login dono da sessão (ou None). A sessão da Área do administrador é separada da do painel."""
     v = _sessoes().get(_h(tok)) if tok else None
-    return v[1] if v else None
+    return v[1] if v and (v[2] if len(v) > 2 else "painel") == tipo else None
 
 
 def sessao_valida(tok):
@@ -663,12 +664,12 @@ BOTAO_IA = ('<a href="/pergunte" class="fab-ia" title="Pergunte ao Licitatudo (I
 
 def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     u = usuario_atual()
+    if getattr(_REQ, "admin", False) and aba in ROTAS_ADM_LAYOUT:
+        return pagina_admin(titulo, corpo, aviso, erro)
     abas = [(x, n) for x, n in ABAS if eh_admin() or x not in ("/empresas", "/config")]
-    if eh_admin():
-        abas.append(("/admin", "🛡️ Admin"))
     nav = "".join(f'<a href="{x}" class="{"on" if x == aba else ""}" title="{"Configurações" if x == "/config" else n}">{n}</a>' for x, n in abas)
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
-    if u and (u.get("trocar_senha") or (u.get("senha_fraca") and aba == "/admin")) and aba != "/conta":
+    if u and u.get("trocar_senha") and aba != "/conta":
         msg += ('<div class="msg erro">🛡️ ' + ("Defina uma senha nova (a atual foi criada pelo administrador). " if u.get("trocar_senha") else
                 "A sua senha é curta (recomendado: 12 ou mais caracteres). ") +
                 '<a href="/conta">Trocar agora em Minha conta</a>.</div>')
@@ -676,6 +677,17 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
 {TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{'' if aba == "/pergunte" else BOTAO_IA}</body></html>"""
+
+
+def pagina_admin(titulo, corpo, aviso="", erro=False):
+    u = usuario_atual()
+    msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
+    return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Administração Licitatudo</title>
+{TEMA_JS}<style>{ESTILO}header{{background:linear-gradient(90deg,#2a1f4d,#3b2a6b)!important}}</style></head><body>
+<header><b>🛡️ Licitatudo · Administração</b><nav></nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>
+<a class="sair" href="/" target="_blank" title="Abrir o painel de uso diário">↗ Abrir o painel</a>
+<span class="sair" style="cursor:default">👤 {e(u["login"]) if u else ""}</span><a class="sair" href="/admin/sair">Sair</a></header><main>{msg}{corpo}</main></body></html>"""
 
 
 def tag_status(emp):
@@ -1503,7 +1515,7 @@ def pg_empresas(aviso="", erro=False):
     corpo = f"""<h2>Empresas</h2><div class="acoes" style="margin-bottom:12px"><a class="btn" href="/empresas/nova">+ Cadastrar empresa</a></div>
 <table><tr><th>Empresa</th><th>Situação</th><th class="ocultar">Alertas</th><th>Ações</th></tr>
 {linhas or '<tr><td colspan="4">Nenhuma empresa cadastrada.</td></tr>'}</table>"""
-    return pagina("Empresas", corpo, "/empresas", aviso, erro)
+    return pagina("Empresas", abas_admin_topo(corpo, "emp"), "/empresas", aviso, erro)
 
 
 def form_empresa(eid=None):
@@ -1548,7 +1560,7 @@ def form_empresa(eid=None):
 <script>function trocaPlat(){{const v=document.getElementById('plat').value,ln=v==='licitanet',bll=(v==='bll'||v==='bnc');
 document.querySelectorAll('.so-bll').forEach(x=>x.style.display=bll?'':'none');
 document.querySelectorAll('.so-ln').forEach(x=>x.style.display=ln?'':'none');}}trocaPlat();</script>"""
-    return pagina("Empresa", corpo, "/empresas")
+    return pagina("Empresa", abas_admin_topo(corpo, "emp"), "/empresas")
 
 
 # ------------------------------------------------------------------ declarações
@@ -2449,7 +2461,7 @@ real (média dos últimos usos) e dos preços/repasse em ⚙️. Edite à vontad
 <div class="form" style="max-width:none"><textarea class="campo" id="com" rows="22" style="max-width:100%;font-family:Georgia,serif;font-size:14px">{e(comunicado)}</textarea>
 <div class="acoes"><button type="button" onclick="navigator.clipboard.writeText(document.getElementById('com').value);this.textContent='Copiado!'">📋 Copiar</button>
 <a class="btn sec" href="/consumo/comunicado" target="_blank">🖨 Versão para imprimir/PDF</a></div></div>"""
-    return pagina("Consumo de IA", corpo, "/config", aviso)
+    return pagina("Consumo de IA", abas_admin_topo(corpo, "ia"), "/config", aviso)
 
 
 def comunicado_texto(tab_valores):
@@ -2521,6 +2533,11 @@ def abas_admin(atual):
             ("cfg", "/config", "⚙️ Configurações"), ("ia", "/consumo", "💳 Consumo de IA"))) + "</div>"
 
 
+def abas_admin_topo(corpo, atual):
+    """Empresas/⚙️/Consumo abertos pela Área do administrador ganham as abas do admin no topo."""
+    return (ESTILO_ADM + abas_admin(atual) + corpo) if getattr(_REQ, "admin", False) else corpo
+
+
 def opcoes_papel(atual="operador"):
     return "".join(f'<option value="{k}" {"selected" if k == atual else ""}>{e(n)} – {e(usuarios.DESCR_PAPEL[k])}</option>'
                    for k, n in usuarios.PAPEIS.items())
@@ -2585,7 +2602,7 @@ def pg_admin(q, aviso="", erro=False, f=None):
 <a class="kpi" href="/consumo" style="text-decoration:none;color:inherit"><div class="v">{custos_ia.brl(sum(v["brl"] for v in gasto.values()))}</div><div class="l">💳 IA neste mês</div></a>
 <div class="kpi"><div class="v" style="font-size:18px">{https}</div><div class="l">HTTPS (Caddy)</div></div></div>
 <div class="form" style="max-width:none;margin-bottom:14px"><h3 style="margin-top:0">🔑 Minha senha <small class="sub">({e(login_atual())})</small></h3>
-<form method="post" action="/conta/senha" class="linha-senha"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="volta" value="admin">
+<form method="post" action="/admin/senha" class="linha-senha"><input type="hidden" name="csrf" value="{CSRF}">
 <input class="campo" type="password" name="atual" placeholder="Senha atual" required autocomplete="current-password">
 <input class="campo" type="password" name="nova" placeholder="Senha nova" required minlength="8" autocomplete="new-password">
 <input class="campo" type="password" name="nova2" placeholder="Repita a senha nova" required minlength="8" autocomplete="new-password">
@@ -2747,7 +2764,7 @@ sessões abertas: <b>{len(_sessoes())}</b> · usuários: <b>{len(usuarios.carreg
 <form method="post" action="/telegram"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Token <small>(vazio = bot geral)</small></label><input class="campo" type="password" name="token" autocomplete="off">
 <div class="acoes"><button>Descobrir conversas</button></div></form></div>"""
-    return pagina("Configurações", corpo, "/config", aviso)
+    return pagina("Configurações", abas_admin_topo(corpo, "cfg"), "/config", aviso)
 
 
 def filtros_busca(qs):
@@ -3635,9 +3652,26 @@ class Painel(BaseHTTPRequestHandler):
                 return self.negar("Você não tem acesso a esta empresa.")
         return True
 
+    def sessao(self):
+        """(login, cookie, é_admin) da requisição. /admin só aceita a sessão da Área do administrador."""
+        caminho = urllib.parse.urlparse(self.path).path
+        adm = sessao_usuario(self.cookie("lt_admin"), "admin")
+        pain = sessao_usuario(self.cookie("lt_sessao"))
+        if caminho.startswith("/admin"):
+            return adm, "lt_admin", True
+        if adm and (caminho.startswith(ROTAS_ADMIN) or not pain):
+            return adm, "lt_admin", True
+        return pain, "lt_sessao", False
+
+    def tok(self):
+        return self.cookie(getattr(_REQ, "cookie", "lt_sessao"))
+
     def autorizado(self):
-        login = sessao_usuario(self.cookie("lt_sessao"))
+        login, ck, via_admin = self.sessao()
         u = usuarios.obter(login) if login else None
+        if via_admin and u and u["papel"] != "admin":
+            u = None
+        _REQ.cookie, _REQ.admin = ck, via_admin
         if u and u.get("ativo", True):
             _REQ.user = u
             caminho = urllib.parse.urlparse(self.path).path.rstrip("/") or "/"
@@ -3693,11 +3727,12 @@ class Painel(BaseHTTPRequestHandler):
         usuarios.marcar_acesso(u["login"], ip)
         usuarios.auditar(u["login"], ip, "entrou pelo acesso do administrador" if so_admin else "entrou no painel")
         dias = 30 if f.get("lembrar") else 1
-        tok = criar_sessao(dias, u["login"])
+        tok = criar_sessao(dias, u["login"], "admin" if so_admin else "painel")
         self.send_response(303)
         validade = f"; Max-Age={dias * 86400}" if f.get("lembrar") else ""
         seguro = "; Secure" if self.https() else ""
-        self.send_header("Set-Cookie", f"lt_sessao={tok}; Path=/; HttpOnly; SameSite=Lax{seguro}{validade}")
+        self.send_header("Set-Cookie", f"{'lt_admin' if so_admin else 'lt_sessao'}={tok}; Path=/; HttpOnly; SameSite=Strict{seguro}{validade}"
+                         if so_admin else f"lt_sessao={tok}; Path=/; HttpOnly; SameSite=Lax{seguro}{validade}")
         self.send_header("Location", destino)
         self.cabecalhos_seguranca()
         self.end_headers()
@@ -3735,10 +3770,20 @@ class Painel(BaseHTTPRequestHandler):
             q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
             return self.enviar(pg_login("", q0.get("destino", "/")))
         if caminho == "/admin/entrar":
-            u0 = usuarios.obter(sessao_usuario(self.cookie("lt_sessao")) or "")
+            u0 = usuarios.obter(sessao_usuario(self.cookie("lt_admin"), "admin") or "")
             if u0 and u0["papel"] == "admin" and u0.get("ativo", True):
                 return self.redirecionar("/admin")
             return self.enviar(pg_login("", "/admin", True))
+        if caminho == "/admin/sair":
+            lg = sessao_usuario(self.cookie("lt_admin"), "admin")
+            if lg:
+                usuarios.auditar(lg, self.ip(), "saiu da área do administrador")
+            encerrar_sessao(self.cookie("lt_admin"))
+            self.send_response(303)
+            self.send_header("Set-Cookie", "lt_admin=; Path=/; Max-Age=0")
+            self.send_header("Location", "/admin/entrar")
+            self.end_headers()
+            return
         if caminho == "/sair":
             lg = sessao_usuario(self.cookie("lt_sessao"))
             if lg:
@@ -4001,8 +4046,9 @@ class Painel(BaseHTTPRequestHandler):
             self.auditar("ação " + p, ", ".join(f"{k}={str(v)[:40]}" for k, v in f.items()
                                                 if k not in ("csrf", "nova", "nova2", "atual", "md") and not re.search(r"senha|token|key|pass|secret|chave", k, re.I)))
         try:
-            if p == "/conta/senha":
+            if p in ("/conta/senha", "/admin/senha"):
                 u = usuario_atual()
+                f["volta"] = "admin" if p == "/admin/senha" else ""
                 if not usuarios.autenticar(u["login"], f.get("atual", "")):
                     return self.enviar((pg_admin({}, "A senha atual não confere.", True) if f.get("volta") == "admin" else pg_conta("A senha atual não confere.", True)))
                 if f.get("nova", "") != f.get("nova2", ""):
@@ -4013,7 +4059,7 @@ class Painel(BaseHTTPRequestHandler):
                     usuarios.trocar_senha(u["login"], f.get("nova", ""))
                 except ValueError as ex:
                     return self.enviar((pg_admin({}, str(ex), True) if f.get("volta") == "admin" else pg_conta(str(ex), True)))
-                encerrar_do_usuario(u["login"], menos=self.cookie("lt_sessao"))
+                encerrar_do_usuario(u["login"], menos=self.tok())
                 self.auditar("trocou a própria senha")
                 return self.redirecionar("/admin?ok=senha" if f.get("volta") == "admin" else "/conta?ok=senha")
             if p == "/admin/usuarios/novo":
@@ -4042,10 +4088,10 @@ class Painel(BaseHTTPRequestHandler):
                         if f.get("senha", "") != f.get("senha2", ""):
                             raise ValueError("As duas senhas não são iguais.")
                         usuarios.trocar_senha(lg, f.get("senha", ""), obrigar_troca=f.get("trocar") == "1")
-                        encerrar_do_usuario(lg, menos=self.cookie("lt_sessao") if lg == login_atual() else "")
+                        encerrar_do_usuario(lg, menos=self.tok() if lg == login_atual() else "")
                         return self.redirecionar(f"/admin/usuario/{lg}?ok=senha_redefinida")
                     if acao == "sessoes":
-                        encerrar_do_usuario(lg, menos=self.cookie("lt_sessao") if lg == login_atual() else "")
+                        encerrar_do_usuario(lg, menos=self.tok() if lg == login_atual() else "")
                         return self.redirecionar(f"/admin/usuario/{lg}?ok=sessoes")
                     if lg == login_atual():
                         raise ValueError("Você não pode excluir o seu próprio usuário.")
@@ -4267,7 +4313,7 @@ class Painel(BaseHTTPRequestHandler):
                 buscas.alterar_busca(m.group(1), m.group(2))
                 return self.redirecionar("/buscar?ok=feito")
             if p == "/config/sessoes":
-                encerrar_todas(menos=self.cookie("lt_sessao"))
+                encerrar_todas(menos=self.tok())
                 self.auditar("encerrou todas as sessões")
                 return self.redirecionar("/config?ok=sessoes")
             if p == "/config/backup":
