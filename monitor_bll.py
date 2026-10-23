@@ -119,6 +119,17 @@ def usar_empresa(empresa):
                                    dados / "painel.html", dados / "diagnostico")
 
 
+def palavras_urgentes():
+    """Palavras de alarme do dono da empresa (Minhas configurações); vazio = as do sistema."""
+    arq = (CFG.get("URGENTE_ARQUIVO") or "").strip()
+    if arq and "/" not in arq and (PASTA / arq).exists():
+        try:
+            return (PASTA / arq).read_text(encoding="utf-8").strip()
+        except Exception:  # noqa: BLE001
+            pass
+    return ""
+
+
 def nome_empresa():
     n = CFG.get("EMPRESA_NOME", "")
     return f"🏢 <b>{html.escape(n)}</b>\n" if n else ""
@@ -1434,6 +1445,7 @@ def notificar(db, novas, primeira_vez, n_ativos, agora):
     so_urgente = CFG.get("ALARME_SO_URGENTE", "1") != "0"
     for m in novas:
         m["urgente"] = urgencia.classificar(m.get("texto", ""), m.get("escopo", ""), m.get("autor", ""),
+                                            texto_config=palavras_urgentes(),
                                             chat_urgente=CFG.get("CHAT_URGENTE", "1") != "0")
     urgentes = [m for m in novas if m["urgente"]]
     if novas:  # um alarme (e uma ligação) por ciclo, não um por mensagem

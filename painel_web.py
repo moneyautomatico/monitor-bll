@@ -51,6 +51,7 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "pref_bot": "Bot conectado! Agora faça o passo 2: abra o bot e toque em Iniciar.",
           "pref_ntfy": "Tópico criado e aplicado em todas as suas empresas. Inscreva o mesmo nome no app ntfy do celular.", "pref_resumo": "Resumo enviado no seu Telegram.",
           "pref_bot_pronto": "Bot conectado e já ligado à conversa onde os alertas chegavam. Clique em “Testar meus alertas”.",
+          "pref_ajustes": "Ajustes salvos e aplicados nas suas empresas (monitores reiniciados).",
           "usuario_criado": "Usuário criado. Passe o login e a senha para a pessoa (de preferência pessoalmente ou por telefone).",
           "usuario_excluido": "Usuário excluído e desconectado.", "senha": "Senha trocada. Os seus outros aparelhos foram desconectados.",
           "senha_redefinida": "Senha redefinida e a pessoa foi desconectada dos aparelhos.",
@@ -213,6 +214,9 @@ def cfg_ia():
     k = usuarios.cfg(login_atual()).get("gemini_key", "") if login_atual() else ""
     if k:
         c["GEMINI_API_KEY"] = k
+    mod = usuarios.cfg(login_atual()).get("gemini_modelo", "") if login_atual() else ""
+    if mod:
+        c["GEMINI_MODELO"] = mod
     return c
 
 
@@ -497,13 +501,13 @@ def empresas():
     out = []
     if not EMPRESAS.exists():
         return out
-    ign = {s.strip().upper() for s in CFG_ATUAL().get("SITUACOES_IGNORADAS",
-           "HOMOLOGADO,CANCELADO,REVOGADO,ANULADO,FRACASSADO,DESERTO").split(",")}
+    ign_geral = CFG_ATUAL().get("SITUACOES_IGNORADAS", "HOMOLOGADO,CANCELADO,REVOGADO,ANULADO,FRACASSADO,DESERTO")
     for arq in sorted(EMPRESAS.glob("*.env")):
         eid = arq.stem
         cfg = ler_env(arq)
         if not pode_empresa(cfg.get("EMPRESA_NOME", eid)):
             continue
+        ign = {s.strip().upper() for s in (cfg.get("SITUACOES_IGNORADAS") or ign_geral).split(",")}
         d = {"id": eid, "nome": cfg.get("EMPRESA_NOME", eid), "cfg": cfg, "ativo": ativo(eid),
              "plat": {"licitanet": "Licitanet", "pcp": "Portal de Compras", "bnc": "BNC"}.get(cfg.get("PLATAFORMA", "bll").lower(), "BLL"),
              "status": "Aguardando primeira verificação", "ultima": "", "duracao": 0,
@@ -2808,7 +2812,40 @@ No celular, este link já abre o app: <a href="ntfy://ntfy.sh/{e(topico)}">ntfy:
 <label>Minha chave do Gemini <small>(opcional; gere em aistudio.google.com; vazio = manter)</small></label>
 <input class="campo" type="password" name="gemini_key" autocomplete="off">
 {'<label class="ck"><input type="checkbox" name="tirar_chave" value="1"> Remover minha chave e usar a do sistema</label>' if uc.get("gemini_key") else ''}
+<label>Modelo <small>(vazio = o do sistema: {e(CFG_ATUAL().get("GEMINI_MODELO") or "automático")})</small></label>
+<input class="campo" name="gemini_modelo" value="{e(uc.get("gemini_modelo", ""))}" placeholder="ex.: gemini-flash-latest">
 <div class="acoes"><button>Salvar</button></div></form>"""
+    g0 = CFG_ATUAL()
+    pad = lambda k, d: e(g0.get(k) or d)  # noqa: E731
+    sel3 = lambda campo, atual, sim, nao, padrao: (  # noqa: E731
+        f'<select class="campo" name="{campo}"><option value="">Padrão do sistema ({padrao})</option>'
+        f'<option value="1" {"selected" if atual == "1" else ""}>{sim}</option><option value="0" {"selected" if atual == "0" else ""}>{nao}</option></select>')
+    ap = arq_palavras(lg)
+    palavras = ap.read_text(encoding="utf-8").strip() if ap.exists() else ""
+    dis = "disabled" if leitura else ""
+    form_ajustes = f"""<form method="post" action="/preferencias/ajustes"><input type="hidden" name="csrf" value="{CSRF}">
+<fieldset {dis} style="border:0;padding:0;margin:0"><div class="duas-adm"><div>
+<h3 style="margin-top:0">🚨 Alarme e ligação</h3>
+<label>Quando tocar o alarme (ntfy/ligação)</label>
+{sel3("alarme_so_urgente", str(uc.get("alarme_so_urgente", "")), "Só nas mensagens urgentes", "Em toda mensagem nova", "só urgentes" if g0.get("ALARME_SO_URGENTE", "1") != "0" else "toda mensagem")}
+<label>Mensagem escrita no chat (pregoeiro/participante) conta como urgente?</label>
+{sel3("chat_urgente", str(uc.get("chat_urgente", "")), "Sim", "Não", "sim" if g0.get("CHAT_URGENTE", "1") != "0" else "não")}
+<label>Minhas palavras de alarme <small>(uma por linha · formato <code>trecho | motivo</code> · vazio = as do sistema)</small></label>
+<textarea class="campo" name="palavras" rows="8" style="max-width:100%;font-family:ui-monospace,Consolas,monospace;font-size:12.5px" placeholder="{e(urgencia.texto_atual()[:300])}">{e(palavras)}</textarea>
+<label>Ligação no Telegram (CallMeBot) <small>(seu @usuário do Telegram; vazio = sem ligação)</small></label>
+<input class="campo" name="chamada" value="{e(uc.get("chamada", ""))}" placeholder="@seu_usuario">
+</div><div>
+<h3 style="margin-top:0">⏱️ Ritmo das minhas empresas</h3>
+<label>Verificar a cada (minutos) <small>(vazio = {pad("INTERVALO_MINUTOS", "10")} do sistema · mínimo 1)</small></label>
+<input class="campo" type="number" step="0.5" min="1" max="240" name="intervalo" value="{e(str(uc.get("intervalo", "")))}" placeholder="{pad("INTERVALO_MINUTOS", "10")}" style="max-width:140px">
+<label>Horário de funcionamento <small>(vazio = {pad("HORARIO_INICIO", "0")}h às {pad("HORARIO_FIM", "24")}h do sistema)</small></label>
+<div class="linha" style="gap:6px;align-items:center"><input class="campo" type="number" min="0" max="23" name="hora_ini" value="{e(str(uc.get("hora_ini", "")))}" placeholder="{pad("HORARIO_INICIO", "0")}" style="max-width:90px"> até
+<input class="campo" type="number" min="1" max="24" name="hora_fim" value="{e(str(uc.get("hora_fim", "")))}" placeholder="{pad("HORARIO_FIM", "24")}" style="max-width:90px"></div>
+<label>Situações que encerram o acompanhamento <small>(separe por vírgula · vazio = as do sistema)</small></label>
+<input class="campo" name="situacoes" value="{e(uc.get("situacoes", ""))}" placeholder="{pad("SITUACOES_IGNORADAS", "HOMOLOGADO,CANCELADO,REVOGADO,ANULADO,FRACASSADO,DESERTO")}">
+<p class="sub">Valem só para as suas empresas. Ao salvar, os monitores delas reiniciam para usar os ajustes novos.</p>
+</div></div>
+{'' if leitura else '<div class="acoes"><button>Salvar alarme e ritmo</button></div>'}</fieldset></form>"""
     corpo = f"""{ESTILO_ADM}<style>.etapa{{display:flex;gap:10px;align-items:flex-start;margin:10px 0}}.etapa.apagada{{opacity:.45}}
 .passo{{flex:0 0 26px;height:26px;border-radius:50%;background:var(--borda);display:grid;place-items:center;font-weight:700;font-size:13px}}
 .passo.ok{{background:var(--verde);color:#fff}}.etapa ol{{margin:6px 0;padding-left:18px;line-height:1.7}}.etapa form{{display:inline}}
@@ -2836,10 +2873,12 @@ No celular, este link já abre o app: <a href="ntfy://ntfy.sh/{e(topico)}">ntfy:
 O texto “Sobre a empresa” e as instruções da análise ficam em <a href="/editais">Editais</a>.</p>
 {form_ia}</div>
 {cartao_meu_consumo(lg, uc)}
-<div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">🔑 Conta</h3>
-<p class="sub">Login <b>{e(lg)}</b> · {tag_papel(u["papel"])}</p><div class="acoes"><a class="btn sec" href="/conta">Trocar minha senha</a>
-<a class="btn sec" href="/empresas">Minhas empresas</a></div></div>
-</div></div>"""
+<div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">🔑 Conta e segurança</h3>
+<p class="sub">Login <b>{e(lg)}</b> · {tag_papel(u["papel"])} · aparelhos conectados: <b>{sum(1 for v in _sessoes().values() if v[1] == lg)}</b></p>
+<div class="acoes"><a class="btn sec" href="/conta">Trocar minha senha</a><a class="btn sec" href="/empresas">Minhas empresas</a>
+{botao("/preferencias/sessoes", "🔌 Desconectar meus outros aparelhos", "sec", "Desconectar todos os seus outros aparelhos?")}</div></div>
+</div></div>
+<div class="form" style="max-width:none;margin-top:14px">{form_ajustes}</div>"""
     return pagina("Minhas configurações", corpo, "/preferencias", aviso, erro)
 
 
@@ -3777,6 +3816,23 @@ def alertas_do_usuario(uc):
     return v
 
 
+AJUSTES_USUARIO = {"alarme_so_urgente": "ALARME_SO_URGENTE", "chat_urgente": "CHAT_URGENTE", "chamada": "CHAMADA_USUARIO",
+                   "intervalo": "INTERVALO_MINUTOS", "hora_ini": "HORARIO_INICIO", "hora_fim": "HORARIO_FIM",
+                   "situacoes": "SITUACOES_IGNORADAS"}
+
+
+def arq_palavras(login):
+    return PASTA / f"urgente_palavras_{re.sub(r'[^a-z0-9._-]', '', login)}.txt"
+
+
+def ajustes_do_usuario(login, uc):
+    """Chaves do .env das empresas a partir das Minhas configurações. None = tirar (vale o padrão do sistema)."""
+    w = {chave: (str(uc[k]) if str(uc.get(k, "")).strip() != "" else None) for k, chave in AJUSTES_USUARIO.items()}
+    a = arq_palavras(login)
+    w["URGENTE_ARQUIVO"] = a.name if a.exists() and a.read_text(encoding="utf-8").strip() else None
+    return w
+
+
 def aplicar_alertas_usuario(login, so_eid=None):
     """Grava o bot/ntfy do usuário em TODAS as empresas dele (e só nelas) e reinicia os monitores ligados."""
     uc = usuarios.cfg(login)
@@ -3791,7 +3847,8 @@ def aplicar_alertas_usuario(login, so_eid=None):
             w.update(EMPRESA_TELEGRAM_TOKEN="", EMPRESA_TELEGRAM_CHAT_ID="")   # bot removido
         if not uc.get("ntfy") and antigo.get("NTFY_DESTINO") == "proprio":
             w.update(EMPRESA_NTFY_TOPICO="")
-        gravar_env(a, w)
+        w.update(ajustes_do_usuario(login, uc))
+        gravar_env(a, {k: x for k, x in w.items() if x is not None}, remover=tuple(k for k, x in w.items() if x is None))
         if not so_eid and ativo(a.stem):
             sh("systemctl", "restart", f"monitor-bll@{a.stem}")
         n += 1
@@ -4988,11 +5045,47 @@ class Painel(BaseHTTPRequestHandler):
                 agenda.ntfy({"NTFY_TOPICO": uc["ntfy"]}, "Teste do Licitatudo", "Os alarmes das suas empresas tocam aqui.")
                 res.append("ntfy: enviado (veja no app)")
             return self.enviar(pg_preferencias(" · ".join(res) or "Configure o bot ou o ntfy primeiro.", not res))
+        if p == "/preferencias/ajustes":
+            def num(campo, lo, hi, real=False):
+                x = f.get(campo, "").strip().replace(",", ".")
+                if not x:
+                    return None
+                try:
+                    v = float(x) if real else int(float(x))
+                except ValueError:
+                    raise ValueError(f"Valor inválido: {x}")
+                if not lo <= v <= hi:
+                    raise ValueError(f"Use um valor entre {lo} e {hi}.")
+                return (f"{v:g}" if real else str(v))
+            try:
+                novos = {"alarme_so_urgente": f.get("alarme_so_urgente") if f.get("alarme_so_urgente") in ("0", "1") else None,
+                         "chat_urgente": f.get("chat_urgente") if f.get("chat_urgente") in ("0", "1") else None,
+                         "chamada": re.sub(r"[^\w@.]", "", f.get("chamada", ""))[:40] or None,
+                         "intervalo": num("intervalo", 1, 240, True), "hora_ini": num("hora_ini", 0, 23), "hora_fim": num("hora_fim", 1, 24),
+                         "situacoes": ",".join(x.strip().upper() for x in f.get("situacoes", "").split(",") if x.strip())[:500] or None}
+                if novos["hora_ini"] and novos["hora_fim"] and int(novos["hora_ini"]) >= int(novos["hora_fim"]):
+                    raise ValueError("O horário de início precisa ser antes do fim.")
+            except ValueError as ex:
+                return self.enviar(pg_preferencias(str(ex), True))
+            usuarios.salvar_cfg(lg, novos)
+            txt = f.get("palavras", "").replace("\r\n", "\n").strip()[:20000]
+            ap = arq_palavras(lg)
+            if txt:
+                ap.write_text(txt + "\n", encoding="utf-8")
+            elif ap.exists():
+                ap.unlink()
+            n = aplicar_alertas_usuario(lg)
+            return self.redirecionar("/preferencias?ok=pref_ajustes" if n else "/preferencias?ok=pref")
+        if p == "/preferencias/sessoes":
+            encerrar_do_usuario(lg, menos=self.tok())
+            return self.redirecionar("/preferencias?ok=sessoes")
         if p == "/preferencias/ia":
             k = f.get("gemini_key", "").strip()
             if k and not re.fullmatch(r"[\w-]{30,60}", k):
                 return self.enviar(pg_preferencias("A chave do Gemini parece errada.", True))
-            usuarios.salvar_cfg(lg, {"gemini_key": None if f.get("tirar_chave") else (k or uc.get("gemini_key") or None)})
+            mod = re.sub(r"[^\w.-]", "", f.get("gemini_modelo", ""))[:60]
+            usuarios.salvar_cfg(lg, {"gemini_key": None if f.get("tirar_chave") else (k or uc.get("gemini_key") or None),
+                                     "gemini_modelo": mod or None})
             return self.redirecionar("/preferencias?ok=pref")
         if p == "/preferencias/resumo":
             try:
