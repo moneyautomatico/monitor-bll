@@ -54,6 +54,7 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "pref_bot_pronto": "Bot conectado e já ligado à conversa onde os alertas chegavam. Clique em “Testar meus alertas”.",
           "pref_ajustes": "Ajustes salvos e aplicados nas suas empresas (monitores reiniciados).",
           "itens": "Itens trazidos. Confira com o edital e preencha os preços.",
+          "avisos": "Teste enviado para o Telegram/ntfy do administrador.",
           "usuario_criado": "Usuário criado. Passe o login e a senha para a pessoa (de preferência pessoalmente ou por telefone).",
           "usuario_excluido": "Usuário excluído e desconectado.", "senha": "Senha trocada. Os seus outros aparelhos foram desconectados.",
           "senha_redefinida": "Senha redefinida e a pessoa foi desconectada dos aparelhos.",
@@ -343,6 +344,7 @@ def alerta_seguranca(chave, texto, minutos=60):
         return
     _ALERTAS_LOGIN[chave] = agora
     threading.Thread(target=telegram_geral, args=("🛡️ " + texto,), daemon=True).start()
+    threading.Thread(target=ntfy_geral, args=("Licitatudo – segurança", re.sub(r"<[^>]+>", "", texto), "4"), daemon=True).start()
 
 
 def acesso_novo(ip, navegador):
@@ -3217,6 +3219,32 @@ def bot_html(u):
         f'<div class="sub">🔔 ntfy ativo</div>' if c.get("ntfy") else "")
 
 
+def cartao_avisos_admin():
+    tgs, tops = destinos_admin()
+    eu = usuarios.cfg(login_atual())
+    est = backup.estado()
+    tem_senha = bool(CFG_ATUAL().get("BACKUP_SENHA"))
+    ult_local = (backup.listar() or [None])[0]
+    ok_tg, ok_nt = bool(tgs), bool(tops)
+    ok_bk = tem_senha and ok_tg
+    tag = lambda ok, sim, nao: f'<span class="tag {"ok" if ok else "parado"}">{"✅ " + sim if ok else "⚠️ " + nao}</span>'  # noqa: E731
+    bot_eu = f"@{e(eu.get('bot_nome'))}" if eu.get("bot_nome") and eu.get("tg_chat") else ""
+    return f"""<div class="form" style="max-width:none;margin-bottom:14px"><h3 style="margin-top:0">📣 Avisos do administrador e backup</h3>
+<p class="sub">Avisos do sistema – tentativa de invasão, backup, falha geral – e a <b>cópia do backup fora do servidor</b> vão para o seu
+Telegram/ntfy de administrador. Os alertas das empresas continuam indo só para o dono de cada empresa.</p>
+<div class="status-al" style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px">
+{tag(ok_tg, "Telegram do admin: " + (bot_eu or f"{len(tgs)} destino(s)"), "Telegram do admin não configurado")}
+{tag(ok_nt, "ntfy do admin ativo", "ntfy do admin não configurado")}
+{tag(tem_senha, "senha do backup definida", "sem senha do backup")}
+{tag(ok_bk and est.get("ok", True), "cópia externa: " + (est.get("quando") or "aguardando o próximo backup (3h)"), "cópia externa NÃO está sendo enviada")}</div>
+<p class="sub">Último backup local: <b>{e(ult_local[2].strftime("%d/%m/%Y %H:%M")) if ult_local else "nenhum"}</b>
+{f" · último resultado: {e(est.get('msg', ''))}" if est.get("msg") else ""}</p>
+<div class="acoes"><a class="btn {"sec" if ok_tg and ok_nt else ""}" href="/preferencias" target="_blank">⚙️ Configurar meu bot e ntfy de administrador</a>
+<a class="btn sec" href="/config#backup">🔒 Senha e horário do backup</a>
+{botao("/admin/avisos/testar", "📨 Testar avisos", "sec")}</div>
+<p class="sub">Dica: crie no @BotFather um bot só para você (ex.: <i>licitatudo_admin_bot</i>) – não use o bot de um cliente.</p></div>"""
+
+
 def pg_admin(q, aviso="", erro=False, f=None):
     f = f or {}
     us = usuarios.carregar()
@@ -3255,6 +3283,7 @@ def pg_admin(q, aviso="", erro=False, f=None):
 <button>Trocar minha senha</button></form>
 <p class="sub" style="margin:6px 0 0">Mínimo 8 caracteres com letras e números (recomendado 12+). Seu acesso exclusivo de administrador:
 <a href="/admin/entrar"><b>/admin/entrar</b></a> – guarde nos favoritos.</p></div>
+{cartao_avisos_admin()}
 <h3>🟢 Quem está online agora</h3><div id="online">{html_online()}</div>
 <script>setInterval(()=>fetch('/admin/online',{{credentials:'same-origin',cache:'no-store'}}).then(r=>r.ok?r.text():null).then(t=>{{if(t)document.getElementById('online').innerHTML=t;}}).catch(()=>{{}}),20000);</script>
 <div class="duas-adm"><div><h3>Usuários</h3>
@@ -3366,9 +3395,9 @@ def pg_config(aviso=""):
 <label>Situações ignoradas <small>(separadas por vírgula)</small></label>
 <input class="campo" name="SITUACOES_IGNORADAS" value="{g('SITUACOES_IGNORADAS', 'HOMOLOGADO,CANCELADO,REVOGADO,ANULADO,FRACASSADO,DESERTO')}">
 <div class="acoes"><button>Salvar e reiniciar monitores</button></div></form></div>
-<h2 style="margin-top:22px">Backup</h2><div class="form">
+<h2 style="margin-top:22px" id="backup">Backup</h2><div class="form">
 <p class="sub">Todo dia às {g('BACKUP_HORA', '3')}h o painel guarda uma cópia no servidor (últimos 7 dias) e manda outra,
-<b>criptografada</b>, para o Telegram geral (fica fora do servidor). Inclui cadastros, senhas das plataformas,
+<b>criptografada</b>, para o Telegram do administrador (fica fora do servidor – configure em Admin → Avisos do administrador). Inclui cadastros, senhas das plataformas,
 mensagens, processos, classificações, buscas e análises.</p>
 <form method="post" action="/config/backup"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Senha do backup <small>({"definida; " if c.get("BACKUP_SENHA") else "<b style='color:var(--erro)'>não definida</b> – sem ela a cópia não vai para o Telegram; "}deixe vazio para manter. Guarde-a: sem ela não dá para abrir o backup)</small></label>
@@ -4038,16 +4067,14 @@ ARQ_VIGIA = PASTA / "vigia_estado.json"
 
 
 def ntfy_geral(titulo, texto, prioridade="4"):
-    topico = CFG_ATUAL().get("NTFY_TOPICO", "").strip()
-    if not topico:
-        return
-    try:
-        req = urllib.request.Request(f"https://ntfy.sh/{topico}", texto.encode("utf-8"), method="POST",
-                                     headers={"Title": titulo.encode("utf-8").decode("latin-1", "ignore"),
-                                              "Priority": prioridade, "Tags": "warning"})
-        urllib.request.urlopen(req, timeout=20).read()
-    except Exception as ex:  # noqa: BLE001
-        print("ntfy (vigia):", ex, flush=True)
+    for topico in destinos_admin()[1]:
+        try:
+            req = urllib.request.Request(f"https://ntfy.sh/{topico}", texto.encode("utf-8"), method="POST",
+                                         headers={"Title": titulo.encode("utf-8").decode("latin-1", "ignore"),
+                                                  "Priority": prioridade, "Tags": "warning"})
+            urllib.request.urlopen(req, timeout=20).read()
+        except Exception as ex:  # noqa: BLE001
+            print("ntfy (admin):", ex, flush=True)
 
 
 def problema_monitor(x, limite):
@@ -4321,6 +4348,21 @@ def resumo_usuarios():
         time.sleep(300)
 
 
+def destinos_admin():
+    """Para onde vão os avisos do SISTEMA (segurança, backup, monitor sem dono, resumo geral):
+    o Telegram do sistema (se houver) + o bot/conversa de cada administrador (⚙️ Minhas configurações)."""
+    g = CFG_ATUAL()
+    tgs = [(g.get("TELEGRAM_TOKEN"), g.get("TELEGRAM_CHAT_ID"))]
+    tops = [g.get("NTFY_TOPICO", "")]
+    for lg, u in usuarios.carregar().items():
+        if u.get("papel") == "admin" and u.get("ativo", True):
+            c = u.get("cfg") or {}
+            tgs.append((c.get("tg_token"), c.get("tg_chat")))
+            tops.append(c.get("ntfy", ""))
+    return (list(dict.fromkeys((t, c) for t, c in tgs if t and c)),
+            list(dict.fromkeys(t.strip() for t in tops if t and t.strip())))
+
+
 def telegram_geral(texto, usuario=None, empresas=None):
     """Sem destino: avisos do sistema (Telegram geral, se houver). Com empresas/usuário: vai para o bot do dono."""
     if empresas:
@@ -4332,16 +4374,8 @@ def telegram_geral(texto, usuario=None, empresas=None):
         if uc.get("tg_token") and uc.get("tg_chat"):
             telegram_para(uc["tg_token"], uc["tg_chat"], texto)
             return
-    c = CFG_ATUAL()
-    tok, chat = c.get("TELEGRAM_TOKEN"), c.get("TELEGRAM_CHAT_ID")
-    if not tok or not chat:
-        return
-    dados = urllib.parse.urlencode({"chat_id": chat, "text": texto, "parse_mode": "HTML",
-                                    "disable_web_page_preview": "true"}).encode()
-    try:
-        urllib.request.urlopen(f"https://api.telegram.org/bot{tok}/sendMessage", dados, timeout=20).read()
-    except Exception as ex:  # noqa: BLE001
-        print("Telegram (buscas):", ex, flush=True)
+    for tok, chat in destinos_admin()[0]:   # avisos do sistema: para o(s) administrador(es)
+        telegram_para(tok, chat, texto)
 
 
 # ------------------------------------------------------------------ ações
@@ -5027,6 +5061,13 @@ class Painel(BaseHTTPRequestHandler):
                 encerrar_do_usuario(u["login"], menos=self.tok())
                 self.auditar("trocou a própria senha")
                 return self.redirecionar("/admin?ok=senha" if f.get("volta") == "admin" else "/conta?ok=senha")
+            if p == "/admin/avisos/testar":
+                tgs, tops = destinos_admin()
+                if not tgs and not tops:
+                    return self.enviar(pg_admin({}, "Nenhum destino configurado: conecte o seu bot e/ou ntfy em ⚙️ Minhas configurações.", True))
+                telegram_geral("✅ <b>Teste dos avisos do administrador</b>\nAvisos de segurança e a cópia do backup chegam aqui.")
+                ntfy_geral("Licitatudo – teste", "Avisos do administrador chegam aqui.", "3")
+                return self.redirecionar("/admin?ok=avisos")
             if p == "/admin/usuarios/novo":
                 try:
                     if f.get("senha", "") != f.get("senha2", ""):
@@ -5360,7 +5401,7 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
                 gravar_env(CONFIG, v)
                 if f.get("acao") == "agora":
                     try:
-                        res = backup.executar(CFG_ATUAL(), telegram_geral)
+                        res = backup.executar(CFG_ATUAL(), telegram_geral, destinos_admin()[0])
                     except Exception as ex:  # noqa: BLE001
                         res = f"Backup falhou: {ex}"
                     return self.enviar(pg_config(e(res)))
@@ -5550,7 +5591,7 @@ if __name__ == "__main__":
     threading.Thread(target=resumo_usuarios, daemon=True).start()
     threading.Thread(target=buscas.ciclo, args=(telegram_geral, minutos_busca), daemon=True).start()
     threading.Thread(target=vigiar, daemon=True).start()
-    threading.Thread(target=backup.ciclo, args=(CFG_ATUAL, telegram_geral), daemon=True).start()
+    threading.Thread(target=backup.ciclo, args=(CFG_ATUAL, telegram_geral, 3, lambda: destinos_admin()[0]), daemon=True).start()
     threading.Thread(target=oportunidades.ciclo, args=(telegram_geral,), daemon=True).start()
     threading.Thread(target=agenda.ciclo, args=(telegram_geral, CFG_ATUAL), daemon=True).start()
     threading.Thread(target=resumo.ciclo, args=(telegram_geral, CFG_ATUAL), daemon=True).start()

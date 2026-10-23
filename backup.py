@@ -124,29 +124,60 @@ def enviar_telegram(token, chat, arq, legenda):
         raise RuntimeError(str(resp)[:200])
 
 
-def executar(cfg, avisar):
-    """Gera o backup e manda a cópia criptografada para o Telegram. Devolve texto do resultado."""
+ARQ_ESTADO = PASTA / "backup_estado.json"
+
+
+def estado():
+    try:
+        return json.loads(ARQ_ESTADO.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _anotar(**k):
+    ARQ_ESTADO.write_text(json.dumps({**k, "quando": datetime.now().strftime("%d/%m/%Y %H:%M")}, ensure_ascii=False), encoding="utf-8")
+
+
+def executar(cfg, avisar, destinos=None):
+    """Gera o backup e manda a cópia criptografada para o Telegram do administrador. destinos = [(token, chat)]."""
     arq = gerar()
     tam = arq.stat().st_size / 1024 / 1024
     senha = cfg.get("BACKUP_SENHA", "")
-    tok, chat = cfg.get("TELEGRAM_TOKEN", ""), cfg.get("TELEGRAM_CHAT_ID", "")
+    if destinos is None:
+        destinos = [(cfg.get("TELEGRAM_TOKEN", ""), cfg.get("TELEGRAM_CHAT_ID", ""))]
+    destinos = [(t, c) for t, c in destinos if t and c]
     if not senha:
         msg = (f"Backup local criado ({arq.name}, {tam:.1f} MB). Cópia fora do servidor NÃO enviada: "
                "defina a senha do backup em Configurações.")
+        _anotar(ok=False, local=arq.name, msg=msg)
         avisar("💾 " + msg)
         return msg
-    if not (tok and chat):
-        return f"Backup local criado ({arq.name}). Telegram geral não configurado para a cópia externa."
+    if not destinos:
+        msg = (f"Backup local criado ({arq.name}). Cópia fora do servidor NÃO enviada: nenhum Telegram do administrador "
+               "configurado (Admin → Avisos do administrador).")
+        _anotar(ok=False, local=arq.name, msg=msg)
+        return msg
     enc = criptografar(arq, senha)
+    erros = []
     try:
-        enviar_telegram(tok, chat, enc, f"💾 Backup Licitatudo {datetime.now():%d/%m/%Y %H:%M} "
-                                        f"({tam:.1f} MB, criptografado com a senha do backup)")
+        for tok, chat in destinos:
+            try:
+                enviar_telegram(tok, chat, enc, f"💾 Backup Licitatudo {datetime.now():%d/%m/%Y %H:%M} "
+                                                f"({tam:.1f} MB, criptografado com a senha do backup)")
+                break   # uma cópia externa basta
+            except Exception as ex:  # noqa: BLE001
+                erros.append(str(ex)[:150])
+        else:
+            _anotar(ok=False, local=arq.name, msg="Backup local criado, mas a cópia externa falhou: " + " | ".join(erros)[:200])
+            raise RuntimeError("não consegui enviar a cópia: " + " | ".join(erros))
     finally:
         enc.unlink(missing_ok=True)
-    return f"Backup criado ({arq.name}, {tam:.1f} MB) e cópia criptografada enviada ao Telegram."
+    msg = f"Backup criado ({arq.name}, {tam:.1f} MB) e cópia criptografada enviada ao Telegram do administrador."
+    _anotar(ok=True, local=arq.name, msg=msg)
+    return msg
 
 
-def ciclo(cfg_func, avisar, hora=3):
+def ciclo(cfg_func, avisar, hora=3, destinos_func=None):
     """Roda todo dia na hora indicada (padrão 03:00)."""
     feito = None
     time.sleep(120)
@@ -158,8 +189,9 @@ def ciclo(cfg_func, avisar, hora=3):
             h = hora
         if agora.hour == h and feito != agora.date():
             try:
-                print(executar(cfg_func(), avisar), flush=True)
+                print(executar(cfg_func(), avisar, destinos_func() if destinos_func else None), flush=True)
             except Exception as ex:  # noqa: BLE001
+                _anotar(ok=False, local="", msg=f"Backup falhou: {ex}")
                 avisar(f"⚠️ <b>Backup falhou</b>: {ex}")
             feito = agora.date()
         time.sleep(300)
