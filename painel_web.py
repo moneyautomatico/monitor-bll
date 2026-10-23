@@ -2677,7 +2677,8 @@ def pg_preferencias(aviso="", erro=False):
     minhas = sorted(a.stem for a in EMPRESAS.glob("*.env") if (ler_env(a).get("EMPRESA_DONO") or "").lower() == lg) if EMPRESAS.exists() else []
     tok = uc.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
     bot = nome_bot(tok) if tok else ""
-    modo = uc.get("modo") or "proprio"
+    # sem configuração salva: mostra como as empresas dele já estão hoje (para não mudar nada sem querer)
+    modo = uc.get("modo") or (ler_env(EMPRESAS / f"{minhas[0]}.env").get("ENVIAR_PARA") if minhas else "") or "proprio"
     sel = lambda v: "selected" if modo == v else ""  # noqa: E731
     leitura = u["papel"] == "leitura"
     sugestao_ntfy = "licitatudo-" + re.sub(r"[^a-z0-9]", "", lg)[:12] + "-" + secrets.token_hex(4)
@@ -2693,10 +2694,10 @@ def pg_preferencias(aviso="", erro=False):
 <p class="sub">Para onde vão as mensagens do pregoeiro, diligências, prazos e alarmes das empresas que você cadastrou.</p>
 <form method="post" action="/preferencias/alertas"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Enviar para</label><select class="campo" name="modo">
-<option value="proprio" {sel("proprio")}>Meu Telegram / meu celular (recomendado)</option>
-<option value="geral" {sel("geral")}>Telegram geral do sistema (administrador)</option>
+<option value="proprio" {sel("proprio")}>Só o meu: o chat do Telegram e o ntfy que eu informar abaixo</option>
+<option value="geral" {sel("geral")}>Telegram geral do sistema (o configurado pelo administrador – como funciona hoje)</option>
 <option value="ambos" {sel("ambos")}>Os dois</option></select>
-<label>Meu chat do Telegram <small>(chat_id)</small></label>
+<label>Meu chat do Telegram <small>(chat_id – o número da sua conversa ou grupo no Telegram; veja “Não sei o meu chat_id” abaixo)</small></label>
 <input class="campo" name="tg_chat" value="{e(uc.get("tg_chat", ""))}" placeholder="ex.: 123456789">
 <label>Bot próprio <small>(opcional – token do seu bot; vazio = bot do sistema{", já cadastrado: deixe vazio para manter" if uc.get("tg_token") else ""})</small></label>
 <input class="campo" type="password" name="tg_token" autocomplete="off">
