@@ -28,6 +28,7 @@ import analise
 import backup
 import urgencia
 import buscas
+import geo
 import oportunidades
 
 PASTA = Path(__file__).resolve().parent
@@ -1579,6 +1580,140 @@ def pg_buscar(qs, aviso=""):
 ROT_NIVEL = {"alto": ("🎯 Encaixe alto", "#2e7d32"), "medio": ("Encaixe médio", "#e3a14b"), "baixo": ("Encaixe baixo", "#8a958f")}
 
 
+RAIOS = (50, 100, 150, 200, 300, 500, 800)
+
+
+def sedes_empresas(nomes, cfg):
+    """{nome: {"cidade": 'Cidade/UF', "pt": (lat, lon) | None}} – manual (ajustes) ou pelo CNPJ cadastrado."""
+    manuais = cfg.get("bases") or {}
+    cnpjs = {}
+    for arq in sorted(EMPRESAS.glob("*.env")) if EMPRESAS.exists() else []:
+        c = ler_env(arq)
+        n = (c.get("EMPRESA_NOME") or arq.stem).upper()
+        if c.get("EMPRESA_CNPJ") and n not in cnpjs:
+            cnpjs[n] = c["EMPRESA_CNPJ"]
+    cache = geo._sedes()
+    faltam = []
+    out = {}
+    for n in nomes:
+        cid = (manuais.get(n) or "").strip()
+        if not cid and cnpjs.get(n):
+            num = re.sub(r"\D", "", cnpjs[n])
+            if num in cache:
+                cid = cache[num]
+            else:
+                faltam.append(cnpjs[n])
+        c, uf = geo.separar(cid)
+        out[n] = {"cidade": cid, "pt": geo.coord(c, uf) if c else None}
+    if faltam:  # consulta o CNPJ em segundo plano; aparece na próxima vez que abrir a página
+        threading.Thread(target=lambda: [geo.sede_por_cnpj(x) for x in faltam], daemon=True).start()
+    return out
+
+
+def html_mapa(lista, sedes, base, raio, link, rot_nivel):
+    """Mapa do Brasil (Leaflet) com um pino por cidade e a quantidade de licitações."""
+    if not geo.cidades():
+        return ('<div class="mapa-box"><div class="mapa-cab"><b>🗺️ Mapa das oportunidades</b>'
+                '<span class="sub">baixando a lista de cidades do Brasil (só na 1ª vez)… recarregue em 1 minuto.</span></div></div>')
+    grupos, sem_local = {}, 0
+    ordem = {"alto": 3, "medio": 2, "baixo": 1}
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    for r in lista:
+        if not r.get("_pt"):
+            sem_local += 1
+            continue
+        k = geo.chave(r.get("municipio"), r.get("uf"))
+        g = grupos.setdefault(k, {"cidade": r.get("municipio") or "", "uf": r.get("uf") or "", "lat": r["_pt"][0],
+                                  "lon": r["_pt"][1], "n": 0, "nivel": "baixo", "novas": 0, "km": r.get("_km"), "itens": []})
+        g["n"] += 1
+        g["novas"] += r.get("achada_em", "")[:10] == hoje
+        if ordem.get(r.get("nivel"), 0) > ordem.get(g["nivel"], 0):
+            g["nivel"] = r.get("nivel")
+        g["itens"].append(r)
+    pinos = []
+    for g in grupos.values():
+        g["itens"].sort(key=lambda r: -r.get("pontos", 0))
+        pinos.append({"c": g["cidade"], "uf": g["uf"], "lat": g["lat"], "lon": g["lon"], "n": g["n"], "nv": g["nivel"],
+                      "novas": g["novas"], "km": round(g["km"]) if g["km"] is not None else None,
+                      "url": link(cidade=f'{g["cidade"]}/{g["uf"]}', pagina=""),
+                      "it": [{"o": r.get("orgao", "")[:70], "t": (r.get("objeto") or r.get("titulo") or "")[:110],
+                              "v": buscas.moeda(r.get("valor")), "l": r.get("link", ""), "nv": r.get("nivel"),
+                              "f": buscas.data_br(r.get("fim"))} for r in g["itens"][:6]]})
+    bases = [{"n": n, "c": s["cidade"], "lat": s["pt"][0], "lon": s["pt"][1], "on": n == base}
+             for n, s in sedes.items() if s.get("pt")]
+    dados = json.dumps({"pinos": pinos, "bases": bases, "raio": raio, "base": base}, ensure_ascii=False).replace("</", "<\\/")
+    resumo = (f'{len(pinos)} cidade(s) · {sum(p["n"] for p in pinos)} licitação(ões)'
+              + (f' · {sem_local} sem localização' if sem_local else ""))
+    return f"""<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+.mapa-box{{background:var(--card);border:1px solid var(--borda);border-radius:12px;overflow:hidden;margin:12px 0}}
+.mapa-cab{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--borda)}}
+.mapa-bts{{margin-left:auto;display:flex;gap:6px}}.mapa-bts button{{padding:6px 12px;font-size:13px}}
+#mapa{{height:440px;background:#dfe7ec}}
+.mapa-box.min #mapa{{display:none}}.mapa-box.min .mapa-cab{{border-bottom:0}}
+.mapa-box.max{{position:fixed;inset:0;z-index:2000;border-radius:0;margin:0;display:flex;flex-direction:column}}
+.mapa-box.max #mapa{{flex:1;height:auto}}
+.pino{{position:relative;width:38px;height:38px}}
+.pino .gota{{position:absolute;inset:0;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 4px 10px rgba(0,0,0,.35);
+ border:2px solid #fff;background:linear-gradient(135deg,#43a047,#1b5e20)}}
+.pino.medio .gota{{background:linear-gradient(135deg,#ffb300,#e65100)}}.pino.baixo .gota{{background:linear-gradient(135deg,#90a4ae,#455a64)}}
+.pino b{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font:800 13px system-ui;text-shadow:0 1px 2px rgba(0,0,0,.4)}}
+.pino.grande{{width:48px;height:48px}}.pino.grande b{{font-size:15px}}
+.pino .nova{{position:absolute;top:-6px;right:-6px;background:#e53935;color:#fff;border-radius:999px;font:700 10px system-ui;padding:2px 5px;
+ border:2px solid #fff;animation:pulsar 1.6s infinite}}
+.sede{{font-size:26px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.4))}}
+.pop h4{{margin:0 0 4px}}.pop ul{{margin:6px 0;padding-left:16px;max-height:220px;overflow:auto}}.pop li{{margin-bottom:6px;font-size:12px}}
+.pop .ponto{{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}}
+</style>
+<div class="mapa-box" id="mapaBox"><div class="mapa-cab"><b>🗺️ Mapa das oportunidades</b><span class="sub">{e(resumo)}</span>
+<div class="mapa-bts"><button type="button" class="sec" id="btMin" onclick="mapaMin()">— Minimizar</button>
+<button type="button" class="sec" id="btMax" onclick="mapaMax()">⤢ Maximizar</button></div></div><div id="mapa"></div></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function(){{
+const D={dados};
+const box=document.getElementById('mapaBox');
+let mapa=null;
+const esc=t=>String(t||'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}})[c]);
+const cor={{alto:'#2e7d32',medio:'#ef6c00',baixo:'#607d8b'}};
+function criar(){{
+ if(mapa||typeof L==='undefined')return;
+ mapa=L.map('mapa',{{zoomControl:true,scrollWheelZoom:true}}).setView([-14.5,-51],4);
+ const escuro=document.documentElement.dataset.theme==='dark'||(!document.documentElement.dataset.theme&&matchMedia('(prefers-color-scheme: dark)').matches);
+ L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/'+(escuro?'dark_all':'voyager')+'/{{z}}/{{x}}/{{y}}{{r}}.png',
+   {{maxZoom:18,attribution:'&copy; OpenStreetMap &copy; CARTO'}}).addTo(mapa);
+ const pts=[];
+ D.pinos.forEach(p=>{{
+  const g=p.n>=10?' grande':'';
+  const ic=L.divIcon({{className:'',iconSize:g?[48,48]:[38,38],iconAnchor:g?[24,48]:[19,38],popupAnchor:[0,-40],
+   html:'<div class="pino '+p.nv+g+'"><div class="gota"></div><b>'+p.n+'</b>'+(p.novas?'<span class="nova">'+p.novas+' nova'+(p.novas>1?'s':'')+'</span>':'')+'</div>'}});
+  const lis=p.it.map(i=>'<li><span class="ponto" style="background:'+(cor[i.nv]||'#999')+'"></span><b>'+esc(i.o)+'</b><br>'+esc(i.t)+
+    '<br>'+esc(i.v)+(i.f?' · até '+esc(i.f):'')+(i.l?' · <a href="'+esc(i.l)+'" target="_blank" rel="noopener">edital</a>':'')+'</li>').join('');
+  L.marker([p.lat,p.lon],{{icon:ic,title:p.c+'/'+p.uf+': '+p.n}}).addTo(mapa).bindPopup(
+   '<div class="pop"><h4>'+esc(p.c)+'/'+esc(p.uf)+'</h4><div>'+p.n+' licitação(ões) aberta(s)'+(p.km!=null?' · '+p.km+' km':'')+'</div><ul>'+lis+'</ul>'+
+   '<a href="'+esc(p.url)+'">Ver só esta cidade na lista →</a></div>',{{maxWidth:320}});
+  pts.push([p.lat,p.lon]);}});
+ D.bases.forEach(b=>{{
+  L.marker([b.lat,b.lon],{{icon:L.divIcon({{className:'',html:'<div class="sede">🏠</div>',iconSize:[28,28],iconAnchor:[14,24]}}),
+    title:b.n,zIndexOffset:1000}}).addTo(mapa).bindPopup('<b>'+esc(b.n)+'</b><br>Sede: '+esc(b.c));
+  if(b.on&&D.raio){{L.circle([b.lat,b.lon],{{radius:D.raio*1000,color:'#1565c0',weight:2,fillOpacity:.06}}).addTo(mapa); pts.push([b.lat,b.lon]);}}}});
+ if(pts.length)mapa.fitBounds(pts,{{padding:[40,40],maxZoom:9}});
+}}
+window.mapaMax=function(){{box.classList.remove('min');const m=box.classList.toggle('max');
+ document.getElementById('btMax').textContent=m?'✕ Fechar tela cheia':'⤢ Maximizar';
+ document.getElementById('btMin').textContent='— Minimizar';
+ document.body.style.overflow=m?'hidden':''; criar(); setTimeout(()=>mapa&&mapa.invalidateSize(),150);}};
+window.mapaMin=function(){{if(box.classList.contains('max'))mapaMax();const m=box.classList.toggle('min');
+ document.getElementById('btMin').textContent=m?'＋ Mostrar mapa':'— Minimizar';
+ try{{localStorage.setItem('mapaMin',m?'1':'');}}catch(e){{}}
+ if(!m){{criar(); setTimeout(()=>mapa&&mapa.invalidateSize(),150);}}}};
+document.addEventListener('keydown',ev=>{{if(ev.key==='Escape'&&box.classList.contains('max'))mapaMax();}});
+let min=false; try{{min=localStorage.getItem('mapaMin')==='1';}}catch(e){{}}
+if(min){{box.classList.add('min');document.getElementById('btMin').textContent='＋ Mostrar mapa';}} else criar();
+}})();
+</script>"""
+
+
 def pg_oportunidades(q, aviso=""):
     d = oportunidades.ler()
     cfg = d["cfg"]
@@ -1594,7 +1729,25 @@ def pg_oportunidades(q, aviso=""):
             ufs_cont[r["uf"]] = ufs_cont.get(r["uf"], 0) + 1
     if uf_f:   # os contadores dos botões passam a valer só para o estado escolhido
         todas = [r for r in todas if r.get("uf") == uf_f]
-    descartadas = [r for r in d["itens"].values() if r.get("descartado") and (not uf_f or r.get("uf") == uf_f)]
+    # raio a partir da cidade-sede de uma empresa
+    nomes_pf = sorted(d.get("perfis", {}))
+    sedes = sedes_empresas(nomes_pf, cfg)
+    raio = int(re.sub(r"\D", "", q.get("raio", "")) or 0)
+    raio = raio if raio in RAIOS else 0
+    base = q.get("base", "") or emp_f or (nomes_pf[0] if len(nomes_pf) == 1 else "")
+    base = base if base in sedes else ""
+    ponto_base = sedes.get(base, {}).get("pt") if base else None
+    for r in d["itens"].values():
+        r["_pt"] = geo.coord(r.get("municipio"), r.get("uf"))
+        r["_km"] = geo.km(ponto_base, r["_pt"]) if ponto_base else None
+    if raio and ponto_base:
+        todas = [r for r in todas if r["_km"] is not None and r["_km"] <= raio]
+    cidade_f = q.get("cidade", "")
+    if cidade_f:
+        cid, cuf = geo.separar(cidade_f)
+        todas = [r for r in todas if geo.chave(r.get("municipio"), r.get("uf")) == geo.chave(cid, cuf)]
+    descartadas = [r for r in d["itens"].values() if r.get("descartado") and (not uf_f or r.get("uf") == uf_f)
+                   and (not (raio and ponto_base) or (r.get("_km") is not None and r["_km"] <= raio))]
     lista = descartadas if filtro == "descartadas" else todas
     if filtro == "novas":
         lista = [r for r in lista if r.get("achada_em", "")[:10] == hoje]
@@ -1605,13 +1758,15 @@ def pg_oportunidades(q, aviso=""):
     if emp_f:
         lista = [r for r in lista if emp_f in r.get("empresas", [])]
     lista.sort(key=lambda r: (r.get("achada_em", "")[:10] == hoje, r.get("pontos", 0), r.get("publicada", "")), reverse=True)
+    if raio and ponto_base:
+        lista.sort(key=lambda r: r.get("_km") or 0)
     pag = max(1, int(re.sub(r"\D", "", q.get("pagina", "1")) or 1))
     total_pag = max(1, (len(lista) + 39) // 40)
     pag = min(pag, total_pag)
     trecho = lista[(pag - 1) * 40: pag * 40]
 
     def link(**k):
-        base = {"f": filtro, "emp": emp_f, "uf": uf_f}
+        base = {"f": filtro, "emp": emp_f, "uf": uf_f, "raio": str(raio or ""), "base": q.get("base", ""), "cidade": cidade_f}
         base.update(k)
         return "/oportunidades?" + urllib.parse.urlencode({a: b for a, b in base.items() if b})
 
@@ -1633,6 +1788,20 @@ def pg_oportunidades(q, aviso=""):
               f'<option value="{link(uf="", pagina="")}">📍 Todos os estados</option>' +
               "".join(f'<option value="{link(uf=u, pagina="")}" {"selected" if u == uf_f else ""}>{u} ({n})</option>'
                       for u, n in sorted(ufs_cont.items())) + "</select>")
+    sel_base = ('<select class="campo" style="max-width:300px" onchange="location.href=this.value" title="Raio a partir da cidade-sede de qual empresa">' +
+                "".join(f'<option value="{link(base=n, pagina="")}" {"selected" if n == base else ""}>🏠 {e(n)} – '
+                        f'{e(sedes[n]["cidade"] or "sem cidade (configure abaixo)")}</option>' for n in nomes_pf) + "</select>")
+    sel_raio = ('<select class="campo" style="max-width:170px" onchange="location.href=this.value" title="Distância máxima">' +
+                f'<option value="{link(raio="", pagina="")}">⭕ Sem limite de km</option>' +
+                "".join(f'<option value="{link(raio=str(k), pagina="")}" {"selected" if k == raio else ""}>⭕ até {k} km</option>'
+                        for k in RAIOS) + "</select>")
+    aviso_raio = ""
+    if raio and not ponto_base:
+        aviso_raio = ('<div class="msg erro">Para usar o raio, escolha uma empresa com cidade-sede conhecida '
+                      '(⚙️ Perfil e ajustes → Cidade-sede).</div>')
+    chip_cidade = (f'<a class="btn sec" href="{link(cidade="", pagina="")}" title="Tirar o filtro de cidade">📍 {e(cidade_f)} ✕</a>'
+                   if cidade_f else "")
+    mapa = html_mapa(lista, sedes, base, raio, link, ROT_NIVEL)
     cards = ""
     for r in trecho:
         rot, cor = ROT_NIVEL.get(r.get("nivel"), ROT_NIVEL["baixo"])
@@ -1644,7 +1813,8 @@ def pg_oportunidades(q, aviso=""):
 <div class="sub"><b style="color:{cor}">{rot}</b> · {r.get('pontos', 0)} pts {'<span class="tag-nova">NOVA</span>' if nova else ''}
 · {e(r.get('modalidade') or '')} · {e(r.get('titulo') or '')}</div>
 <div class="nome" style="margin:4px 0">{e(r.get('orgao') or '')}</div>
-<div class="sub"><b>{e(r.get('municipio') or '')}/{e(r.get('uf') or '')}</b> · publicada {e(buscas.data_br(r.get('publicada')))}</div>
+<div class="sub"><b>{e(r.get('municipio') or '')}/{e(r.get('uf') or '')}</b> · publicada {e(buscas.data_br(r.get('publicada')))}
+{f" · 📍 <b>{round(r['_km'])} km</b> de {e(base)}" if r.get('_km') is not None else ''}</div>
 <p style="margin:8px 0;font-size:14px">{e(r.get('objeto') or '')}</p>
 <div class="sub">Combina com: <b>{e(', '.join(r.get('termos') or []))}</b>{(' · ' + e(r['motivo'])) if r.get('motivo') else ''}</div>
 <div class="sub">Perfil de: {e(', '.join(r.get('empresas') or []))}</div>
@@ -1683,6 +1853,8 @@ def pg_oportunidades(q, aviso=""):
 órgãos lidos pelo monitor). {estado}</p>
 {f'<div class="msg erro">{e(d["erro"])}</div>' if d.get("erro") else ''}
 <div class="acoes">{abas}{sel_emp}{sel_uf}{botao("/oportunidades/atualizar", "⟳ Atualizar agora", "sec")}</div>
+<div class="acoes" style="margin-top:0">{sel_base}{sel_raio}{chip_cidade}</div>{aviso_raio}
+{mapa}
 <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr));margin-top:12px">{cards or '<p>Nada por aqui ainda. Clique em “Atualizar agora” (leva 1 a 3 minutos).</p>'}</div>
 {nav}
 <details class="op-perfil" style="margin-top:24px;border:1px solid var(--borda);border-radius:10px;background:var(--card)">
@@ -1699,6 +1871,11 @@ def pg_oportunidades(q, aviso=""):
 <input class="campo" name="excluir" value="{e(cfg.get('excluir', ''))}">
 <label>Estados <small>(nenhum marcado = os descobertos pelos órgãos onde já disputou: {e(auto)})</small></label>
 <div class="ufs">{ufs}</div>
+<label style="margin-top:10px">Cidade-sede de cada empresa <small>(para o raio em km · vazio = descobre pelo CNPJ cadastrado · formato Cidade/UF)</small></label>
+{"".join(f'<div class="linha" style="gap:8px;align-items:center;margin-top:4px"><input type="hidden" name="sede_nome" value="{e(n)}">'
+         f'<span style="min-width:200px"><b>{e(n)}</b></span><input class="campo" style="max-width:280px" name="sede" '
+         f'value="{e((cfg.get("bases") or {}).get(n, ""))}" placeholder="{e(sedes[n]["cidade"] or "ex.: Feira de Santana/BA")}"></div>'
+         for n in nomes_pf)}
 <label style="margin-top:10px"><input type="checkbox" name="alertar" value="1" {"checked" if cfg.get("alertar") else ""}>
 Avisar no Telegram geral as novas com encaixe alto</label>
 <div class="acoes"><button>Salvar e atualizar</button></div></form></div></details>
@@ -2035,8 +2212,10 @@ class Painel(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         self.send_header("Content-Security-Policy",
-                         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-                         "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; "
+                         "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; "
+                         "style-src 'self' 'unsafe-inline' https://unpkg.com; "
+                         "img-src 'self' data: https://unpkg.com https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org; "
+                         "connect-src 'self'; frame-ancestors 'none'; form-action 'self'; "
                          "base-uri 'none'; object-src 'none'")
         if self.https():
             self.send_header("Strict-Transport-Security", "max-age=31536000")
@@ -2305,6 +2484,7 @@ class Painel(BaseHTTPRequestHandler):
             if p == "/oportunidades/config":
                 oportunidades.salvar_cfg(f.get("extra", ""), f.get("excluir", ""), multi.get("uf", []),
                                          f.get("alertar") == "1", f.get("desligados", "").split(","))
+                oportunidades.salvar_bases(dict(zip(multi.get("sede_nome", []), multi.get("sede", []))))
                 threading.Thread(target=oportunidades.atualizar, args=(telegram_geral,), daemon=True).start()
                 return self.redirecionar("/oportunidades?ok=op_cfg")
             m = re.fullmatch(r"/oportunidades/([\w.-]+)/(descartar|voltar)", p)

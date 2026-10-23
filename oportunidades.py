@@ -96,6 +96,14 @@ def salvar_cfg(extra, excluir, ufs, alertar, desligados):
         gravar(d)
 
 
+def salvar_bases(bases):
+    """{nome_da_empresa: 'Cidade/UF'} – cidade-sede usada no raio do mapa (vazio = descobrir pelo CNPJ)."""
+    with TRAVA:
+        d = ler()
+        d["cfg"]["bases"] = {k: v.strip()[:80] for k, v in bases.items() if k}
+        gravar(d)
+
+
 def descartar(oid, voltar=False):
     with TRAVA:
         d = ler()
