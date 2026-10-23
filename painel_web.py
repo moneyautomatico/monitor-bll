@@ -249,8 +249,13 @@ def ue(caminho):
 
 
 def migrar_donos():
-    """Empresas cadastradas antes dos usuários passam a ser do login antigo."""
-    if not DONO_PADRAO or not EMPRESAS.exists():
+    """Empresas cadastradas antes dos usuários passam a ser do login antigo. O intervalo é só do admin (config.env)."""
+    if not EMPRESAS.exists():
+        return
+    for a in EMPRESAS.glob("*.env"):
+        if "INTERVALO_MINUTOS" in ler_env(a):
+            gravar_env(a, {}, remover=("INTERVALO_MINUTOS",))
+    if not DONO_PADRAO:
         return
     for a in EMPRESAS.glob("*.env"):
         if not ler_env(a).get("EMPRESA_DONO"):
@@ -2836,8 +2841,7 @@ No celular, este link já abre o app: <a href="ntfy://ntfy.sh/{e(topico)}">ntfy:
 <input class="campo" name="chamada" value="{e(uc.get("chamada", ""))}" placeholder="@seu_usuario">
 </div><div>
 <h3 style="margin-top:0">⏱️ Ritmo das minhas empresas</h3>
-<label>Verificar a cada (minutos) <small>(vazio = {pad("INTERVALO_MINUTOS", "10")} do sistema · mínimo 1)</small></label>
-<input class="campo" type="number" step="0.5" min="1" max="240" name="intervalo" value="{e(str(uc.get("intervalo", "")))}" placeholder="{pad("INTERVALO_MINUTOS", "10")}" style="max-width:140px">
+<p class="sub">Intervalo entre as verificações: <b>{pad("INTERVALO_MINUTOS", "10")} min</b> (definido pelo administrador).</p>
 <label>Horário de funcionamento <small>(vazio = {pad("HORARIO_INICIO", "0")}h às {pad("HORARIO_FIM", "24")}h do sistema)</small></label>
 <div class="linha" style="gap:6px;align-items:center"><input class="campo" type="number" min="0" max="23" name="hora_ini" value="{e(str(uc.get("hora_ini", "")))}" placeholder="{pad("HORARIO_INICIO", "0")}" style="max-width:90px"> até
 <input class="campo" type="number" min="1" max="24" name="hora_fim" value="{e(str(uc.get("hora_fim", "")))}" placeholder="{pad("HORARIO_FIM", "24")}" style="max-width:90px"></div>
@@ -3817,7 +3821,7 @@ def alertas_do_usuario(uc):
 
 
 AJUSTES_USUARIO = {"alarme_so_urgente": "ALARME_SO_URGENTE", "chat_urgente": "CHAT_URGENTE", "chamada": "CHAMADA_USUARIO",
-                   "intervalo": "INTERVALO_MINUTOS", "hora_ini": "HORARIO_INICIO", "hora_fim": "HORARIO_FIM",
+                   "hora_ini": "HORARIO_INICIO", "hora_fim": "HORARIO_FIM",
                    "situacoes": "SITUACOES_IGNORADAS"}
 
 
@@ -3828,6 +3832,7 @@ def arq_palavras(login):
 def ajustes_do_usuario(login, uc):
     """Chaves do .env das empresas a partir das Minhas configurações. None = tirar (vale o padrão do sistema)."""
     w = {chave: (str(uc[k]) if str(uc.get(k, "")).strip() != "" else None) for k, chave in AJUSTES_USUARIO.items()}
+    w["INTERVALO_MINUTOS"] = None   # o intervalo das verificações é só do administrador (vale para todas as empresas)
     a = arq_palavras(login)
     w["URGENTE_ARQUIVO"] = a.name if a.exists() and a.read_text(encoding="utf-8").strip() else None
     return w
@@ -5061,7 +5066,7 @@ class Painel(BaseHTTPRequestHandler):
                 novos = {"alarme_so_urgente": f.get("alarme_so_urgente") if f.get("alarme_so_urgente") in ("0", "1") else None,
                          "chat_urgente": f.get("chat_urgente") if f.get("chat_urgente") in ("0", "1") else None,
                          "chamada": re.sub(r"[^\w@.]", "", f.get("chamada", ""))[:40] or None,
-                         "intervalo": num("intervalo", 1, 240, True), "hora_ini": num("hora_ini", 0, 23), "hora_fim": num("hora_fim", 1, 24),
+                         "intervalo": None, "hora_ini": num("hora_ini", 0, 23), "hora_fim": num("hora_fim", 1, 24),
                          "situacoes": ",".join(x.strip().upper() for x in f.get("situacoes", "").split(",") if x.strip())[:500] or None}
                 if novos["hora_ini"] and novos["hora_fim"] and int(novos["hora_ini"]) >= int(novos["hora_fim"]):
                     raise ValueError("O horário de início precisa ser antes do fim.")
