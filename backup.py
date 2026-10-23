@@ -27,7 +27,7 @@ DIR = PASTA / "backups"
 GUARDAR = 7
 ARQUIVOS_SOLTOS = ["config.env", "buscas_salvas.json", "buscas_vistos.json", "analise_instrucoes.txt",
                    "analise_empresa.txt", "urgente_palavras.txt", "vigia_estado.json", "oportunidades.json", "dados_empresas.json", "prazos.json", "certidoes.json", "pisos.json",
-                   "usuarios.json", "auditoria.jsonl"]
+                   "usuarios.json", "auditoria.jsonl", "propostas.json"]
 
 
 def _copia_sqlite(origem, destino):

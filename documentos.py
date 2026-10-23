@@ -186,6 +186,20 @@ def _assinatura_linhas(ctx):
             ctx.get("razao") or "", f"CNPJ {fmt_cnpj(ctx.get('cnpj'))}"]
 
 
+def _tabela_html(t):
+    al = t.get("alinhar", "")
+    linhas = []
+    for i, ln in enumerate(t["linhas"]):
+        if ln and ln[0] == "§":   # linha de grupo (ex.: "LOTE 1")
+            linhas.append(f'<tr class="grupo"><td colspan="{len(t["linhas"][0])}"><b>{escape(ln[1])}</b></td></tr>')
+            continue
+        tag = "th" if i == 0 else "td"
+        cels = "".join(f'<{tag} style="text-align:{ {"r": "right", "c": "center"}.get(al[j] if j < len(al) else "l", "left") }">'
+                       f'{_neg_html(str(c))}</{tag}>' for j, c in enumerate(ln))
+        linhas.append(f"<tr>{cels}</tr>")
+    return '<table class="tab-doc">' + "".join(linhas) + "</table>"
+
+
 def html(docs, ctx):
     folhas = []
     for _, blocos in docs:
@@ -203,6 +217,8 @@ def html(docs, ctx):
                 partes.append('<div class="ass">' + "<br>".join(escape(x) for x in _assinatura_linhas(ctx)) + "</div>")
             elif tipo == "vazio":
                 partes.append("<br>")
+            elif tipo == "tabela":   # txt = {"linhas": [[...]], "larguras": [...], "alinhar": "lrc..."}
+                partes.append(_tabela_html(txt))
             else:
                 cls = "item" if tipo == "item" else "corpo"
                 partes.append(f'<p class="{cls}">{_neg_html(txt)}</p>')
@@ -233,6 +249,34 @@ def _par(txt, jc="both", negrito=False, depois=160, recuo=False, tamanho=None, q
     return f"<w:p>{ppr}{_runs(txt, negrito)}</w:p>"
 
 
+def _cel(txt, largura, jc="left", negrito=False, span=1, fundo=""):
+    sh = f'<w:shd w:val="clear" w:color="auto" w:fill="{fundo}"/>' if fundo else ""
+    gs = f'<w:gridSpan w:val="{span}"/>' if span > 1 else ""
+    runs = _runs(str(txt), negrito).replace("<w:rPr>", '<w:rPr><w:sz w:val="18"/>')
+    p = f'<w:p><w:pPr><w:spacing w:before="20" w:after="20"/><w:jc w:val="{jc}"/></w:pPr>{runs}</w:p>'
+    return f'<w:tc><w:tcPr><w:tcW w:w="{largura}" w:type="dxa"/>{gs}{sh}</w:tcPr>{p}</w:tc>'
+
+
+def _tabela_docx(t):
+    larg = t.get("larguras") or [1000] * len(t["linhas"][0])
+    al = t.get("alinhar", "")
+    borda = '<w:{0} w:val="single" w:sz="4" w:space="0" w:color="808080"/>'
+    bordas = "".join(borda.format(x) for x in ("top", "left", "bottom", "right", "insideH", "insideV"))
+    out = [f'<w:tbl><w:tblPr><w:tblW w:w="{sum(larg)}" w:type="dxa"/><w:tblBorders>{bordas}</w:tblBorders>'
+           '<w:tblLayout w:type="fixed"/><w:tblCellMar><w:left w:w="60" w:type="dxa"/><w:right w:w="60" w:type="dxa"/></w:tblCellMar>'
+           '</w:tblPr><w:tblGrid>' + "".join(f'<w:gridCol w:w="{w}"/>' for w in larg) + "</w:tblGrid>"]
+    for i, ln in enumerate(t["linhas"]):
+        if ln and ln[0] == "§":
+            out.append("<w:tr>" + _cel(ln[1], sum(larg), "left", True, len(larg), "EDEDED") + "</w:tr>")
+            continue
+        def jc(j):
+            return {"r": "right", "c": "center"}.get(al[j] if j < len(al) else "l", "left")
+        out.append("<w:tr>" + ("<w:trPr><w:tblHeader/></w:trPr>" if i == 0 else "") +
+                   "".join(_cel(c, larg[j], "center" if i == 0 else jc(j), i == 0, 1, "D9E2DC" if i == 0 else "")
+                           for j, c in enumerate(ln)) + "</w:tr>")
+    return "".join(out) + "</w:tbl>"
+
+
 def docx(docs, ctx):
     corpo = []
     for n, (_, blocos) in enumerate(docs):
@@ -253,6 +297,9 @@ def docx(docs, ctx):
                     corpo.append(_par(linha, "center", i in (1, 3), 0))
             elif tipo == "vazio":
                 corpo.append(_par("", quebra=q))
+            elif tipo == "tabela":
+                corpo.append(_tabela_docx(txt))
+                corpo.append(_par("", depois=80))
             else:
                 corpo.append(_par(txt, "both", recuo=(tipo == "p"), quebra=q))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'

@@ -39,6 +39,7 @@ import documentos
 import geo
 import oportunidades
 import pecas
+import propostas
 
 PASTA = Path(__file__).resolve().parent
 EMPRESAS = PASTA / "empresas"
@@ -52,6 +53,7 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "pref_ntfy": "Tópico criado e aplicado em todas as suas empresas. Inscreva o mesmo nome no app ntfy do celular.", "pref_resumo": "Resumo enviado no seu Telegram.",
           "pref_bot_pronto": "Bot conectado e já ligado à conversa onde os alertas chegavam. Clique em “Testar meus alertas”.",
           "pref_ajustes": "Ajustes salvos e aplicados nas suas empresas (monitores reiniciados).",
+          "itens": "Itens trazidos. Confira com o edital e preencha os preços.",
           "usuario_criado": "Usuário criado. Passe o login e a senha para a pessoa (de preferência pessoalmente ou por telefone).",
           "usuario_excluido": "Usuário excluído e desconectado.", "senha": "Senha trocada. Os seus outros aparelhos foram desconectados.",
           "senha_redefinida": "Senha redefinida e a pessoa foi desconectada dos aparelhos.",
@@ -122,7 +124,7 @@ DONO_PADRAO = next((k for k, v in usuarios.carregar().items() if v.get("criado_p
 analise.GLOBAIS.add(DONO_PADRAO)
 ROTAS_ADM_LAYOUT = ("/admin", "/empresas", "/config")   # abas mostradas no layout da Área do administrador
 ROTAS_IA = ("/analise", "/pecas/gerar", "/pecas/declaracoes", "/pergunte/enviar", "/pergunte/estado")
-ROTAS_IA_RE = re.compile(r"/pecas/[0-9a-f]{14}/refazer")
+ROTAS_IA_RE = re.compile(r"/pecas/[0-9a-f]{14}/refazer|/propostas/[0-9a-f]{12}/ia")
 
 
 def empresa_liberada(valor):
@@ -1843,9 +1845,248 @@ def gerar_docs(q):
     return ctx, documentos.montar(ids, ctx, q.get("unificada") == "1", extras)
 
 
+# ------------------------------------------------------------------ proposta comercial
+def lotes_monitor(ids, processo, promotor):
+    """Lotes que o monitor leu (classificação) para um processo: (lote, descrição, nosso último lance)."""
+    out = []
+    for eid in ids:
+        db = EMPRESAS / eid / "bll_monitor.db"
+        if not db.exists():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+            out += con.execute("SELECT lote, descricao, nosso_lance FROM classificacao WHERE processo=? AND promotor=?",
+                               (processo, promotor)).fetchall()
+            con.close()
+        except Exception:  # noqa: BLE001
+            pass
+    vistos, res = set(), []
+    for lt, d, v in sorted(out, key=lambda x: int(re.sub(r"\D", "", str(x[0])) or 0)):
+        if lt not in vistos:
+            vistos.add(lt)
+            res.append((lt, d, v))
+    return res
+
+
+def ctx_proposta(p):
+    emps = nomes_empresas()
+    ctx = dados_doc(p.get("empresa", ""), emps.get(p.get("empresa", ""), []))
+    return ctx
+
+
+def pg_propostas(q, aviso=""):
+    emps = nomes_empresas()
+    if not emps:
+        return pagina("Proposta comercial", f"<h2>📄 Documentos</h2>{abas_doc('pro')}<p>Cadastre uma empresa primeiro.</p>", "/documentos")
+    nome = q.get("emp", "") if q.get("emp", "") in emps else sorted(emps)[0]
+    procs = processos_empresa(emps[nome])
+    sel_emp = "".join(f'<option value="{e(n)}" {"selected" if n == nome else ""}>{e(n)}</option>' for n in sorted(emps))
+    sel_proc = ('<option value="">— escolha um processo (ou preencha abaixo) —</option>' +
+                "".join(f'<option value="{e(p + "||" + o)}">{e(p)} – {e(o)}{" · " + e(sit) if sit else ""}</option>' for p, o, sit in procs))
+    lista = [p for p in propostas.listar() if visivel(p.get("empresa"), p.get("usuario"))]
+    linhas = "".join(
+        f'<tr><td><a href="/propostas/{e(p["id"])}"><b>{e(p.get("processo") or "sem nº")}</b></a><div class="sub">{e(p.get("orgao", ""))}</div></td>'
+        f'<td>{e(p.get("empresa", ""))}</td><td>{len(p.get("itens") or [])}</td>'
+        f'<td><b>{propostas.brl(propostas.calcular(p)[1])}</b></td><td class="ocultar">{e(p.get("atualizado", "")[8:10] + "/" + p.get("atualizado", "")[5:7] + " " + p.get("atualizado", "")[11:16])}</td></tr>'
+        for p in lista)
+    corpo = f"""<style>.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}@media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}</style>
+<h2>📄 Documentos</h2>{abas_doc("pro")}
+<p class="sub">Monte a proposta de preços com os itens do edital, calcule os totais (com valor por extenso) e baixe pronta para
+assinar em Word ou PDF. O sistema <b>só gera o arquivo</b> – o envio na plataforma continua sendo feito por você.</p>
+<div class="form" style="max-width:none"><h3 style="margin-top:0">➕ Nova proposta</h3>
+<form method="post" action="/propostas/nova"><input type="hidden" name="csrf" value="{CSRF}">
+<div class="duas"><div><label>Empresa</label>
+<select class="campo" name="emp" onchange="location.href='/propostas?emp='+encodeURIComponent(this.value)">{sel_emp}</select></div>
+<div><label>Processo <small>(lido pelo monitor)</small></label><select class="campo" name="proc">{sel_proc}</select></div>
+<div><label>Órgão <small>(vazio = o do processo escolhido)</small></label><input class="campo" name="orgao" placeholder="ex.: MUNICÍPIO DE RUY BARBOSA"></div>
+<div><label>Nº do processo/edital <small>(vazio = o do processo escolhido)</small></label><input class="campo" name="processo" placeholder="ex.: 033/2026"></div>
+<div><label>Modalidade</label><input class="campo" name="modalidade" value="Pregão Eletrônico"></div></div>
+<div class="acoes"><button>Criar proposta</button></div></form></div>
+<h3>Minhas propostas</h3>
+<table><tr><th>Processo</th><th>Empresa</th><th>Itens</th><th>Total</th><th class="ocultar">Atualizada</th></tr>
+{linhas or '<tr><td colspan="5">Nenhuma proposta ainda.</td></tr>'}</table>"""
+    return pagina("Proposta comercial", corpo, "/documentos", aviso)
+
+
+def pg_proposta(pid, aviso="", erro=False):
+    p = propostas.ler(pid)
+    if not p:
+        return pagina("Proposta", "<h2>Proposta não encontrada</h2>", "/documentos")
+    ctx = ctx_proposta(p)
+    falta = documentos.faltando(ctx)
+    emps = nomes_empresas()
+    ids = emps.get(p.get("empresa", ""), [])
+    itens, total = propostas.calcular(p)
+    c = {**propostas.PADRAO_COND, **(p.get("cond") or {})}
+    b = p.get("banco") or {}
+    ia = p.get("ia") or {}
+    procs = [x for x in processos_empresa(ids)]
+    sel_mon = "".join(f'<option value="{e(pr + "||" + o)}" {"selected" if pr == p.get("processo") else ""}>{e(pr)} – {e(o)}</option>' for pr, o, _ in procs)
+    analisados = [a for a in analise.listar() if a.get("status") == "pronto" and ve_analise(a)]
+    sel_edital = ('<option value="">— edital já analisado em Editais (IA) —</option>' +
+                  "".join(f'<option value="{e(a["chave"])}">{e((a.get("titulo") or a["chave"])[:110])}</option>' for a in analisados))
+
+    def linha(i, it):
+        ref = propostas.num(it.get("ref"))
+        acima = ref and it["_u"] > ref
+        return (f'<tr><td><input name="i_lote" value="{e(str(it.get("lote") or ""))}" class="mini"></td>'
+                f'<td><input name="i_item" value="{e(str(it.get("item") or ""))}" class="mini"></td>'
+                f'<td><textarea name="i_desc" rows="2">{e(it.get("descricao") or "")}</textarea></td>'
+                f'<td><input name="i_marca" value="{e(it.get("marca") or "")}"></td>'
+                f'<td><input name="i_un" value="{e(it.get("unidade") or "")}" class="mini"></td>'
+                f'<td><input name="i_qtd" value="{e(str(it.get("qtd") or ""))}" class="num" oninput="calc()"></td>'
+                f'<td><input name="i_unit" value="{e(str(it.get("unit") or ""))}" class="num" oninput="calc()" placeholder="0,00">'
+                f'{f"<div class=ref>ref. órgão {propostas.brl(ref)}</div>" if ref else ""}<input type="hidden" name="i_ref" value="{e(str(it.get("ref") or ""))}"></td>'
+                f'<td class="tot{" acima" if acima else ""}">{propostas.brl(it["_t"], False)}</td>'
+                f'<td><button type="button" class="sec mini-b" onclick="this.closest(\'tr\').remove();calc()" title="Remover">✕</button></td></tr>')
+    linhas = "".join(linha(i, it) for i, it in enumerate(itens))
+    bloco_ia = ""
+    if ia.get("status") == "gerando":
+        bloco_ia = ('<div class="msg">🤖 Lendo o edital para montar a tabela de itens… (1 a 3 minutos – a página atualiza sozinha)</div>'
+                    '<script>setTimeout(()=>location.reload(),8000)</script>')
+    elif ia.get("status") == "erro":
+        bloco_ia = f'<div class="msg erro">A IA não conseguiu ler os itens: {e(ia.get("erro", ""))}</div>'
+    elif ia.get("status") == "pronto" and ia.get("quando", "") > (p.get("visto_ia") or ""):
+        bloco_ia = (f'<div class="msg">🤖 A IA leu o edital e trouxe <b>{ia.get("n", 0)}</b> item(ns). Confira descrições e quantidades '
+                    f'com o edital e preencha os preços. {custo_uso(ia.get("custo"))}</div>')
+    aviso_falta = (f'<div class="msg erro">Para gerar o documento, preencha os dados da empresa em '
+                   f'<a href="/documentos?emp={urllib.parse.quote(p.get("empresa", ""))}">Declarações → Dados da empresa</a>: <b>{e(", ".join(falta))}</b>.</div>'
+                   if falta else "")
+    corpo = f"""{ESTILO_IA}<style>.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}@media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}
+.tab-it{{width:100%;border-collapse:collapse}}.tab-it td,.tab-it th{{padding:4px;vertical-align:top}}.tab-it input,.tab-it textarea{{width:100%;box-sizing:border-box;
+font:inherit;font-size:13px;padding:5px 6px;border:1px solid var(--borda);border-radius:6px;background:var(--card);color:var(--txt)}}
+.tab-it .mini{{max-width:62px}}.tab-it .num{{text-align:right;max-width:110px}}.tab-it td.tot{{text-align:right;font-weight:700;white-space:nowrap;padding-top:9px}}
+.tab-it td.acima{{color:var(--erro)}}.tab-it .ref{{font-size:11px;color:var(--sub);text-align:right}}.mini-b{{padding:4px 8px}}
+.total-box{{font-size:20px;font-weight:800;text-align:right;margin:10px 4px}}.total-box small{{display:block;font-size:12px;font-weight:400;color:var(--sub)}}</style>
+<h2>📄 Documentos</h2>{abas_doc("pro")}
+<p><a href="/propostas">← Minhas propostas</a></p>
+<h2 style="margin-top:4px">💰 Proposta – {e(p.get("processo") or "sem nº")} <small class="sub">{e(p.get("empresa", ""))}</small></h2>
+{aviso_falta}{bloco_ia}
+<details class="op-perfil" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if not itens else ""}>
+<summary style="display:block;cursor:pointer;padding:10px 14px">📥 <b>Trazer os itens</b> – do monitor, do PNCP ou lidos do edital pela IA</summary>
+<div style="padding:0 14px 12px"><div class="duas">
+<form method="post" action="/propostas/{pid}/importar"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="fonte" value="monitor">
+<label>Lotes lidos pelo monitor <small>(descrição + nosso último lance)</small></label>
+<select class="campo" name="proc">{sel_mon or '<option value="">nenhum processo</option>'}</select>
+<label class="ck"><input type="checkbox" name="substituir" value="1"> Substituir os itens atuais</label>
+<div class="acoes"><button class="sec">Trazer do monitor</button></div></form>
+<form method="post" action="/propostas/{pid}/importar"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="fonte" value="pncp">
+<label>Link do edital no PNCP <small>(pncp.gov.br/app/editais/CNPJ/ANO/Nº)</small></label>
+<input class="campo" name="link" placeholder="https://pncp.gov.br/app/editais/00000000000000/2026/123">
+<label class="ck"><input type="checkbox" name="substituir" value="1"> Substituir os itens atuais</label>
+<div class="acoes"><button class="sec">Trazer do PNCP</button></div></form></div>
+<form method="post" action="/propostas/{pid}/ia" enctype="multipart/form-data" style="margin-top:8px">{aviso_custo("proposta")}
+<input type="hidden" name="csrf" value="{CSRF}"><div class="duas"><div><label>🤖 Ler os itens do edital com IA</label>
+<select class="campo" name="edital">{sel_edital}</select></div><div><label>…ou envie o PDF do edital/termo de referência</label>
+<input type="file" name="arquivo" accept=".pdf,.docx,.zip" multiple></div></div>
+<label class="ck"><input type="checkbox" name="substituir" value="1" checked> Substituir os itens atuais</label>
+<div class="acoes"><button class="sec" {"disabled" if ia.get("status") == "gerando" else ""}>🤖 Ler os itens</button></div></form></div></details>
+<form method="post" action="/propostas/{pid}/salvar" id="fprop"><input type="hidden" name="csrf" value="{CSRF}">
+<div class="form" style="max-width:none"><div class="duas">
+<div><label>Órgão</label><input class="campo" name="orgao" value="{e(p.get("orgao", ""))}"></div>
+<div><label>Nº do processo/edital</label><input class="campo" name="processo" value="{e(p.get("processo", ""))}"></div>
+<div><label>Modalidade</label><input class="campo" name="modalidade" value="{e(p.get("modalidade", ""))}"></div>
+<div><label>Local e data <small>(vazio = cidade da empresa e hoje)</small></label><div class="linha" style="gap:8px">
+<input class="campo" name="cidade_data" value="{e(p.get("cidade_data", ""))}" placeholder="{e(ctx.get("cidade", "Cidade/UF"))}">
+<input class="campo" name="data" value="{e(p.get("data", ""))}" placeholder="{e(documentos.data_extenso())}"></div></div></div>
+<label>Objeto</label><textarea class="campo" name="objeto" rows="2" style="max-width:100%">{e(p.get("objeto", ""))}</textarea></div>
+<h3>Itens</h3>
+<div style="overflow-x:auto"><table class="tab-it"><thead><tr><th>Lote</th><th>Item</th><th style="min-width:260px">Descrição</th><th>Marca/modelo</th>
+<th>Unid.</th><th>Qtd.</th><th>Valor unit. (R$)</th><th>Total (R$)</th><th></th></tr></thead><tbody id="itens">{linhas}</tbody></table></div>
+<div class="acoes"><button type="button" class="sec" onclick="novaLinha()">+ Item</button></div>
+<div class="total-box">Total: <span id="total">{propostas.brl(total)}</span><small id="ext">{e(propostas.extenso(total))}</small></div>
+<div class="duas"><div class="form" style="max-width:none"><h3 style="margin-top:0">Condições</h3>
+<label>Validade da proposta (dias)</label><input class="campo" name="validade" value="{e(c["validade"])}" style="max-width:120px">
+<label>Prazo de entrega/execução</label><input class="campo" name="entrega" value="{e(c["entrega"])}">
+<label>Pagamento</label><input class="campo" name="pagamento" value="{e(c["pagamento"])}">
+<label>Garantia</label><input class="campo" name="garantia" value="{e(c["garantia"])}"></div>
+<div class="form" style="max-width:none"><h3 style="margin-top:0">Dados bancários <small class="sub">(opcional)</small></h3>
+<label>Banco</label><input class="campo" name="b_banco" value="{e(b.get("banco", ""))}">
+<div class="duas"><div><label>Agência</label><input class="campo" name="b_agencia" value="{e(b.get("agencia", ""))}"></div>
+<div><label>Conta</label><input class="campo" name="b_conta" value="{e(b.get("conta", ""))}"></div></div>
+<label>PIX</label><input class="campo" name="b_pix" value="{e(b.get("pix", ""))}">
+<label>Observações <small>(saem no fim da proposta)</small></label><textarea class="campo" name="obs" rows="3" style="max-width:100%">{e(p.get("obs", ""))}</textarea></div></div>
+<div class="acoes"><button>💾 Salvar</button>
+<button class="sec" name="depois" value="ver" {"disabled" if falta else ""}>💾 Salvar e visualizar / PDF</button>
+<button class="sec" name="depois" value="docx" {"disabled" if falta else ""}>💾 Salvar e baixar Word</button></div></form>
+<div class="acoes" style="margin-top:14px">{botao(f"/propostas/{pid}/excluir", "🗑 Excluir proposta", "perigo", "Excluir esta proposta?")}</div>
+<p class="sub">Confira tudo com o edital antes de enviar. Valor em vermelho = acima do valor de referência do órgão.</p>
+<script>
+function n(v){{v=(v||'').replace(/[^0-9,.-]/g,'');if(v.indexOf(',')>=0)v=v.replace(/[.]/g,'').replace(',','.');else if(/^-?[0-9]{{1,3}}([.][0-9]{{3}})+$/.test(v))v=v.replace(/[.]/g,'');return parseFloat(v)||0;}}
+function f(v){{return v.toLocaleString('pt-BR',{{minimumFractionDigits:2,maximumFractionDigits:2}});}}
+function calc(){{let t=0;document.querySelectorAll('#itens tr').forEach(tr=>{{const q=n(tr.querySelector('[name=i_qtd]').value),
+ u=n(tr.querySelector('[name=i_unit]').value),r=n(tr.querySelector('[name=i_ref]').value),x=Math.round(q*u*100)/100;t+=x;
+ const c=tr.querySelector('td.tot');c.textContent=f(x);c.classList.toggle('acima',r>0&&u>r);}});
+ document.getElementById('total').textContent='R$ '+f(t);document.getElementById('ext').textContent='(salve para ver o valor por extenso)';}}
+function novaLinha(){{const tb=document.getElementById('itens');const tr=document.createElement('tr');
+ tr.innerHTML='<td><input name="i_lote" class="mini"></td><td><input name="i_item" class="mini" value="'+(tb.children.length+1)+'"></td><td><textarea name="i_desc" rows="2"></textarea></td>'+
+ '<td><input name="i_marca"></td><td><input name="i_un" class="mini" value="UN"></td><td><input name="i_qtd" class="num" oninput="calc()"></td>'+
+ '<td><input name="i_unit" class="num" oninput="calc()" placeholder="0,00"><input type="hidden" name="i_ref"></td><td class="tot">0,00</td>'+
+ '<td><button type="button" class="sec mini-b" onclick="this.closest(\'tr\').remove();calc()">✕</button></td>';tb.appendChild(tr);}}
+</script>"""
+    if ia.get("status") == "pronto" and ia.get("quando", "") > (p.get("visto_ia") or ""):
+        p["visto_ia"] = ia.get("quando", "")
+        propostas.gravar(pid, p)
+    return pagina("Proposta comercial", corpo, "/documentos", aviso, erro)
+
+
+def ler_itens_ia(pid, cfg, partes, usuario):
+    p = propostas.ler(pid) or {}
+    try:
+        api = cfg.get("GEMINI_API_KEY", "")
+        if not api:
+            raise RuntimeError("Falta a chave do Gemini (Configurações → Inteligência artificial).")
+        custos_ia.contexto("proposta", p.get("empresa", ""), p.get("processo", ""), usuario)
+        md, _, _ = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes, propostas.PROMPT_ITENS, prazo=600)
+        r = propostas.extrair_json(md)
+        novos = propostas.itens_ia(r)
+        p = propostas.ler(pid) or p
+        p["itens"] = novos if (p.get("ia") or {}).get("substituir") else (p.get("itens") or []) + novos
+        if r.get("objeto") and not p.get("objeto"):
+            p["objeto"] = str(r["objeto"])[:1000]
+        cond = dict(p.get("cond") or propostas.PADRAO_COND)
+        for k in ("validade", "entrega", "pagamento", "garantia"):
+            v = str(r.get(k) or "").strip()
+            if v and cond.get(k, "") in ("", propostas.PADRAO_COND[k]):
+                cond[k] = re.sub(r"\D", "", v) or cond[k] if k == "validade" else v[:300]
+        p["cond"] = cond
+        p["ia"] = {"status": "pronto", "n": len(novos), "custo": custos_ia.ultimo(), "quando": datetime.now().isoformat()}
+    except Exception as ex:  # noqa: BLE001
+        p = propostas.ler(pid) or p
+        p["ia"] = {"status": "erro", "erro": str(ex)[:300]}
+    propostas.gravar(pid, p)
+
+
+def baixar_proposta(handler, pid):
+    p = propostas.ler(pid)
+    ctx = ctx_proposta(p)
+    docs, _ = propostas.montar(p, ctx)
+    dados = documentos.docx(docs, ctx)
+    nome_arq = re.sub(r"[^\w.-]+", "_", f"Proposta_{p.get('processo') or 'processo'}_{ctx.get('razao', '')[:30]}").strip("_") + ".docx"
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    handler.send_header("Content-Disposition", f'attachment; filename="{nome_arq}"')
+    handler.send_header("Content-Length", str(len(dados)))
+    handler.cabecalhos_seguranca()
+    handler.end_headers()
+    handler.wfile.write(dados)
+
+
+def pg_proposta_ver(pid):
+    p = propostas.ler(pid)
+    ctx = ctx_proposta(p)
+    falta = documentos.faltando(ctx)
+    if falta:
+        return pagina("Proposta", f'<h2>Não deu para gerar</h2><p>Faltam os dados da empresa: {e(", ".join(falta))}.</p>'
+                      f'<p><a class="btn" href="/propostas/{pid}">Voltar</a></p>', "/documentos")
+    docs, _ = propostas.montar(p, ctx)
+    return folhas_html(f"Proposta – {p.get('processo', '')}", documentos.html(docs, ctx), f"/propostas/{pid}/docx")
+
+
 def abas_doc(atual):
     return ('<div class="acoes" style="margin:6px 0 12px">'
             f'<a class="btn {"" if atual == "dec" else "sec"}" href="/documentos">📄 Declarações</a>'
+            f'<a class="btn {"" if atual == "pro" else "sec"}" href="/propostas">💰 Proposta comercial</a>'
             f'<a class="btn {"" if atual == "pec" else "sec"}" href="/pecas">⚖️ Peças com IA (recurso, contrarrazões…)</a>'
             f'<a class="btn {"" if atual == "cer" else "sec"}" href="/certidoes">📑 Certidões</a></div>')
 
@@ -1959,8 +2200,13 @@ def pg_documentos_ver(q):
         return pagina("Declarações", f'<h2>Não deu para gerar</h2><p>Faltam: {e(", ".join(falta) or "declarações marcadas")}.</p>'
                       '<p><a class="btn" href="/documentos">Voltar</a></p>', "/documentos")
     url_docx = "/documentos/docx?" + urllib.parse.urlencode(q)
+    return folhas_html(f"Declarações – {ctx.get('razao', '')}", documentos.html(docs, ctx), url_docx)
+
+
+def folhas_html(titulo, conteudo, url_docx):
+    """Página A4 para visualizar/imprimir em PDF (declarações, proposta)."""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Declarações – {e(ctx.get('razao', ''))}</title><style>
+<title>{e(titulo)}</title><style>
 body{{background:#e9edf0;margin:0;font-family:Arial,Helvetica,sans-serif;color:#111}}
 .barra{{position:sticky;top:0;background:#1b3a2a;color:#fff;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;z-index:5}}
 .barra button,.barra a{{background:#fff;color:#1b3a2a;border:0;border-radius:6px;padding:8px 14px;font-weight:700;cursor:pointer;text-decoration:none;font-size:14px}}
@@ -1973,10 +2219,13 @@ body{{background:#e9edf0;margin:0;font-family:Arial,Helvetica,sans-serif;color:#
 @media print{{body{{background:#fff}}.barra{{display:none}}.folha{{margin:0;box-shadow:none;page-break-after:always;width:auto;min-height:0;padding:0}}
  @page{{size:A4;margin:30mm 20mm 20mm 30mm}}}}
 @media(max-width:820px){{.folha{{width:auto;margin:10px;padding:18px}}}}
+.folha h3{{font-size:11pt;margin:16px 0 6px}}.tab-doc{{width:100%;border-collapse:collapse;font-size:9pt;line-height:1.35;margin:10px 0}}
+.tab-doc th,.tab-doc td{{border:1px solid #888;padding:3px 5px;vertical-align:top}}.tab-doc th{{background:#d9e2dc}}
+.tab-doc tr.grupo td{{background:#ededed}}
 </style></head><body>
 <div class="barra"><button onclick="window.print()">🖨 Imprimir / Salvar em PDF</button><a href="{e(url_docx)}">⬇ Baixar Word</a>
 <span>Dica: clique no texto para corrigir algo antes de imprimir. No Chrome, escolha “Salvar como PDF”.</span></div>
-{documentos.html(docs, ctx)}</body></html>"""
+{conteudo}</body></html>"""
 
 
 # ------------------------------------------------------------------ agenda de prazos
@@ -4190,9 +4439,12 @@ class Painel(BaseHTTPRequestHandler):
             if (caminho.startswith(ROTAS_IA) and not caminho.endswith("/telegram") or ROTAS_IA_RE.fullmatch(caminho)) and not u.get("ia", True):
                 return self.negar("O seu usuário não tem permissão para usar os recursos com IA (que têm custo). Fale com o administrador.")
         if nomes_permitidos() is not None:
-            m = re.match(r"/(agenda|certidoes|pecas)/([0-9a-f]{12,14})(/|$)", caminho)
+            m = re.match(r"/(agenda|certidoes|pecas|propostas)/([0-9a-f]{12,14})(/|$)", caminho)
             if m:
-                if m.group(1) == "agenda":
+                if m.group(1) == "propostas":
+                    it = propostas.ler(m.group(2)) or {}
+                    dono, criador = it.get("empresa", ""), it.get("usuario")
+                elif m.group(1) == "agenda":
                     it = agenda.prazos()["itens"].get(m.group(2)) or {}
                     dono, criador = it.get("empresa", ""), it.get("criado_por")
                 elif m.group(1) == "certidoes":
@@ -4445,6 +4697,15 @@ class Painel(BaseHTTPRequestHandler):
                                    "application/pdf" if arq.suffix.lower() == ".pdf" else "application/octet-stream", True)
             if p == "/pecas":
                 return self.enviar(pg_pecas(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/propostas":
+                return self.enviar(pg_propostas(q, AVISOS.get(q.get("ok", ""), "")))
+            m = re.fullmatch(r"/propostas/([0-9a-f]{12})(/ver|/docx)?", p)
+            if m and propostas.ler(m.group(1)):
+                if m.group(2) == "/ver":
+                    return self.enviar(pg_proposta_ver(m.group(1)))
+                if m.group(2) == "/docx":
+                    return baixar_proposta(self, m.group(1))
+                return self.enviar(pg_proposta(m.group(1), AVISOS.get(q.get("ok", ""), "")))
             m = re.fullmatch(r"/pecas/([0-9a-f]{14})(/ver|/docx)?", p)
             if m:
                 if m.group(2) == "/ver":
@@ -4597,6 +4858,34 @@ class Painel(BaseHTTPRequestHandler):
             if declaracoes:
                 return self.redirecionar("/documentos?" + urllib.parse.urlencode({"emp": nome, "proc": campos.get("proc", ""), "leitura": pid}))
             return self.redirecionar(f"/pecas/{pid}")
+        m_pia = re.fullmatch(r"/propostas/([0-9a-f]{12})/ia", self.path.rstrip("/"))
+        if m_pia:
+            if tam > 40 * 1024 * 1024:
+                return self.enviar(pagina("Erro", "<h2>Arquivos grandes demais (máx. 40 MB).</h2>", "/documentos"), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido(self.path.rstrip("/"), campos):
+                return
+            pid = m_pia.group(1)
+            prop = propostas.ler(pid)
+            if not prop:
+                return self.redirecionar("/propostas")
+            arqs = [(n, d) for n, d in arqs if d][:8]
+            partes = []
+            for n_a, d_a in arqs:
+                partes += analise.preparar(n_a, d_a)
+            if not partes and campos.get("edital"):
+                if not ve_analise(analise.ler(campos["edital"]) or {}):
+                    return self.negar("Esta análise é de outro usuário.")
+                partes, _ = pecas.partes_edital(campos["edital"])
+            if not partes:
+                return self.enviar(pg_proposta(pid, "Escolha um edital já analisado ou envie o PDF do edital.", True))
+            prop["ia"] = {"status": "gerando", "substituir": campos.get("substituir") == "1"}
+            propostas.gravar(pid, prop)
+            self.auditar("proposta: leitura dos itens com IA", pid)
+            threading.Thread(target=ler_itens_ia, args=(pid, cfg_ia(), partes, login_atual()), daemon=True).start()
+            return self.redirecionar(f"/propostas/{pid}")
         if self.path.rstrip("/") == "/analise/upload":
             if tam > 40 * 1024 * 1024:
                 return self.enviar(pg_editais("Arquivos grandes demais (máx. 40 MB).", True), 413)
@@ -4868,6 +5157,57 @@ class Painel(BaseHTTPRequestHandler):
                 pedido["anexos"] = anexos
                 pecas.iniciar(pid, cfg_ia(), pedido)
                 return self.redirecionar(f"/pecas/{pid}")
+            if p == "/propostas/nova":
+                nome = f.get("emp", "")
+                if nome not in nomes_empresas():
+                    return self.redirecionar("/propostas")
+                proc, _, prom = f.get("proc", "").partition("||")
+                pid = propostas.nova(nome, f.get("processo", "").strip()[:80] or proc, f.get("orgao", "").strip()[:200] or prom,
+                                     f.get("modalidade", "").strip()[:80], login_atual())
+                return self.redirecionar(f"/propostas/{pid}")
+            m = re.fullmatch(r"/propostas/([0-9a-f]{12})/(salvar|importar|excluir)", p)
+            if m and propostas.ler(m.group(1)):
+                pid, acao = m.groups()
+                prop = propostas.ler(pid)
+                if acao == "excluir":
+                    propostas.excluir(pid)
+                    return self.redirecionar("/propostas?ok=feito")
+                if acao == "salvar":
+                    col = lambda k: multi.get(k, [])  # noqa: E731
+                    n_it = len(col("i_desc"))
+                    pega = lambda k, i: (col(k)[i] if i < len(col(k)) else "").strip()  # noqa: E731
+                    prop["itens"] = [{"lote": pega("i_lote", i)[:20], "item": pega("i_item", i)[:20], "descricao": pega("i_desc", i)[:3000],
+                                      "marca": pega("i_marca", i)[:200], "unidade": pega("i_un", i)[:30], "qtd": pega("i_qtd", i)[:20],
+                                      "unit": pega("i_unit", i)[:20], "ref": pega("i_ref", i)[:20]}
+                                     for i in range(n_it) if pega("i_desc", i) or pega("i_unit", i)][:600]
+                    for k, lim in (("orgao", 200), ("processo", 80), ("modalidade", 80), ("objeto", 1500), ("cidade_data", 80), ("data", 60), ("obs", 3000)):
+                        prop[k] = f.get(k, "").strip()[:lim]
+                    prop["cond"] = {k: f.get(k, "").strip()[:300] for k in ("validade", "entrega", "pagamento", "garantia")}
+                    prop["banco"] = {k: f.get("b_" + k, "").strip()[:120] for k in ("banco", "agencia", "conta", "pix")}
+                    propostas.gravar(pid, prop)
+                    if f.get("depois") == "ver":
+                        return self.enviar(f"""<!doctype html><meta charset="utf-8"><script>window.open('/propostas/{pid}/ver','_blank');
+location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver">Abrir a proposta</a>""")
+                    if f.get("depois") == "docx":
+                        return baixar_proposta(self, pid)
+                    return self.redirecionar(f"/propostas/{pid}?ok=feito")
+                novos, msg = [], ""
+                if f.get("fonte") == "monitor":
+                    proc, _, prom = f.get("proc", "").partition("||")
+                    novos = propostas.itens_monitor(lotes_monitor(nomes_empresas().get(prop.get("empresa", ""), []), proc, prom))
+                    msg = "O monitor ainda não leu lotes deste processo." if not novos else ""
+                elif f.get("fonte") == "pncp":
+                    mm = re.search(r"(\d{14})/(\d{4})/(\d+)", f.get("link", ""))
+                    if not mm:
+                        msg = "Cole o link do edital no PNCP (pncp.gov.br/app/editais/CNPJ/ANO/Nº)."
+                    else:
+                        novos = propostas.itens_pncp(buscas.listar_itens(*mm.groups()))
+                        msg = "O PNCP não devolveu itens para este edital." if not novos else ""
+                if msg:
+                    return self.enviar(pg_proposta(pid, msg, True))
+                prop["itens"] = novos if f.get("substituir") == "1" else (prop.get("itens") or []) + novos
+                propostas.gravar(pid, prop)
+                return self.redirecionar(f"/propostas/{pid}?ok=itens")
             if p == "/documentos/dados":
                 nome = f.get("emp", "")
                 if nome in nomes_empresas():
