@@ -76,7 +76,7 @@ def _termos(pergunta):
     return [re.sub(r"\s", "", p) for p in procs], palavras[:12]
 
 
-def montar_dados(pergunta, permitidos=None):
+def montar_dados(pergunta, permitidos=None, ve_analise=None):
     def ok(nomes):
         lista = [x.strip().upper() for x in (nomes or "").split(",") if x.strip()]
         return permitidos is None or not lista or any(x in permitidos for x in lista)
@@ -188,7 +188,7 @@ def montar_dados(pergunta, permitidos=None):
         pass
 
     # análises de editais (títulos; o texto inteiro só da que combinar com a pergunta)
-    an = [a for a in analise.listar() if a.get("status") == "pronto"]
+    an = [a for a in analise.listar() if a.get("status") == "pronto" and (ve_analise is None or ve_analise(a))]
     if an:
         blocos.append("EDITAIS ANALISADOS PELA IA:\n" + "\n".join(f"- {a.get('titulo', '')}" for a in an[:40]))
         for a in an[:40]:
@@ -202,12 +202,12 @@ def montar_dados(pergunta, permitidos=None):
     return texto[:LIMITE_CONTEXTO]
 
 
-def perguntar(cfg, pergunta, login="", permitidos=None):
+def perguntar(cfg, pergunta, login="", permitidos=None, ve_analise=None):
     api = cfg.get("GEMINI_API_KEY", "")
     if not api:
         raise RuntimeError("Falta a chave do Gemini. Cadastre em ⚙️ Configurações → Inteligência artificial.")
     hist = conversa(login)
-    dados = montar_dados(pergunta + " " + " ".join(m["texto"] for m in hist[-4:] if m["papel"] == "voce"), permitidos)
+    dados = montar_dados(pergunta + " " + " ".join(m["texto"] for m in hist[-4:] if m["papel"] == "voce"), permitidos, ve_analise)
     historico = "\n".join(f"{'USUÁRIO' if m['papel'] == 'voce' else 'ASSISTENTE'}: {m['texto'][:2000]}" for m in hist[-8:])
     pedido = (REGRAS.replace("{HOJE}", datetime.now().strftime("%d/%m/%Y %H:%M")) +
               (f"\nCONVERSA ATÉ AGORA:\n{historico}\n" if historico else "") +

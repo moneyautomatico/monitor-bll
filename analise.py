@@ -113,36 +113,51 @@ ARQ_INSTRUCOES = PASTA / "analise_instrucoes.txt"
 ARQ_EMPRESA = PASTA / "analise_empresa.txt"
 
 
-def instrucoes():
-    """Instruções editáveis pelo painel (vazio = padrão)."""
+GLOBAIS = set()   # logins que usam os arquivos antigos (o painel preenche com o dono das empresas antigas)
+
+
+def _arq_usuario(base, login):
+    lg = re.sub(r"[^a-z0-9._-]", "", login or "")
+    if not lg or lg in GLOBAIS:
+        return base
+    return base.with_name(f"{base.stem}_{lg}{base.suffix}")
+
+
+def instrucoes(login=""):
+    """Instruções editáveis pelo painel (vazio = padrão). Cada usuário tem as suas."""
     try:
-        t = ARQ_INSTRUCOES.read_text(encoding="utf-8").strip()
+        t = _arq_usuario(ARQ_INSTRUCOES, login).read_text(encoding="utf-8").strip()
         return t or PROMPT
     except Exception:  # noqa: BLE001
         return PROMPT
 
 
-def perfil_empresa():
+def instrucoes_personalizadas(login=""):
+    a = _arq_usuario(ARQ_INSTRUCOES, login)
+    return a.exists() and bool(a.read_text(encoding="utf-8").strip())
+
+
+def perfil_empresa(login=""):
     try:
-        return ARQ_EMPRESA.read_text(encoding="utf-8").strip()
+        return _arq_usuario(ARQ_EMPRESA, login).read_text(encoding="utf-8").strip()
     except Exception:  # noqa: BLE001
         return ""
 
 
-def salvar_config_ia(texto_instrucoes, texto_empresa):
+def salvar_config_ia(texto_instrucoes, texto_empresa, login=""):
     t = (texto_instrucoes or "").replace("\r\n", "\n").strip()
-    ARQ_INSTRUCOES.write_text("" if t == PROMPT.strip() else t, encoding="utf-8")
-    ARQ_EMPRESA.write_text((texto_empresa or "").replace("\r\n", "\n").strip(), encoding="utf-8")
+    _arq_usuario(ARQ_INSTRUCOES, login).write_text("" if t == PROMPT.strip() else t, encoding="utf-8")
+    _arq_usuario(ARQ_EMPRESA, login).write_text((texto_empresa or "").replace("\r\n", "\n").strip(), encoding="utf-8")
 
 
-def montar_pedido(contexto="", extra=""):
+def montar_pedido(contexto="", extra="", login=""):
     blocos = []
     if contexto:
         blocos.append(contexto)
-    emp = perfil_empresa()
+    emp = perfil_empresa(login)
     if emp:
         blocos.append("SOBRE A NOSSA EMPRESA (use para avaliar se atendemos às exigências e o que falta):\n" + emp)
-    blocos.append(instrucoes())
+    blocos.append(instrucoes(login))
     if extra:
         blocos.append("PEDIDO ADICIONAL PARA ESTA ANÁLISE (tem prioridade):\n" + extra)
     return "\n\n".join(blocos)
@@ -356,7 +371,7 @@ def _rodar(chave, cfg, origem):
         import custos_ia
         custos_ia.contexto("analise", "", origem.get("titulo", ""), origem.get("usuario", ""))
         md, modelo, usados = gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes,
-                                    montar_pedido(contexto, origem.get("extra", "")))
+                                    montar_pedido(contexto, origem.get("extra", ""), origem.get("usuario", "")))
         base.update(custo=custos_ia.ultimo())
         base.update(status="pronto", md=md, extra=origem.get("extra", ""), modelo=modelo, arquivos=usados or nomes,
                     fim=datetime.now().strftime("%d/%m/%Y %H:%M"))

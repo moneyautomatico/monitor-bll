@@ -63,6 +63,8 @@ def _data_iso(br):
 def analisar(empresa="", permitidos=None):
     """Estatísticas da empresa (NOME) escolhida – vazio = todas as nossas empresas."""
     proprias = empresas_proprias()
+    if permitidos is not None:   # empresas de outros usuários contam como concorrentes comuns
+        proprias = {k: v for k, v in proprias.items() if v["nome"] in permitidos}
     todos_apelidos = [e for e in proprias.values()]
     conc = defaultdict(lambda: {"nomes": defaultdict(int), "lotes": 0, "ganhou_de_nos": 0, "perdeu_para_nos": 0,
                                 "vitorias": 0, "desclass": 0, "difs": [], "orgaos": set(), "ultimo": "", "det": []})

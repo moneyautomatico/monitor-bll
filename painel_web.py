@@ -111,7 +111,9 @@ if usuarios.carregar() and SENHA:   # a senha não fica mais em texto no config.
     gravar_env(CONFIG, {}, remover=("PAINEL_SENHA",))
     SENHA = ""
 _REQ = threading.local()   # usuário da requisição atual
-ROTAS_ADMIN = ("/admin", "/empresas", "/config", "/consumo", "/backup", "/telegram", "/migrar", "/e/")
+ROTAS_ADMIN = ("/admin", "/config", "/consumo", "/backup", "/telegram", "/migrar", "/e/", "/oportunidades/config")
+DONO_PADRAO = next((k for k, v in usuarios.carregar().items() if v.get("criado_por") == "migração"), "")
+analise.GLOBAIS.add(DONO_PADRAO)
 ROTAS_ADM_LAYOUT = ("/admin", "/empresas", "/config")   # abas mostradas no layout da Área do administrador
 ROTAS_IA = ("/analise", "/pecas/gerar", "/pecas/declaracoes", "/pergunte/enviar")
 ROTAS_IA_RE = re.compile(r"/pecas/[0-9a-f]{14}/refazer")
@@ -143,11 +145,15 @@ analise.QUEM = login_atual
 pecas.QUEM = login_atual
 
 
-def visivel(nomes):
-    """Item ligado a empresa(s) ('A, B') – visível se for de alguma empresa liberada ao usuário (ou de nenhuma)."""
+def visivel(nomes, criador=None):
+    """Item ligado a empresa(s) ('A, B') – visível se for de alguma empresa do usuário. Sem empresa: só de quem criou."""
     ok = nomes_permitidos()
     lista = [x.strip().upper() for x in (nomes or "").split(",") if x.strip()]
-    return ok is None or not lista or any(x in ok for x in lista)
+    if ok is None:
+        return True
+    if not lista:
+        return dono_ok(criador or "")
+    return any(x in ok for x in lista)
 
 
 def oport_visiveis(d):
@@ -156,7 +162,7 @@ def oport_visiveis(d):
         return d
     d = dict(d)
     d["perfis"] = {k: v for k, v in d.get("perfis", {}).items() if k in ok}
-    d["itens"] = {k: r for k, r in d.get("itens", {}).items() if not r.get("empresas") or set(r["empresas"]) & ok}
+    d["itens"] = {k: r for k, r in d.get("itens", {}).items() if set(r.get("empresas") or []) & ok}
     return d
 
 
@@ -166,11 +172,58 @@ def eh_admin():
 
 
 def nomes_permitidos():
-    """None = todas as empresas; senão o conjunto de NOMES que o usuário pode ver."""
+    """None = todas (administrador); senão os NOMES das empresas que o usuário cadastrou + as que o admin liberou para ele."""
     u = usuario_atual()
-    if not u or u["papel"] == "admin" or not u.get("empresas"):
+    if not u or u["papel"] == "admin":
         return None
-    return set(u["empresas"])
+    cache = getattr(_REQ, "perm", None)
+    if cache and cache[0] == u["login"]:
+        return cache[1]
+    ok = {x.upper().strip() for x in u.get("empresas") or []}
+    for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
+        c = ler_env(a)
+        if (c.get("EMPRESA_DONO") or "").lower() == u["login"]:
+            ok.add((c.get("EMPRESA_NOME") or a.stem).upper().strip())
+    _REQ.perm = (u["login"], ok)
+    return ok
+
+
+def dono_ok(usuario):
+    """Coisas sem empresa (prazo manual, edital, busca salva...) são só de quem criou. Sem dono = do usuário antigo."""
+    u = usuario_atual()
+    return not u or u["papel"] == "admin" or (usuario or DONO_PADRAO) == u["login"]
+
+
+def dono_empresa(eid):
+    return (ler_env(EMPRESAS / f"{eid}.env").get("EMPRESA_DONO") or "").lower()
+
+
+def pode_editar_empresa(eid):
+    return eh_admin() or dono_empresa(eid) == login_atual()
+
+
+def ve_analise(d):
+    return dono_ok((d.get("origem") or {}).get("usuario", ""))
+
+
+def chave_usuario(ch):
+    """Cada usuário tem a sua análise do mesmo edital (não mistura)."""
+    lg = re.sub(r"[^a-z0-9]", "", login_atual())[:20]
+    return f"{ch}-{lg}" if lg and lg != re.sub(r"[^a-z0-9]", "", DONO_PADRAO) else ch
+
+
+def ue(caminho):
+    """Links de Empresas: dentro da Área do administrador ficam em /admin/empresas."""
+    return ("/admin" + caminho) if getattr(_REQ, "admin", False) else caminho
+
+
+def migrar_donos():
+    """Empresas cadastradas antes dos usuários passam a ser do login antigo."""
+    if not DONO_PADRAO or not EMPRESAS.exists():
+        return
+    for a in EMPRESAS.glob("*.env"):
+        if not ler_env(a).get("EMPRESA_DONO"):
+            gravar_env(a, {"EMPRESA_DONO": DONO_PADRAO})
 
 
 def pode_empresa(nome):
@@ -666,7 +719,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     u = usuario_atual()
     if getattr(_REQ, "admin", False) and aba in ROTAS_ADM_LAYOUT:
         return pagina_admin(titulo, corpo, aviso, erro)
-    abas = [(x, n) for x, n in ABAS if eh_admin() or x not in ("/empresas", "/config")]
+    abas = [(x, n) for x, n in ABAS if eh_admin() or x != "/config"]
     nav = "".join(f'<a href="{x}" class="{"on" if x == aba else ""}" title="{"Configurações" if x == "/config" else n}">{n}</a>' for x, n in abas)
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
     if u and u.get("trocar_senha") and aba != "/conta":
@@ -726,7 +779,7 @@ O histórico e o login atuais são mantidos.</p>
     capacidade = int(vagas * intervalo * 60 / max(media, 20))
     ativos = [x for x in emps if x["ativo"]]
     uso = min(100, int(100 * len(ativos) / max(capacidade, 1)))
-    _sts = [agenda.situacao_prazo(it) for it in agenda.prazos()["itens"].values() if visivel(it.get("empresa"))]
+    _sts = [agenda.situacao_prazo(it) for it in agenda.prazos()["itens"].values() if visivel(it.get("empresa"), it.get("criado_por"))]
     n_prazo_urg = sum(1 for x in _sts if x in ("atrasado", "hoje"))
     n_prazo_sem = sum(1 for x in _sts if x == "semana")
     n_cert = sum(1 for c in agenda.certidoes()["itens"].values() if agenda.status_cert(c)[0] in ("vence", "vencida") and visivel(c.get("empresa")))
@@ -1506,13 +1559,21 @@ def pg_empresas(aviso="", erro=False):
     linhas = ""
     for x in empresas():
         cls, txt = tag_status(x)
-        pausar = (botao(f"/empresas/{x['id']}/pausar", "Pausar", "sec") if x["ativo"]
-                  else botao(f"/empresas/{x['id']}/retomar", "Retomar"))
-        linhas += f"""<tr><td><b>{e(x['nome'])}</b> <span class="tag parado">{e(x['plat'])}</span><div class="sub">{e(x['cfg'].get('BLL_EMAIL', ''))}</div></td>
+        pausar = (botao(ue(f"/empresas/{x['id']}/pausar"), "Pausar", "sec") if x["ativo"]
+                  else botao(ue(f"/empresas/{x['id']}/retomar"), "Retomar"))
+        meu = pode_editar_empresa(x["id"])
+        dono = f' · 👤 {e(x["cfg"].get("EMPRESA_DONO", "") or "sem dono")}' if eh_admin() else ("" if meu else " · compartilhada com você")
+        if not meu:
+            linhas += f"""<tr><td><b>{e(x['nome'])}</b> <span class="tag parado">{e(x['plat'])}</span><div class="sub">{dono}</div></td>
+<td><span class="tag {cls}">{e(txt)}</span></td><td class="ocultar">—</td><td>—</td></tr>"""
+            continue
+        linhas += f"""<tr><td><b>{e(x['nome'])}</b> <span class="tag parado">{e(x['plat'])}</span><div class="sub">{e(x['cfg'].get('BLL_EMAIL', ''))}{dono}</div></td>
 <td><span class="tag {cls}">{e(txt)}</span></td><td class="ocultar">{e(x['cfg'].get('ENVIAR_PARA', 'geral'))}</td>
-<td><div class="acoes" style="margin:0"><a class="btn sec" href="/empresas/{e(x['id'])}">Editar</a>{pausar}
-{botao(f"/empresas/{x['id']}/testar", "Testar alerta", "sec")}<a class="btn sec" href="/empresas/{e(x['id'])}/log">Log</a></div></td></tr>"""
-    corpo = f"""<h2>Empresas</h2><div class="acoes" style="margin-bottom:12px"><a class="btn" href="/empresas/nova">+ Cadastrar empresa</a></div>
+<td><div class="acoes" style="margin:0"><a class="btn sec" href="{ue('/empresas/' + x['id'])}">Editar</a>{pausar}
+{botao(ue(f"/empresas/{x['id']}/testar"), "Testar alerta", "sec")}<a class="btn sec" href="{ue('/empresas/' + x['id'] + '/log')}">Log</a></div></td></tr>"""
+    corpo = f"""<h2>Empresas</h2><p class="sub">{"Todas as empresas do sistema, de todos os usuários." if eh_admin() else
+ "As empresas que você cadastrou. Elas e os dados delas (mensagens, processos, agenda, documentos…) só aparecem para você e para o administrador."}</p>
+<div class="acoes" style="margin-bottom:12px">{'' if usuario_atual() and usuario_atual()["papel"] == "leitura" else f'<a class="btn" href="{ue("/empresas/nova")}">+ Cadastrar empresa</a>'}</div>
 <table><tr><th>Empresa</th><th>Situação</th><th class="ocultar">Alertas</th><th>Ações</th></tr>
 {linhas or '<tr><td colspan="4">Nenhuma empresa cadastrada.</td></tr>'}</table>"""
     return pagina("Empresas", abas_admin_topo(corpo, "emp"), "/empresas", aviso, erro)
@@ -1524,13 +1585,19 @@ def form_empresa(eid=None):
     modo = cfg.get("ENVIAR_PARA", "geral")
     plat = cfg.get("PLATAFORMA", "bll").lower()
     sel = lambda v: "selected" if modo == v else ""  # noqa: E731
-    acao = f"/empresas/{eid}" if eid else "/empresas/nova"
+    acao = ue(f"/empresas/{eid}" if eid else "/empresas/nova")
+    us = usuarios.carregar()
+    dono_atual = cfg.get("EMPRESA_DONO", "") if eid else login_atual()
+    campo_dono = ('<label>Dono da empresa <small>(quem cadastrou; só ele e o administrador veem os dados)</small></label><select class="campo" name="dono">' +
+                  "".join(f'<option value="{e(k)}" {"selected" if k == dono_atual else ""}>{e(k)} – {e(v.get("nome", ""))}</option>' for k, v in sorted(us.items())) +
+                  "</select>") if eh_admin() else ""
     remover = (f'<h3>Zona de perigo</h3>' +
-               botao(f"/empresas/{eid}/remover", "Remover empresa e histórico", "perigo",
+               botao(ue(f"/empresas/{eid}/remover"), "Remover empresa e histórico", "perigo",
                      "Remover esta empresa e todo o histórico dela?")) if eid else ""
     corpo = f"""<h2>{"Editar empresa" if eid else "Cadastrar empresa"}</h2><div class="form">
 <form method="post" action="{acao}"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Nome da empresa <small>(aparece nos alertas)</small></label><input class="campo" name="nome" value="{g('EMPRESA_NOME')}" required>
+{campo_dono}
 <label>Plataforma</label><select class="campo" name="plataforma" id="plat" onchange="trocaPlat()">
 <option value="bll" {"selected" if plat == "bll" else ""}>BLL Compras</option>
 <option value="licitanet" {"selected" if plat == "licitanet" else ""}>Licitanet</option>
@@ -1556,7 +1623,7 @@ def form_empresa(eid=None):
 <input class="campo" type="password" name="tg_token" autocomplete="off">
 <label>Tópico ntfy próprio <small>(opcional, alarme no celular)</small></label>
 <input class="campo" name="ntfy" value="{g('EMPRESA_NTFY_TOPICO')}">
-<div class="acoes"><button>Salvar</button><a class="btn sec" href="/empresas">Cancelar</a></div></form>{remover}</div>
+<div class="acoes"><button>Salvar</button><a class="btn sec" href="{ue('/empresas')}">Cancelar</a></div></form>{remover}</div>
 <script>function trocaPlat(){{const v=document.getElementById('plat').value,ln=v==='licitanet',bll=(v==='bll'||v==='bnc');
 document.querySelectorAll('.so-bll').forEach(x=>x.style.display=bll?'':'none');
 document.querySelectorAll('.so-ln').forEach(x=>x.style.display=ln?'':'none');}}trocaPlat();</script>"""
@@ -1650,7 +1717,7 @@ def pg_documentos(q, aviso=""):
             f'<label class="dec"><input type="checkbox" name="d" value="x{i}" {"checked" if f"x{i}" in marcadas else ""}> '
             f'<span>📎 <b>Modelo do edital:</b> {e(x.get("titulo") or "Declaração")}</span></label>'
             for i, x in enumerate(r.get("especificas") or []))
-    analisados = [a for a in analise.listar() if a.get("status") == "pronto"]
+    analisados = [a for a in analise.listar() if a.get("status") == "pronto" and ve_analise(a)]
     sel_edital = ('<option value="">— escolha um edital já analisado em Editais (IA) —</option>' +
                   "".join(f'<option value="{e(a["chave"])}">{e((a.get("titulo") or a["chave"])[:110])}</option>' for a in analisados))
     form_ia = ESTILO_IA + f"""<details class="op-perfil" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if not leitura else ""}>
@@ -1755,7 +1822,7 @@ def pg_pecas(q, aviso=""):
                         f'{e(p)} – {e(o)}{" · " + e(sit) if sit else ""}</option>' for p, o, sit in procs))
     tipo_q = q.get("tipo", "recurso")
     sel_tipo = "".join(f'<option value="{k}" {"selected" if k == tipo_q else ""}>{e(t)}</option>' for k, (t, _) in pecas.TIPOS.items())
-    analisados = [a for a in analise.listar() if a.get("status") == "pronto"]
+    analisados = [a for a in analise.listar() if a.get("status") == "pronto" and ve_analise(a)]
     sel_edital = ('<option value="">— nenhum (usar só o histórico e os pontos) —</option>' +
                   "".join(f'<option value="{e(a["chave"])}">{e((a.get("titulo") or a["chave"])[:110])}</option>' for a in analisados))
     falta = [x for x in documentos.faltando(ctx) if x in ("razão social", "CNPJ")]
@@ -1764,7 +1831,7 @@ def pg_pecas(q, aviso=""):
         f'<div class="sub">{e(x.get("empresa", ""))} · {e(x.get("titulo", ""))}</div></td>'
         f'<td>{ {"pronto": "✅ Pronta", "gerando": "⏳ Gerando", "erro": "❌ Erro"}.get(x.get("status"), "")}</td>'
         f'<td class="ocultar">{e(x.get("fim") or x.get("inicio") or "")}</td></tr>'
-        for x in pecas.listar() if x.get("tipo") != "declaracoes" and visivel(x.get("empresa")))
+        for x in pecas.listar() if x.get("tipo") != "declaracoes" and visivel(x.get("empresa"), x.get("usuario")))
     corpo = f"""<style>.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}@media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}</style>
 {ESTILO_IA}<h2>📄 Documentos</h2>{abas_doc("pec")}{aviso_custo("peca")}
 <p class="sub">A IA escreve um <b>rascunho</b> usando o edital, o histórico que o monitor registrou no processo (chat, registros
@@ -1885,7 +1952,7 @@ def pg_agenda(q, aviso=""):
     d = agenda.prazos()
     agora = datetime.now()
     emp_f = q.get("emp", "")
-    itens = [(pid, it) for pid, it in d["itens"].items() if visivel(it.get("empresa"))
+    itens = [(pid, it) for pid, it in d["itens"].items() if visivel(it.get("empresa"), it.get("criado_por"))
              if not emp_f or emp_f in [x.strip().upper() for x in it.get("empresa", "").split(",")]]
     grupos = {"atrasado": [], "hoje": [], "semana": [], "depois": [], "feito": []}
     for pid, it in itens:
@@ -2529,7 +2596,7 @@ const p=f.querySelector('.mostra-senha');if(p)p.textContent='Senha gerada: '+s+'
 def abas_admin(atual):
     return '<div class="adm-tab">' + "".join(
         f'<a href="{u}" class="{"on" if k == atual else ""}">{n}</a>' for k, u, n in (
-            ("usu", "/admin", "👥 Usuários"), ("aud", "/admin/auditoria", "📜 Auditoria"), ("emp", "/empresas", "🏢 Empresas"),
+            ("usu", "/admin", "👥 Usuários"), ("aud", "/admin/auditoria", "📜 Auditoria"), ("emp", "/admin/empresas", "🏢 Empresas"),
             ("cfg", "/config", "⚙️ Configurações"), ("ia", "/consumo", "💳 Consumo de IA"))) + "</div>"
 
 
@@ -2558,7 +2625,7 @@ def tag_papel(p):
 
 def pg_conta(aviso="", erro=False):
     u = usuario_atual()
-    emps = ", ".join(u.get("empresas") or []) or "todas"
+    emps = "todas" if u["papel"] == "admin" else ", ".join(sorted(nomes_permitidos() or [])) or "nenhuma ainda – cadastre em Empresas"
     corpo = f"""{ESTILO_ADM}<h2>👤 Minha conta</h2>
 <div class="form"><p><b>{e(u.get("nome", ""))}</b> · login <b>{e(u["login"])}</b> · {tag_papel(u["papel"])}</p>
 <p class="sub">Empresas que você vê: <b>{e(emps)}</b> · Recursos com IA: <b>{"liberados" if u.get("ia", True) and u["papel"] != "leitura" else "não liberados"}</b>
@@ -2584,7 +2651,9 @@ def pg_admin(q, aviso="", erro=False, f=None):
     gasto = custos_ia.resumo_mes(datetime.now().strftime("%Y-%m")).get("por_usuario", {})
     linhas = ""
     for lg, u in sorted(us.items(), key=lambda t: (t[1]["papel"] != "admin", t[0])):
-        emps = ", ".join(u.get("empresas") or []) or "todas"
+        proprias = sorted({(ler_env(a).get("EMPRESA_NOME") or a.stem).upper() for a in EMPRESAS.glob("*.env")
+                           if (ler_env(a).get("EMPRESA_DONO") or "").lower() == lg}) if EMPRESAS.exists() else []
+        emps = "todas" if u["papel"] == "admin" else (", ".join(proprias) or "nenhuma") + (f" (+{len(u.get('empresas') or [])} liberada(s))" if u.get("empresas") else "")
         linhas += (f'<tr class="{"" if u.get("ativo", True) else "inativo"}"><td><a href="/admin/usuario/{e(lg)}"><b>{e(lg)}</b></a>'
                    f'<div class="sub">{e(u.get("nome", ""))}{"" if u.get("ativo", True) else " · DESATIVADO"}</div></td>'
                    f'<td>{tag_papel(u["papel"])}</td><td class="ocultar">{e(emps if len(emps) < 80 else emps[:77] + "…")}</td>'
@@ -2619,7 +2688,7 @@ def pg_admin(q, aviso="", erro=False, f=None):
 <input class="campo" name="login" required pattern="[a-z0-9._-]{{3,32}}" value="{e(f.get("login", ""))}" placeholder="ex.: maria.silva">
 <label>Nome</label><input class="campo" name="nome" value="{e(f.get("nome", ""))}" placeholder="Maria Silva">
 <label>Papel</label><select class="campo" name="papel">{opcoes_papel(f.get("papel", "operador"))}</select>
-<label>Empresas que pode ver <small>(nenhuma marcada = todas; o administrador sempre vê todas)</small></label>
+<label>Empresas de outros usuários que ele também pode ver <small>(opcional; ele já vê as que ele mesmo cadastrar)</small></label>
 {caixas_empresas([])}
 <label class="ck"><input type="checkbox" name="ia" value="1" {"" if f and f.get("ia") != "1" else "checked"}> Pode usar recursos com IA (têm custo)</label>
 <label>Senha inicial</label><input class="campo" type="password" name="senha" required minlength="8" autocomplete="new-password">
@@ -2648,7 +2717,8 @@ def pg_usuario(lg, aviso="", erro=False):
 <form method="post" action="/admin/usuario/{e(lg)}/salvar"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Nome</label><input class="campo" name="nome" value="{e(u.get("nome", ""))}">
 <label>Papel</label><select class="campo" name="papel" {"" if not eu else 'title="Você não pode mudar o seu próprio papel"'}>{opcoes_papel(u["papel"])}</select>
-<label>Empresas que pode ver <small>(nenhuma marcada = todas)</small></label>{caixas_empresas(u.get("empresas") or [])}
+<p class="sub">Empresas cadastradas por ele: <b>{e(", ".join(sorted({(ler_env(a).get("EMPRESA_NOME") or a.stem).upper() for a in EMPRESAS.glob("*.env") if (ler_env(a).get("EMPRESA_DONO") or "").lower() == lg})) or "nenhuma")}</b></p>
+<label>Empresas de outros usuários que ele também pode ver <small>(opcional)</small></label>{caixas_empresas(u.get("empresas") or [])}
 <label class="ck"><input type="checkbox" name="ia" value="1" {"checked" if u.get("ia", True) else ""}> Pode usar recursos com IA (têm custo)</label>
 <label class="ck"><input type="checkbox" name="ativo" value="1" {"checked" if u.get("ativo", True) else ""}> Ativo (desmarque para bloquear o acesso)</label>
 <div class="acoes"><button>Salvar</button><a class="btn sec" href="/admin">Voltar</a></div></form></div>
@@ -2845,7 +2915,7 @@ def pg_buscar(qs, aviso=""):
                   mapa_busca(itens, qs) +
                   f'<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr))">'
                   f'{cards or "<p>Nada encontrado com esses filtros.</p>"}</div>' + nav)
-    lista = buscas.salvas()
+    lista = [b for b in buscas.salvas() if dono_ok(b.get("usuario", ""))]
     if lista:
         linhas = ""
         for b in lista:
@@ -3185,7 +3255,7 @@ def pg_oportunidades(q, aviso=""):
 <summary style="display:block;cursor:pointer;padding:12px 14px">⚙️ <b>Perfil e ajustes</b> – o que o sistema aprendeu e como afinar</summary>
 <div style="padding:12px">
 <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr))">{blocos or '<p class="sub">O perfil aparece depois da primeira atualização.</p>'}</div>
-<form method="post" action="/oportunidades/config" class="form" style="max-width:none;margin-top:14px">
+{'' if eh_admin() else '<p class="sub">Os ajustes do perfil (termos, estados, cidade-sede) são feitos pelo administrador.</p><div hidden>'}<form method="post" action="/oportunidades/config" class="form" style="max-width:none;margin-top:14px">
 <input type="hidden" name="csrf" value="{CSRF}">
 <label>Acrescentar termos <small>(separe por vírgula – ex.: kit merenda, papel toalha interfolha)</small></label>
 <input class="campo" name="extra" value="{e(cfg.get('extra', ''))}">
@@ -3202,7 +3272,7 @@ def pg_oportunidades(q, aviso=""):
          for n in nomes_pf)}
 <label style="margin-top:10px"><input type="checkbox" name="alertar" value="1" {"checked" if cfg.get("alertar") else ""}>
 Avisar no Telegram geral as novas com encaixe alto</label>
-<div class="acoes"><button>Salvar e atualizar</button></div></form></div></details>
+<div class="acoes"><button>Salvar e atualizar</button></div></form>{'' if eh_admin() else '</div>'}</div></details>
 <p class="sub" style="margin-top:18px">Fonte: PNCP – Portal Nacional de Contratações Públicas. Só leitura.</p>"""
     return pagina("Oportunidades", corpo, "/oportunidades", aviso)
 
@@ -3284,7 +3354,7 @@ def pg_itens(q):
 
 
 def botao_analisar(cnpj, ano, seq, titulo):
-    ch = analise.chave_pncp(cnpj, ano, seq)
+    ch = chave_usuario(analise.chave_pncp(cnpj, ano, seq))
     feito = analise.ler(ch)
     if feito and feito.get("status") in ("pronto", "analisando"):
         return f'<a class="btn" href="/analise/{ch}">🤖 Ver análise</a>'
@@ -3340,7 +3410,7 @@ def pg_editais(aviso="", erro=False):
     linhas = "".join(
         f'<tr><td><a href="/analise/{e(d["chave"])}"><b>{e(d.get("titulo") or d["chave"])}</b></a></td>'
         f'<td>{ {"pronto": "✅ Pronta", "analisando": "⏳ Analisando", "erro": "❌ Erro"}.get(d.get("status"), "") }</td>'
-        f'<td class="ocultar">{e(d.get("fim") or d.get("inicio") or "")}</td></tr>' for d in analise.listar())
+        f'<td class="ocultar">{e(d.get("fim") or d.get("inicio") or "")}</td></tr>' for d in analise.listar() if ve_analise(d))
     corpo = f"""<h2>Editais (IA)</h2>{alerta}
 {ESTILO_IA}{aviso_custo("analise")}<div class="form"><h3 style="margin-top:0">Analisar um edital que você tem em mãos</h3>
 <p class="sub">Para editais de qualquer plataforma (BLL, BNC, Licitanet...). Envie o PDF do edital e, se quiser, o termo de referência (até 18 MB no total).
@@ -3354,9 +3424,9 @@ Para licitações do PNCP, use o botão “🤖 Analisar edital (IA)” na aba B
 <h2 style="margin-top:22px">Como a IA deve analisar</h2>
 <div class="form" style="max-width:900px"><form method="post" action="/editais/ia"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Sobre a empresa <small>(opcional – o que vende, onde atende, certidões/atestados que já tem. A IA usa para dizer o que falta)</small></label>
-<textarea class="campo" name="empresa" rows="5" style="max-width:100%" placeholder="ex.: Distribuidora de material de limpeza e descartáveis, ME, atende SP e MG. Temos atestados de fornecimento de limpeza para 3 prefeituras. Não temos balanço de 2025 ainda.">{e(analise.perfil_empresa())}</textarea>
-<label>Instruções para a IA <small>({"personalizadas" if analise.ARQ_INSTRUCOES.exists() and analise.ARQ_INSTRUCOES.read_text(encoding="utf-8").strip() else "padrão"} – edite à vontade: tire seções, acrescente perguntas, mude o formato)</small></label>
-<textarea class="campo" name="instrucoes" rows="22" style="max-width:100%;font-family:ui-monospace,Consolas,monospace;font-size:12.5px">{e(analise.instrucoes())}</textarea>
+<textarea class="campo" name="empresa" rows="5" style="max-width:100%" placeholder="ex.: Distribuidora de material de limpeza e descartáveis, ME, atende SP e MG. Temos atestados de fornecimento de limpeza para 3 prefeituras. Não temos balanço de 2025 ainda.">{e(analise.perfil_empresa(login_atual()))}</textarea>
+<label>Instruções para a IA <small>({"personalizadas" if analise.instrucoes_personalizadas(login_atual()) else "padrão"} – edite à vontade: tire seções, acrescente perguntas, mude o formato)</small></label>
+<textarea class="campo" name="instrucoes" rows="22" style="max-width:100%;font-family:ui-monospace,Consolas,monospace;font-size:12.5px">{e(analise.instrucoes(login_atual()))}</textarea>
 <p class="sub">Dicas: use “## Título” para seções e “- [ ]” para itens de checklist (viram caixinhas). Vale para as próximas análises.</p>
 <div class="acoes"><button name="acao" value="salvar">Salvar instruções</button>
 <button class="sec" name="acao" value="padrao" onclick="return confirm('Voltar as instruções para o padrão? (o texto sobre a empresa é mantido)')">Restaurar padrão</button></div></form></div>
@@ -3487,6 +3557,12 @@ def salvar_empresa(f, eid=None):
     if not nome:
         return "Informe o nome."
     novo = eid is None
+    dono = (f.get("dono", "").strip().lower() if eh_admin() and usuarios.obter(f.get("dono", "")) else "") or \
+        (dono_empresa(eid) if eid else login_atual())
+    for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
+        c = ler_env(a)
+        if a.stem != eid and (c.get("EMPRESA_NOME") or "").upper().strip() == nome.upper() and (c.get("EMPRESA_DONO") or "").lower() != dono:
+            return "Já existe uma empresa com esse nome cadastrada por outro usuário. Use um nome diferente (ex.: acrescente a cidade)."
     if novo:
         eid = gerar_id(nome)
         n = 2
@@ -3513,7 +3589,8 @@ def salvar_empresa(f, eid=None):
     v = {"EMPRESA_NOME": nome, "BLL_EMAIL": f.get("email", "").strip(),
          "BLL_PERFIL": f.get("perfil", "").strip() or "OPERADOR", "ENVIAR_PARA": modo,
          "EMPRESA_TELEGRAM_CHAT_ID": f.get("tg_chat", "").strip(), "EMPRESA_NTFY_TOPICO": f.get("ntfy", "").strip(),
-         "PLATAFORMA": plat, "EMPRESA_CNPJ": f.get("cnpj", "").strip(), "LICITANET_FUNCAO": f.get("funcao", "").strip()}
+         "PLATAFORMA": plat, "EMPRESA_CNPJ": f.get("cnpj", "").strip(), "LICITANET_FUNCAO": f.get("funcao", "").strip(),
+         "EMPRESA_DONO": dono}
     if senha:
         v["BLL_SENHA"] = senha
     if f.get("tg_token", "").strip():
@@ -3638,13 +3715,25 @@ class Painel(BaseHTTPRequestHandler):
             m = re.match(r"/(agenda|certidoes|pecas)/([0-9a-f]{12,14})(/|$)", caminho)
             if m:
                 if m.group(1) == "agenda":
-                    dono = (agenda.prazos()["itens"].get(m.group(2)) or {}).get("empresa", "")
+                    it = agenda.prazos()["itens"].get(m.group(2)) or {}
+                    dono, criador = it.get("empresa", ""), it.get("criado_por")
                 elif m.group(1) == "certidoes":
-                    dono = (agenda.certidoes()["itens"].get(m.group(2)) or {}).get("empresa", "")
+                    dono, criador = (agenda.certidoes()["itens"].get(m.group(2)) or {}).get("empresa", ""), "?"
                 else:
-                    dono = (pecas.ler(m.group(2)) or {}).get("empresa", "")
-                if not visivel(dono):
-                    return self.negar("Você não tem acesso a esta empresa.")
+                    it = pecas.ler(m.group(2)) or {}
+                    dono, criador = it.get("empresa", ""), it.get("usuario")
+                if not visivel(dono, criador):
+                    return self.negar("Você não tem acesso a este item.")
+            m = re.match(r"/analise/([\w-]{3,60})(/|$)", caminho)
+            ch_ed = m.group(1) if m and m.group(1) not in ("upload", "pncp") else (campos or {}).get("edital", "")
+            if ch_ed and analise.ler(ch_ed) and not ve_analise(analise.ler(ch_ed)):
+                return self.negar("Esta análise é de outro usuário.")
+            m = re.match(r"/buscas/(b\d+)/", caminho)
+            if m and not dono_ok(next((b.get("usuario", "") for b in buscas.salvas() if b["id"] == m.group(1)), "")):
+                return self.negar("Esta busca é de outro usuário.")
+            m = re.match(r"/(?:admin/)?empresas/([a-z0-9-]+)(/|$)", caminho)
+            if m and m.group(1) != "nova" and (EMPRESAS / f"{m.group(1)}.env").exists() and not pode_editar_empresa(m.group(1)):
+                return self.negar("Só quem cadastrou esta empresa (ou o administrador) pode mexer nela.")
         for k, v in (campos or {}).items():
             if k in ("eid", "empresa", "emp") and v and not empresa_liberada(v):
                 return self.negar("Você não tem acesso a esta empresa.")
@@ -3659,7 +3748,7 @@ class Painel(BaseHTTPRequestHandler):
         pain = sessao_usuario(self.cookie("lt_sessao"))
         if caminho.startswith("/admin"):
             return adm, "lt_admin", True
-        if adm and (caminho.startswith(ROTAS_ADMIN) or not pain):
+        if adm and ((caminho.startswith(ROTAS_ADMIN) and not caminho.startswith("/oportunidades")) or not pain):
             return adm, "lt_admin", True
         return pain, "lt_sessao", False
 
@@ -3671,7 +3760,7 @@ class Painel(BaseHTTPRequestHandler):
         u = usuarios.obter(login) if login else None
         if via_admin and u and u["papel"] != "admin":
             u = None
-        _REQ.cookie, _REQ.admin = ck, via_admin
+        _REQ.cookie, _REQ.admin, _REQ.perm = ck, via_admin, None
         if u and u.get("ativo", True):
             _REQ.user = u
             caminho = urllib.parse.urlparse(self.path).path.rstrip("/") or "/"
@@ -3759,6 +3848,8 @@ class Painel(BaseHTTPRequestHandler):
     def redirecionar(self, url):
         if not url.startswith("/") or url.startswith("//"):
             url = "/"
+        if getattr(_REQ, "admin", False) and url.startswith("/empresas"):
+            url = "/admin" + url
         self.send_response(303)
         self.send_header("Location", url)
         self.cabecalhos_seguranca()
@@ -3799,6 +3890,8 @@ class Painel(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         q = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
         p = url.path.rstrip("/") or "/"
+        if p.startswith("/admin/empresas"):
+            p = p[6:]
         try:
             if p == "/":
                 return self.enviar(pg_visao())
@@ -4026,7 +4119,7 @@ class Painel(BaseHTTPRequestHandler):
             self.auditar("ação " + urllib.parse.urlparse(self.path).path, f"{len(arqs)} arquivo(s)")
             if not arqs:
                 return self.enviar(pg_editais("Escolha ao menos um arquivo.", True))
-            ch = analise.chave_upload(arqs)
+            ch = chave_usuario(analise.chave_upload(arqs))
             titulo = campos.get("titulo", "").strip()[:150] or ", ".join(n for n, _ in arqs)[:150]
             pasta = analise.DIR / ch
             pasta.mkdir(parents=True, exist_ok=True)
@@ -4042,6 +4135,8 @@ class Painel(BaseHTTPRequestHandler):
         p = urllib.parse.urlparse(self.path).path.rstrip("/")
         if not self.permitido(p, f):
             return
+        if p.startswith("/admin/empresas"):
+            p = p[6:]
         if not p.startswith(("/mensagens/lidas", "/pergunte/enviar")):
             self.auditar("ação " + p, ", ".join(f"{k}={str(v)[:40]}" for k, v in f.items()
                                                 if k not in ("csrf", "nova", "nova2", "atual", "md") and not re.search(r"senha|token|key|pass|secret|chave", k, re.I)))
@@ -4127,7 +4222,7 @@ class Painel(BaseHTTPRequestHandler):
                 return self.redirecionar("/config?ok=config")
             if p == "/analise/pncp":
                 cnpj, ano, seq = (re.sub(r"\D", "", f.get(k, "")) for k in ("cnpj", "ano", "seq"))
-                ch = analise.chave_pncp(cnpj, ano, seq)
+                ch = chave_usuario(analise.chave_pncp(cnpj, ano, seq))
                 d = analise.ler(ch)
                 if not d or d.get("status") == "erro":
                     analise.iniciar(ch, CFG_ATUAL(), {"tipo": "pncp", "cnpj": cnpj, "ano": ano, "seq": seq,
@@ -4162,9 +4257,9 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar("ok")
             if p == "/editais/ia":
                 if f.get("acao") == "padrao":
-                    analise.salvar_config_ia("", f.get("empresa", ""))
+                    analise.salvar_config_ia("", f.get("empresa", ""), login_atual())
                 else:
-                    analise.salvar_config_ia(f.get("instrucoes", ""), f.get("empresa", ""))
+                    analise.salvar_config_ia(f.get("instrucoes", ""), f.get("empresa", ""), login_atual())
                 return self.redirecionar("/editais?ok=ia")
             m = re.fullmatch(r"/analise/([\w-]{3,60})/habilitacao", p)
             if m and analise.ler(m.group(1)):
@@ -4188,7 +4283,7 @@ class Painel(BaseHTTPRequestHandler):
                 try:
                     if not perg:
                         raise RuntimeError("Escreva uma pergunta.")
-                    md, modelo, custo = assistente.perguntar(CFG_ATUAL(), perg, login_atual(), nomes_permitidos())
+                    md, modelo, custo = assistente.perguntar(CFG_ATUAL(), perg, login_atual(), nomes_permitidos(), ve_analise)
                     res = {"ok": True, "html": analise.md_html(md), "modelo": modelo, "custo": custo_uso(custo)}
                 except Exception as ex:  # noqa: BLE001
                     res = {"ok": False, "erro": str(ex)[:400]}
@@ -4224,7 +4319,8 @@ class Painel(BaseHTTPRequestHandler):
                 except ValueError:
                     return self.enviar(pg_agenda({}, "Data ou hora inválida."))
                 agenda.adicionar(f.get("titulo", "").strip() or "Prazo", dt, f.get("empresa", ""),
-                                 promotor=f.get("processo", "").strip(), obs=f.get("obs", "").strip())
+                                 promotor=f.get("processo", "").strip(), obs=f.get("obs", "").strip(),
+                                 extra={"criado_por": login_atual()})
                 volta = f.get("voltar", "")
                 return self.redirecionar(volta if volta.startswith("/") and not volta.startswith("//") else "/agenda?ok=prazo")
             m = re.fullmatch(r"/agenda/([0-9a-f]{12})/(feito|reabrir|excluir|data)", p)
@@ -4302,7 +4398,7 @@ class Painel(BaseHTTPRequestHandler):
                 except ValueError:
                     filtros = {}
                 filtros["nome"] = f.get("nome", "").strip()[:60]
-                bid = buscas.salvar_busca(filtros)
+                bid = buscas.salvar_busca(filtros, login_atual())
                 threading.Thread(target=buscas.verificar_salvas, args=(telegram_geral, bid), daemon=True).start()
                 return self.redirecionar("/buscar?ok=busca_salva")
             m = re.fullmatch(r"/buscas/(b\d+)/(rodar|pausar|ligar|remover)", p)
@@ -4366,6 +4462,7 @@ class Painel(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"Painel em http://{HOST}:{PORTA}")
+    migrar_donos()
     threading.Thread(target=buscas.ciclo, args=(telegram_geral, minutos_busca), daemon=True).start()
     threading.Thread(target=vigiar, daemon=True).start()
     threading.Thread(target=backup.ciclo, args=(CFG_ATUAL, telegram_geral), daemon=True).start()

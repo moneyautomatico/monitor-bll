@@ -228,7 +228,7 @@ def salvas():
     return _ler(ARQ_SALVAS, [])
 
 
-def salvar_busca(f):
+def salvar_busca(f, usuario=""):
     with TRAVA:
         lista = salvas()
         bid = f"b{int(time.time())}"
@@ -236,7 +236,7 @@ def salvar_busca(f):
                       "excluir": f.get("excluir", ""), "ufs": f.get("ufs", []), "municipio": f.get("municipio", ""),
                       "modalidade": f.get("modalidade", ""), "vmin": f.get("vmin", ""), "vmax": f.get("vmax", ""),
                       "itens": bool(f.get("itens")), "alertar": True, "criada": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                      "ultima": "", "novas_total": 0})
+                      "ultima": "", "novas_total": 0, "usuario": usuario})
         _gravar(ARQ_SALVAS, lista)
     return bid
 
