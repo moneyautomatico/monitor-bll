@@ -50,7 +50,7 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "pref_chat": "Pronto! Conversa ligada e aplicada em todas as suas empresas – chegou uma mensagem de confirmação no seu Telegram.",
           "pref_bot": "Bot conectado! Agora faça o passo 2: abra o bot e toque em Iniciar.",
           "pref_ntfy": "Tópico criado e aplicado em todas as suas empresas. Inscreva o mesmo nome no app ntfy do celular.", "pref_resumo": "Resumo enviado no seu Telegram.",
-          "bot_geral": "Bot geral destinado a este usuário e aplicado nas empresas dele (monitores reiniciados).",
+          "bot_transferido": "Bot transferido: agora é do usuário e só as empresas dele usam. O sistema ficou sem Telegram geral.",
           "usuario_criado": "Usuário criado. Passe o login e a senha para a pessoa (de preferência pessoalmente ou por telefone).",
           "usuario_excluido": "Usuário excluído e desconectado.", "senha": "Senha trocada. Os seus outros aparelhos foram desconectados.",
           "senha_redefinida": "Senha redefinida e a pessoa foi desconectada dos aparelhos.",
@@ -2826,21 +2826,6 @@ def pg_admin(q, aviso="", erro=False, f=None):
 
 def pg_usuario(lg, aviso="", erro=False):
     u = usuarios.obter(lg)
-    uc = usuarios.cfg(lg)
-    tem_geral = bool(CFG_ATUAL().get("TELEGRAM_TOKEN"))
-    if uc.get("bot_geral"):
-        bloco_bot = ('<div class="form" style="margin-top:12px"><h3 style="margin-top:0">🤖 Bot do Telegram</h3><p class="sub">Este usuário usa o '
-                     '<b>bot geral do sistema</b>, na conversa do Telegram geral. Os alertas das empresas dele chegam lá.</p>' +
-                     botao(f"/admin/usuario/{lg}/botgeral-tirar", "Retirar o bot geral deste usuário", "sec",
-                           "Retirar o bot geral? As empresas dele ficam sem Telegram próprio até ele cadastrar outro.") + "</div>")
-    elif tem_geral:
-        bloco_bot = ('<div class="form" style="margin-top:12px"><h3 style="margin-top:0">🤖 Bot do Telegram</h3><p class="sub">Destina o '
-                     '<b>bot geral do sistema</b> (e a conversa do Telegram geral) a este usuário: os alertas das empresas dele passam a ir '
-                     'por ele, e nenhum outro usuário pode cadastrá-lo.</p>' +
-                     botao(f"/admin/usuario/{lg}/botgeral", "🤖 Destinar o bot geral a este usuário", "",
-                           "Destinar o bot geral do sistema a este usuário?") + "</div>")
-    else:
-        bloco_bot = ""
     eu = lg == login_atual()
     ses = sum(1 for v in _sessoes().values() if v[1] == lg)
     hist = usuarios.auditoria(25, f'"usuario": "{lg}"')
@@ -2866,7 +2851,6 @@ def pg_usuario(lg, aviso="", erro=False):
 <p class="sub mostra-senha"></p>
 <label class="ck"><input type="checkbox" name="trocar" value="1" {"" if eu else "checked"}> Pedir para trocar no próximo acesso</label>
 <div class="acoes"><button>Redefinir</button><button type="button" class="sec" onclick="gerarSenha(this.form)">🎲 Gerar</button></div></form></div>
-{bloco_bot}
 <div class="acoes" style="margin-top:12px">{botao(f"/admin/usuario/{lg}/sessoes", "🔌 Desconectar dos aparelhos", "sec", "Desconectar este usuário de todos os aparelhos?")}
 {"" if eu else botao(f"/admin/usuario/{lg}/excluir", "🗑 Excluir usuário", "perigo", "Excluir este usuário? Isso não pode ser desfeito.")}</div></div></div>
 <h3>Últimas ações deste usuário</h3><table><tr><th>Quando</th><th>Ação</th><th class="ocultar">IP</th></tr>{linhas_h or '<tr><td colspan="3">—</td></tr>'}</table>
@@ -2893,11 +2877,26 @@ documentos, IA, agenda…). Senhas e chaves nunca são gravadas aqui.</p>
 
 
 def pg_config(aviso=""):
+    c0 = CFG_ATUAL()
+    if c0.get("TELEGRAM_TOKEN"):
+        nb = nome_bot(c0["TELEGRAM_TOKEN"])
+        transferir_bot = (f'<div class="msg" style="margin:6px 0 10px">Bot configurado aqui: <b>{"@" + e(nb) if nb else "(nome não lido)"}</b>. '
+                          'Para ele ser de um usuário (e não do sistema), transfira: o bot e a conversa passam para as configurações '
+                          'do usuário, saem daqui, e só as empresas dele usam esse bot.'
+                          '<form method="post" action="/config/bot-transferir" class="acoes" style="margin-top:8px">'
+                          f'<input type="hidden" name="csrf" value="{CSRF}"><select class="campo" name="usuario" style="max-width:260px">' +
+                          "".join(f'<option value="{e(k)}">{e(k)} – {e(v.get("nome", ""))}</option>'
+                                  for k, v in sorted(usuarios.carregar().items()) if v["papel"] != "admin") +
+                          '</select><button onclick="return confirm(\'Transferir o bot para este usuário e tirar do sistema?\')">'
+                          'Transferir o bot para o usuário</button></form></div>')
+    else:
+        transferir_bot = ""
     c = CFG_ATUAL()
     g = lambda k, d="": e(c.get(k, d))  # noqa: E731
     corpo = f"""<h2>Configurações gerais</h2><div class="form">
 <form method="post" action="/config"><input type="hidden" name="csrf" value="{CSRF}">
-<h3>Telegram geral</h3>
+<h3>Telegram geral <small class="sub">(opcional – só avisos do sistema: segurança e backup)</small></h3>
+{transferir_bot}
 <label>Token do bot <small>({"configurado; " if c.get("TELEGRAM_TOKEN") else ""}deixe vazio para manter)</small></label>
 <input class="campo" type="password" name="TELEGRAM_TOKEN" autocomplete="off">
 <label>Chat ID</label><input class="campo" name="TELEGRAM_CHAT_ID" value="{g('TELEGRAM_CHAT_ID')}">
@@ -3652,12 +3651,12 @@ def vigiar():
                                                or ("parou" in prob and agora - m["desde"] >= 300)):
                         telegram_geral(f"⚠️ <b>Monitor parado – {html.escape(nome)}</b>\n{html.escape(prob)}.\n"
                                        f"Última verificação: {html.escape(x['ultima'] or '—')}\n"
-                                       "Veja o Log no painel (aba Empresas) ou use Reiniciar.")
+                                       "Veja o Log no painel (aba Empresas) ou use Reiniciar.", empresas=[x["nome"]])
                         ntfy_geral(f"Monitor parado: {nome}", prob)
                         m["avisado"] = True
                 elif m:
                     if m.get("avisado"):
-                        telegram_geral(f"✅ <b>Monitor voltou – {html.escape(nome)}</b>\nVerificação normal às {html.escape(x['ultima'])}.")
+                        telegram_geral(f"✅ <b>Monitor voltou – {html.escape(nome)}</b>\nVerificação normal às {html.escape(x['ultima'])}.", empresas=[x["nome"]])
                     m = {}
                 if m:
                     memo[x["id"]] = m
@@ -3728,6 +3727,7 @@ def destinos_alerta(nomes, criador=""):
     g = CFG_ATUAL()
     lista = [x.strip().upper() for x in (nomes or "").split(",") if x.strip()]
     tgs, tops = [], []
+    criador = criador or DONO_PADRAO
     if not lista:   # prazo manual sem empresa: vai para quem criou (ou para o geral, se for do sistema)
         uc = usuarios.cfg(criador) if criador else {}
         if uc.get("tg_token") and uc.get("tg_chat"):
@@ -3838,7 +3838,17 @@ def resumo_usuarios():
         time.sleep(300)
 
 
-def telegram_geral(texto):
+def telegram_geral(texto, usuario=None, empresas=None):
+    """Sem destino: avisos do sistema (Telegram geral, se houver). Com empresas/usuário: vai para o bot do dono."""
+    if empresas:
+        for tok, chat in destinos_alerta(", ".join(empresas))[0]:
+            telegram_para(tok, chat, texto)
+        return
+    if usuario is not None:
+        uc = usuarios.cfg(usuario or DONO_PADRAO)
+        if uc.get("tg_token") and uc.get("tg_chat"):
+            telegram_para(uc["tg_token"], uc["tg_chat"], texto)
+            return
     c = CFG_ATUAL()
     tok, chat = c.get("TELEGRAM_TOKEN"), c.get("TELEGRAM_CHAT_ID")
     if not tok or not chat:
@@ -4476,7 +4486,7 @@ class Painel(BaseHTTPRequestHandler):
                 except ValueError as ex:
                     return self.enviar(pg_admin({}, str(ex), True, f))
                 return self.redirecionar("/admin?ok=usuario_criado")
-            m = re.fullmatch(r"/admin/usuario/([a-z0-9._-]{3,32})/(salvar|senha|sessoes|excluir|botgeral|botgeral-tirar)", p)
+            m = re.fullmatch(r"/admin/usuario/([a-z0-9._-]{3,32})/(salvar|senha|sessoes|excluir)", p)
             if m and usuarios.obter(m.group(1)):
                 lg, acao = m.groups()
                 try:
@@ -4495,22 +4505,6 @@ class Painel(BaseHTTPRequestHandler):
                         usuarios.trocar_senha(lg, f.get("senha", ""), obrigar_troca=f.get("trocar") == "1")
                         encerrar_do_usuario(lg, menos=self.tok() if lg == login_atual() else "")
                         return self.redirecionar(f"/admin/usuario/{lg}?ok=senha_redefinida")
-                    if acao == "botgeral":
-                        g = CFG_ATUAL()
-                        if not g.get("TELEGRAM_TOKEN"):
-                            raise ValueError("O bot geral não está configurado (Configurações → Telegram geral).")
-                        for outro, uo in usuarios.carregar().items():
-                            if outro != lg and (uo.get("cfg") or {}).get("tg_token") == g["TELEGRAM_TOKEN"]:
-                                raise ValueError(f"O bot geral já está destinado ao usuário {outro}. Retire dele primeiro.")
-                        usuarios.salvar_cfg(lg, {"tg_token": g["TELEGRAM_TOKEN"], "bot_nome": nome_bot(g["TELEGRAM_TOKEN"]) or None,
-                                                 "tg_chat": g.get("TELEGRAM_CHAT_ID") or None, "bot_geral": True})
-                        n = aplicar_alertas_usuario(lg)
-                        self.auditar("destinou o bot geral", lg)
-                        return self.redirecionar(f"/admin/usuario/{lg}?ok=bot_geral")
-                    if acao == "botgeral-tirar":
-                        usuarios.salvar_cfg(lg, {"tg_token": None, "bot_nome": None, "tg_chat": None, "bot_geral": None})
-                        aplicar_alertas_usuario(lg)
-                        return self.redirecionar(f"/admin/usuario/{lg}?ok=feito")
                     if acao == "sessoes":
                         encerrar_do_usuario(lg, menos=self.tok() if lg == login_atual() else "")
                         return self.redirecionar(f"/admin/usuario/{lg}?ok=sessoes")
@@ -4734,6 +4728,21 @@ class Painel(BaseHTTPRequestHandler):
                     return self.redirecionar("/buscar?ok=busca_rodando")
                 buscas.alterar_busca(m.group(1), m.group(2))
                 return self.redirecionar("/buscar?ok=feito")
+            if p == "/config/bot-transferir":
+                g = CFG_ATUAL()
+                lg = f.get("usuario", "")
+                if not g.get("TELEGRAM_TOKEN") or not usuarios.obter(lg):
+                    return self.redirecionar("/config")
+                usuarios.salvar_cfg(lg, {"tg_token": g["TELEGRAM_TOKEN"], "bot_nome": nome_bot(g["TELEGRAM_TOKEN"]) or None,
+                                         "tg_chat": g.get("TELEGRAM_CHAT_ID") or None})
+                for outro in usuarios.carregar():
+                    if outro != lg and usuarios.cfg(outro).get("tg_token") == g["TELEGRAM_TOKEN"]:
+                        usuarios.salvar_cfg(outro, {"tg_token": None, "bot_nome": None, "tg_chat": None})
+                        aplicar_alertas_usuario(outro)
+                gravar_env(CONFIG, {}, remover=("TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID"))
+                n = aplicar_alertas_usuario(lg)
+                self.auditar("transferiu o bot do sistema", lg)
+                return self.redirecionar("/config?ok=bot_transferido")
             if p == "/config/sessoes":
                 encerrar_todas(menos=self.tok())
                 self.auditar("encerrou todas as sessões")
@@ -4796,8 +4805,8 @@ class Painel(BaseHTTPRequestHandler):
             nome = nome_bot(tok)
             if not nome:
                 return self.enviar(pg_preferencias("O Telegram não reconheceu esse token. Confira se copiou certo.", True))
-            if tok == CFG_ATUAL().get("TELEGRAM_TOKEN") and not eh_admin() and not uc.get("bot_geral"):
-                return self.enviar(pg_preferencias("Esse é o bot geral do sistema. Crie um bot só seu no @BotFather – ou peça ao administrador para destinar o bot geral a você.", True))
+            if tok == CFG_ATUAL().get("TELEGRAM_TOKEN") and not eh_admin():
+                return self.enviar(pg_preferencias("Esse é o bot geral do sistema. Crie um bot só seu no @BotFather – ou peça ao administrador para transferir esse bot para você (Configurações → Telegram geral).", True))
             for outro, u in usuarios.carregar().items():
                 if outro != lg and (u.get("cfg") or {}).get("tg_token") == tok:
                     return self.enviar(pg_preferencias("Esse bot já está cadastrado por outro usuário. Crie um bot só seu.", True))

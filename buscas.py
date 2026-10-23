@@ -274,6 +274,13 @@ def verificar_salvas(enviar, so_id=None):
         ja = set(vistos.get(b["id"], []))
         primeira = b["id"] not in vistos
         novos = [it for it in achados if it.get("id") not in ja]
+        _env = enviar
+
+        def enviar(t, _b=b, _e=_env):   # vai para o Telegram de quem criou a busca
+            try:
+                _e(t, usuario=_b.get("usuario", ""))
+            except TypeError:
+                _e(t)
         if primeira:
             enviar(f"🔎 <b>Busca salva ativada: {html.escape(b['nome'])}</b>\n"
                    f"{len(achados)} licitação(ões) aberta(s) agora. A partir de agora aviso só as novas.")

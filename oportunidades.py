@@ -343,9 +343,10 @@ def atualizar(enviar=None):
             gravar(d)
         if enviar and d["cfg"].get("alertar") and novos_alto:
             for r in novos_alto[:10]:
-                enviar(formatar(r))
-            if len(novos_alto) > 10:
-                enviar(f"🎯 Mais {len(novos_alto) - 10} oportunidade(s) com encaixe alto. Veja no painel → Oportunidades.")
+                try:   # vai para o dono das empresas que combinam
+                    enviar(formatar(r), empresas=r.get("empresas") or [])
+                except TypeError:
+                    enviar(formatar(r))
         return f"{sum(1 for r in d['itens'].values() if not r.get('descartado'))} oportunidade(s)"
     finally:
         RODANDO.clear()
