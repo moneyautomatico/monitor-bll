@@ -16,7 +16,7 @@ PASTA = Path(__file__).resolve().parent
 EMPRESAS = PASTA / "empresas"
 ARQ = PASTA / "conversa_ia.json"
 TRAVA = threading.Lock()
-LIMITE_CONTEXTO = 350_000   # caracteres de dados enviados à IA por pergunta
+LIMITE_CONTEXTO = 150_000   # caracteres de dados enviados à IA por pergunta (menos = resposta mais rápida e barata)
 
 REGRAS = """Você é o assistente do Licitatudo, sistema que acompanha licitações públicas de um grupo de empresas
 (mensagens do pregoeiro, classificação dos lotes, prazos, certidões, concorrentes e oportunidades).
@@ -214,7 +214,7 @@ def perguntar(cfg, pergunta, login="", permitidos=None, ve_analise=None):
               f"\nPERGUNTA DO USUÁRIO: {pergunta}")
     import custos_ia
     custos_ia.contexto("pergunta", "", pergunta[:100], login)
-    md, modelo, _ = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), [("txt", "DADOS DO SISTEMA", dados)], pedido)
+    md, modelo, _ = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), [("txt", "DADOS DO SISTEMA", dados)], pedido, prazo=110)
     custo = custos_ia.ultimo()
     hist += [{"papel": "voce", "texto": pergunta, "quando": datetime.now().strftime("%d/%m %H:%M")},
              {"papel": "ia", "texto": md.strip(), "quando": datetime.now().strftime("%d/%m %H:%M"), "modelo": modelo, "custo": custo}]

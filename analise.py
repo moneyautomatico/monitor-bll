@@ -271,7 +271,12 @@ def arquivos_pncp(cnpj, ano, seq):
 
 
 # ------------------------------------------------------------------ Gemini
-def gemini(chave_api, modelo, partes, pedido):
+def gemini(chave_api, modelo, partes, pedido, prazo=None):
+    """prazo = segundos no total (None = sem limite). Passou do prazo: desiste com uma mensagem clara."""
+    fim = time.time() + prazo if prazo else None
+
+    def resta():
+        return (fim - time.time()) if fim else 300
     conteudo, usados, total = [], [], 0
     for tipo, nome, dado in partes:
         if tipo == "pdf":
@@ -300,12 +305,15 @@ def gemini(chave_api, modelo, partes, pedido):
         m = fila.pop(0)
         if not m or m in tentados:
             continue
+        if resta() < 5:
+            erros.append("tempo esgotado")
+            break
         tentados.add(m)
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
         req = urllib.request.Request(url, corpo, {"Content-Type": "application/json", "x-goog-api-key": chave_api})
         for tentativa in range(3):
             try:
-                with urllib.request.urlopen(req, timeout=300) as r:
+                with urllib.request.urlopen(req, timeout=max(5, min(300, resta()))) as r:
                     resp = json.load(r)
                 cand = (resp.get("candidates") or [{}])[0]
                 txt = "".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts", []))
@@ -321,10 +329,10 @@ def gemini(chave_api, modelo, partes, pedido):
             except urllib.error.HTTPError as ex:
                 msg = ex.read().decode("utf-8", "ignore")[:300]
                 erros.append(f"{m}: HTTP {ex.code} {msg}")
-                if ex.code == 429 and tentativa == 0:
+                if ex.code == 429 and tentativa == 0 and resta() > 45:
                     time.sleep(30)
                     continue
-                if ex.code in (500, 503) and tentativa < 2:   # "muita demanda": espera e tenta de novo
+                if ex.code in (500, 503) and tentativa < 2 and resta() > 10 * (tentativa + 1) + 15:   # "muita demanda"
                     time.sleep(10 * (tentativa + 1))
                     continue
                 if ex.code == 404:  # modelo aposentado: o próprio Google diz qual usar
@@ -336,6 +344,9 @@ def gemini(chave_api, modelo, partes, pedido):
             except Exception as ex:  # noqa: BLE001
                 erros.append(f"{m}: {ex}")
                 break
+    if fim and time.time() >= fim - 5:
+        raise RuntimeError("A IA (Google Gemini) demorou demais para responder – provavelmente está sobrecarregada. "
+                           "Tente de novo em alguns minutos. (" + " | ".join(erros[-2:]) + ")")
     raise RuntimeError("O Gemini não conseguiu analisar: " + " | ".join(erros[-3:]))
 
 

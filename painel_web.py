@@ -120,7 +120,7 @@ ROTAS_ADMIN = ("/admin", "/config", "/consumo", "/backup", "/telegram", "/migrar
 DONO_PADRAO = next((k for k, v in usuarios.carregar().items() if v.get("criado_por") == "migração"), "")
 analise.GLOBAIS.add(DONO_PADRAO)
 ROTAS_ADM_LAYOUT = ("/admin", "/empresas", "/config")   # abas mostradas no layout da Área do administrador
-ROTAS_IA = ("/analise", "/pecas/gerar", "/pecas/declaracoes", "/pergunte/enviar")
+ROTAS_IA = ("/analise", "/pecas/gerar", "/pecas/declaracoes", "/pergunte/enviar", "/pergunte/estado")
 ROTAS_IA_RE = re.compile(r"/pecas/[0-9a-f]{14}/refazer")
 
 
@@ -2425,6 +2425,19 @@ SUGESTOES = ["Quais processos estão em habilitação ou recurso agora?", "Em qu
              "Quais oportunidades de encaixe alto vencem nos próximos 5 dias?", "O que o pregoeiro pediu no 033/2026?"]
 
 
+PERGUNTAS = {}   # login -> {"status": "pensando"|"pronto", "inicio": t, "res": {...}}
+
+
+def responder_pergunta(cfg, perg, lg, permitidos, ve):
+    try:
+        md, modelo, custo = assistente.perguntar(cfg, perg, lg, permitidos, ve)
+        res = {"ok": True, "html": analise.md_html(md), "modelo": modelo, "custo": custo_uso(custo)}
+    except Exception as ex:  # noqa: BLE001
+        print("Pergunte:", repr(ex)[:300], flush=True)
+        res = {"ok": False, "erro": str(ex)[:400]}
+    PERGUNTAS[lg] = {"status": "pronto", "res": res}
+
+
 def pg_pergunte():
     hist = assistente.conversa(login_atual())
     bolhas = "".join(
@@ -2462,12 +2475,17 @@ function enviar(ev){{if(ev&&ev.preventDefault)ev.preventDefault(); if(ocupado)re
  const t=document.getElementById('perg'); const q=t.value.trim(); if(!q)return false;
  ocupado=true; document.getElementById('bt').disabled=true; t.value='';
  const ch=document.querySelector('.chips-s'); if(ch)ch.remove();
- bolha('voce','<div>'+esc(q)+'</div>'); const p=bolha('ia','<div class="pensando">🤖 Pensando… (pode levar até 1 minuto)</div>');
- fetch('/pergunte/enviar',{{method:'POST',credentials:'same-origin',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
-  body:'csrf={CSRF}&pergunta='+encodeURIComponent(q)}}).then(r=>r.json()).then(j=>{{
-   p.innerHTML=j.ok?'<div class="analise">'+j.html+'</div><small>'+esc(j.modelo||'')+' '+(j.custo||'')+'</small>':'<div class="msg erro">'+esc(j.erro||'Erro')+'</div>';
-   rolar();}}).catch(()=>{{p.innerHTML='<div class="msg erro">Não consegui falar com o servidor.</div>';}})
-  .finally(()=>{{ocupado=false;document.getElementById('bt').disabled=false;t.focus();}});
+ bolha('voce','<div>'+esc(q)+'</div>'); const p=bolha('ia','<div class="pensando">🤖 Pensando…</div>');
+ const post=(url,corpo)=>fetch(url,{{method:'POST',credentials:'same-origin',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
+  body:'csrf={CSRF}'+(corpo||'')}}).then(r=>r.json());
+ const fim=()=>{{ocupado=false;document.getElementById('bt').disabled=false;t.focus();}};
+ const mostrar=j=>{{p.innerHTML=j.ok?'<div class="analise">'+j.html+'</div><small>'+esc(j.modelo||'')+' '+(j.custo||'')+'</small>':'<div class="msg erro">'+esc(j.erro||'Erro')+'</div>';rolar();fim();}};
+ let falhas=0;
+ const consultar=()=>post('/pergunte/estado').then(j=>{{falhas=0;
+   if(j.pensando){{p.innerHTML='<div class="pensando">🤖 Pensando… '+(j.seg||0)+' s'+((j.seg||0)>40?' – a IA está lenta agora, aguarde (desiste sozinha em 2 min)':'')+'</div>';setTimeout(consultar,2000);}}
+   else mostrar(j);}}).catch(()=>{{if(++falhas<5)setTimeout(consultar,3000);else{{p.innerHTML='<div class="msg erro">Não consegui falar com o servidor.</div>';fim();}}}});
+ post('/pergunte/enviar','&pergunta='+encodeURIComponent(q)).then(j=>{{if(j.pensando)setTimeout(consultar,1500);else mostrar(j);}})
+  .catch(()=>{{p.innerHTML='<div class="msg erro">Não consegui falar com o servidor.</div>';fim();}});
  return false;}}
 rolar(); document.getElementById('perg').focus();
 </script>"""
@@ -4031,7 +4049,7 @@ class Painel(BaseHTTPRequestHandler):
         usuarios.auditar(u["login"] if u else "-", self.ip(), acao, detalhe)
 
     def negar(self, motivo):
-        if self.command == "POST" and self.path.startswith(("/pergunte/enviar",)):
+        if self.command == "POST" and self.path.startswith(("/pergunte/enviar", "/pergunte/estado")):
             dados = json.dumps({"ok": False, "erro": motivo}, ensure_ascii=False).encode()
             self.send_response(403)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -4482,7 +4500,7 @@ class Painel(BaseHTTPRequestHandler):
             return
         if p.startswith("/admin/empresas"):
             p = p[6:]
-        if not p.startswith(("/mensagens/lidas", "/pergunte/enviar")):
+        if not p.startswith(("/mensagens/lidas", "/pergunte/enviar", "/pergunte/estado")):
             self.auditar("ação " + p, ", ".join(f"{k}={str(v)[:40]}" for k, v in f.items()
                                                 if k not in ("csrf", "nova", "nova2", "atual", "md") and not re.search(r"senha|token|key|pass|secret|chave", k, re.I)))
         try:
@@ -4630,15 +4648,28 @@ class Painel(BaseHTTPRequestHandler):
                 v["IA_COBRAR"] = "1" if f.get("IA_COBRAR") else "0"
                 gravar_env(CONFIG, v)
                 return self.redirecionar("/consumo?ok=custos")
-            if p == "/pergunte/enviar":
-                perg = f.get("pergunta", "").strip()[:2000]
-                try:
+            if p in ("/pergunte/enviar", "/pergunte/estado"):
+                lg = login_atual()
+                if p == "/pergunte/enviar":
+                    perg = f.get("pergunta", "").strip()[:2000]
                     if not perg:
-                        raise RuntimeError("Escreva uma pergunta.")
-                    md, modelo, custo = assistente.perguntar(cfg_ia(), perg, login_atual(), nomes_permitidos(), ve_analise)
-                    res = {"ok": True, "html": analise.md_html(md), "modelo": modelo, "custo": custo_uso(custo)}
-                except Exception as ex:  # noqa: BLE001
-                    res = {"ok": False, "erro": str(ex)[:400]}
+                        res = {"ok": False, "erro": "Escreva uma pergunta."}
+                    elif PERGUNTAS.get(lg, {}).get("status") == "pensando":
+                        res = {"ok": True, "pensando": True}
+                    else:
+                        PERGUNTAS[lg] = {"status": "pensando", "inicio": time.time()}
+                        args = (cfg_ia(), perg, lg, nomes_permitidos(), ve_analise)
+                        threading.Thread(target=responder_pergunta, args=args, daemon=True).start()
+                        res = {"ok": True, "pensando": True}
+                else:
+                    j = PERGUNTAS.get(lg) or {}
+                    if j.get("status") == "pensando":
+                        res = {"ok": True, "pensando": True, "seg": int(time.time() - j["inicio"])}
+                    elif j:
+                        res = dict(j.get("res") or {"ok": False, "erro": "Erro"})
+                        PERGUNTAS.pop(lg, None)
+                    else:
+                        res = {"ok": False, "erro": "Nenhuma pergunta em andamento."}
                 dados = json.dumps(res, ensure_ascii=False).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
