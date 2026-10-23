@@ -1645,6 +1645,7 @@ def html_mapa(lista, sedes, base, raio, link, rot_nivel):
     resumo = (f'{len(pinos)} cidade(s) · {sum(p["n"] for p in pinos)} licitação(ões)'
               + (f' · {sem_local} sem localização' if sem_local else ""))
     return f"""<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
 <style>
 .mapa-box{{background:var(--card);border:1px solid var(--borda);border-radius:12px;overflow:hidden;margin:12px 0}}
 .mapa-cab{{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--borda)}}
@@ -1662,6 +1663,11 @@ def html_mapa(lista, sedes, base, raio, link, rot_nivel):
 .pino .nova{{position:absolute;top:-6px;right:-6px;background:#e53935;color:#fff;border-radius:999px;font:700 10px system-ui;padding:2px 5px;
  border:2px solid #fff;animation:pulsar 1.6s infinite}}
 .sede{{font-size:26px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.4))}}
+.grupo{{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font:800 14px system-ui;
+ background:radial-gradient(circle at 30% 30%,#66bb6a,#1b5e20);border:3px solid rgba(255,255,255,.9);box-shadow:0 0 0 6px rgba(46,125,50,.25),0 4px 12px rgba(0,0,0,.35)}}
+.grupo.g2{{width:54px;height:54px;font-size:15px}}.grupo.g3{{width:64px;height:64px;font-size:16px}}
+.grupo small{{display:block;font-size:9px;font-weight:600;opacity:.9;text-align:center;line-height:1}}
+.mapa-escuro .leaflet-tile-pane{{filter:invert(1) hue-rotate(180deg) brightness(.9) contrast(.9)}}
 .pop h4{{margin:0 0 4px}}.pop ul{{margin:6px 0;padding-left:16px;max-height:220px;overflow:auto}}.pop li{{margin-bottom:6px;font-size:12px}}
 .pop .ponto{{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}}
 </style>
@@ -1669,6 +1675,7 @@ def html_mapa(lista, sedes, base, raio, link, rot_nivel):
 <div class="mapa-bts"><button type="button" class="sec" id="btMin" onclick="mapaMin()">— Minimizar</button>
 <button type="button" class="sec" id="btMax" onclick="mapaMax()">⤢ Maximizar</button></div></div><div id="mapa"></div></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script>
 (function(){{
 const D={dados};
@@ -1678,10 +1685,18 @@ const esc=t=>String(t||'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'
 const cor={{alto:'#2e7d32',medio:'#ef6c00',baixo:'#607d8b'}};
 function criar(){{
  if(mapa||typeof L==='undefined')return;
- mapa=L.map('mapa',{{zoomControl:true,scrollWheelZoom:true}}).setView([-14.5,-51],4);
+ mapa=L.map('mapa',{{zoomControl:true,scrollWheelZoom:true,minZoom:3,maxBounds:[[-40,-85],[10,-25]]}}).setView([-14.5,-51],4);
  const escuro=document.documentElement.dataset.theme==='dark'||(!document.documentElement.dataset.theme&&matchMedia('(prefers-color-scheme: dark)').matches);
- L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/'+(escuro?'dark_all':'voyager')+'/{{z}}/{{x}}/{{y}}{{r}}.png',
-   {{maxZoom:18,attribution:'&copy; OpenStreetMap &copy; CARTO'}}).addTo(mapa);
+ if(escuro)box.classList.add('mapa-escuro');
+ L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
+   {{maxZoom:18,referrerPolicy:'strict-origin-when-cross-origin',attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'}}).addTo(mapa);
+ // agrupa pinos próximos (somando as licitações) para não amontoar quando o mapa está afastado
+ const camada=L.markerClusterGroup?L.markerClusterGroup({{maxClusterRadius:45,showCoverageOnHover:false,
+   iconCreateFunction:c=>{{const t=c.getAllChildMarkers().reduce((a,m)=>a+(m.options.qtd||0),0);
+    const k=t>=100?' g3':t>=20?' g2':'';
+    return L.divIcon({{className:'',iconSize:null,html:'<div class="grupo'+k+'"><div>'+t+'<small>licit.</small></div></div>'}});}}}}):L.layerGroup();
+ camada.addTo(mapa);
+ const noBrasil=(la,lo)=>la>-35&&la<7&&lo>-75&&lo<-28;
  const pts=[];
  D.pinos.forEach(p=>{{
   const g=p.n>=10?' grande':'';
@@ -1689,7 +1704,8 @@ function criar(){{
    html:'<div class="pino '+p.nv+g+'"><div class="gota"></div><b>'+p.n+'</b>'+(p.novas?'<span class="nova">'+p.novas+' nova'+(p.novas>1?'s':'')+'</span>':'')+'</div>'}});
   const lis=p.it.map(i=>'<li><span class="ponto" style="background:'+(cor[i.nv]||'#999')+'"></span><b>'+esc(i.o)+'</b><br>'+esc(i.t)+
     '<br>'+esc(i.v)+(i.f?' · até '+esc(i.f):'')+(i.l?' · <a href="'+esc(i.l)+'" target="_blank" rel="noopener">edital</a>':'')+'</li>').join('');
-  L.marker([p.lat,p.lon],{{icon:ic,title:p.c+'/'+p.uf+': '+p.n}}).addTo(mapa).bindPopup(
+  if(!noBrasil(p.lat,p.lon))return;
+  L.marker([p.lat,p.lon],{{icon:ic,qtd:p.n,title:p.c+'/'+p.uf+': '+p.n}}).addTo(camada).bindPopup(
    '<div class="pop"><h4>'+esc(p.c)+'/'+esc(p.uf)+'</h4><div>'+p.n+' licitação(ões) aberta(s)'+(p.km!=null?' · '+p.km+' km':'')+'</div><ul>'+lis+'</ul>'+
    '<a href="'+esc(p.url)+'">Ver só esta cidade na lista →</a></div>',{{maxWidth:320}});
   pts.push([p.lat,p.lon]);}});
@@ -1697,7 +1713,8 @@ function criar(){{
   L.marker([b.lat,b.lon],{{icon:L.divIcon({{className:'',html:'<div class="sede">🏠</div>',iconSize:[28,28],iconAnchor:[14,24]}}),
     title:b.n,zIndexOffset:1000}}).addTo(mapa).bindPopup('<b>'+esc(b.n)+'</b><br>Sede: '+esc(b.c));
   if(b.on&&D.raio){{L.circle([b.lat,b.lon],{{radius:D.raio*1000,color:'#1565c0',weight:2,fillOpacity:.06}}).addTo(mapa); pts.push([b.lat,b.lon]);}}}});
- if(pts.length)mapa.fitBounds(pts,{{padding:[40,40],maxZoom:9}});
+ const ajustar=()=>{{mapa.invalidateSize(); if(pts.length)mapa.fitBounds(pts,{{padding:[40,40],maxZoom:9}});}};
+ setTimeout(ajustar,60);
 }}
 window.mapaMax=function(){{box.classList.remove('min');const m=box.classList.toggle('max');
  document.getElementById('btMax').textContent=m?'✕ Fechar tela cheia':'⤢ Maximizar';
@@ -2214,7 +2231,7 @@ class Painel(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy",
                          "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; "
                          "style-src 'self' 'unsafe-inline' https://unpkg.com; "
-                         "img-src 'self' data: https://unpkg.com https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org; "
+                         "img-src 'self' data: https://unpkg.com https://tile.openstreetmap.org https://*.tile.openstreetmap.org; "
                          "connect-src 'self'; frame-ancestors 'none'; form-action 'self'; "
                          "base-uri 'none'; object-src 'none'")
         if self.https():
