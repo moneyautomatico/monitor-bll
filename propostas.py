@@ -170,7 +170,7 @@ def montar(p, ctx):
     """Blocos no formato de documentos.html/docx."""
     itens, total = calcular(p)
     c = {**PADRAO_COND, **(p.get("cond") or {})}
-    b = p.get("banco") or {}
+    b = {k: (p.get("banco") or {}).get(k) or ctx.get(k, "") for k in ("banco", "agencia", "conta", "pix")}   # vazio = o da empresa
     tem_marca = any((i.get("marca") or "").strip() for i in itens)
     cab = ["Item", "Descrição"] + (["Marca/Modelo"] if tem_marca else []) + ["Unid.", "Qtd.", "Valor unit. (R$)", "Valor total (R$)"]
     larg = [600, 3500 if tem_marca else 4700] + ([1200] if tem_marca else []) + [700, 800, 1300, 1400]

@@ -50,8 +50,8 @@ def gerar():
         for n in ARQUIVOS_SOLTOS:
             if (PASTA / n).exists():
                 tar.add(PASTA / n, arcname=n)
-        for extra in list(PASTA.glob("urgente_palavras_*.txt")) + list(PASTA.glob("analise_*_*.txt")):
-            tar.add(extra, arcname=extra.name)
+        for extra in list(PASTA.glob("urgente_palavras_*.txt")) + list(PASTA.glob("analise_*_*.txt")) + list(PASTA.glob("logos/*")):
+            tar.add(extra, arcname=str(extra.relative_to(PASTA)))
         emp = PASTA / "empresas"
         if emp.exists():
             for env in emp.glob("*.env"):

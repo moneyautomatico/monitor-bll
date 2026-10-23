@@ -15,7 +15,9 @@ ARQ = PASTA / "dados_empresas.json"
 MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
          "novembro", "dezembro"]
 PORTES = {"ME": "MICROEMPRESA (ME)", "EPP": "EMPRESA DE PEQUENO PORTE (EPP)", "": ""}
-CAMPOS = ["cnpj", "razao", "endereco", "cidade", "porte", "rep_nome", "rep_cpf", "rep_cargo"]
+CAMPOS = ["cnpj", "razao", "endereco", "cidade", "porte", "rep_nome", "rep_cpf", "rep_cargo",
+          "ie", "im", "telefone", "email", "rep_rg", "banco", "agencia", "conta", "pix", "timbrado"]
+DIR_LOGOS = PASTA / "logos"
 
 
 # ------------------------------------------------------------------ dados da empresa
@@ -33,9 +35,67 @@ def dados(nome):
 
 def salvar_dados(nome, valores):
     tudo = _ler()
-    tudo[nome] = {k: str(valores.get(k, "")).strip()[:300] for k in CAMPOS}
+    atual = tudo.get(nome, {})
+    # campo que não veio no formulário mantém o valor que já estava
+    tudo[nome] = {k: str(valores[k] if k in valores else atual.get(k, "")).strip()[:300] for k in CAMPOS}
     ARQ.write_text(json.dumps(tudo, ensure_ascii=False, indent=1), encoding="utf-8")
     ARQ.chmod(0o600)
+
+
+def _chave_logo(nome):
+    import hashlib
+    return hashlib.sha256((nome or "").upper().encode()).hexdigest()[:16]
+
+
+def tamanho_img(dados):
+    """(largura, altura) de PNG ou JPEG sem bibliotecas."""
+    if dados[:8] == b"\x89PNG\r\n\x1a\n":
+        return int.from_bytes(dados[16:20], "big"), int.from_bytes(dados[20:24], "big")
+    if dados[:2] == b"\xff\xd8":
+        i = 2
+        while i < len(dados) - 9:
+            if dados[i] != 0xFF:
+                i += 1
+                continue
+            marca = dados[i + 1]
+            if marca in (0xC0, 0xC1, 0xC2):
+                return int.from_bytes(dados[i + 7:i + 9], "big"), int.from_bytes(dados[i + 5:i + 7], "big")
+            i += 2 + int.from_bytes(dados[i + 2:i + 4], "big")
+    return None
+
+
+def salvar_logo(nome, dados):
+    tam = tamanho_img(dados or b"")
+    if not tam or not all(tam):
+        raise ValueError("Envie a logo em PNG ou JPG.")
+    if len(dados) > 2 * 1024 * 1024:
+        raise ValueError("A logo pode ter no máximo 2 MB.")
+    DIR_LOGOS.mkdir(exist_ok=True)
+    ext = "png" if dados[:4] == b"\x89PNG" else "jpg"
+    for a in DIR_LOGOS.glob(_chave_logo(nome) + ".*"):
+        a.unlink()
+    (DIR_LOGOS / f"{_chave_logo(nome)}.{ext}").write_bytes(dados)
+
+
+def logo(nome):
+    """(bytes, extensão) da logo da empresa, ou (None, '')."""
+    for a in DIR_LOGOS.glob(_chave_logo(nome) + ".*") if DIR_LOGOS.exists() else []:
+        return a.read_bytes(), a.suffix[1:]
+    return None, ""
+
+
+def remover_logo(nome):
+    for a in DIR_LOGOS.glob(_chave_logo(nome) + ".*") if DIR_LOGOS.exists() else []:
+        a.unlink()
+
+
+def linha_rodape(ctx):
+    return " · ".join(x for x in [ctx.get("razao"), f"CNPJ {fmt_cnpj(ctx.get('cnpj'))}" if ctx.get("cnpj") else "",
+                                  ctx.get("endereco"), ctx.get("telefone"), ctx.get("email")] if x)
+
+
+def timbrado(ctx):
+    return ctx.get("timbrado", "1") != "0" and bool(ctx.get("razao"))
 
 
 def fmt_cnpj(c):
@@ -65,7 +125,10 @@ def consultar_cnpj(cnpj):
     adm = next((s for s in j.get("qsa") or [] if re.search(r"administrador|titular|presidente|diretor",
                                                             s.get("qualificacao_socio", ""), re.I)), None)
     adm = adm or (j.get("qsa") or [None])[0]
-    return {"cnpj": fmt_cnpj(n), "razao": (j.get("razao_social") or "").upper(), "endereco": end,
+    tel = re.sub(r"\D", "", j.get("ddd_telefone_1") or "")
+    tel = f"({tel[:2]}) {tel[2:-4]}-{tel[-4:]}" if len(tel) >= 10 else ""
+    return {"telefone": tel, "email": (j.get("email") or "").lower(),
+            "cnpj": fmt_cnpj(n), "razao": (j.get("razao_social") or "").upper(), "endereco": end,
             "cidade": f"{(j.get('municipio') or '').title()}/{j.get('uf') or ''}", "porte": porte,
             "rep_nome": (adm or {}).get("nome_socio", "").upper(),
             "rep_cargo": "Sócio-Administrador" if adm and "socio" in (adm.get("qualificacao_socio", "").lower()
@@ -200,10 +263,16 @@ def _tabela_html(t):
     return '<table class="tab-doc">' + "".join(linhas) + "</table>"
 
 
-def html(docs, ctx):
+def html(docs, ctx, logo_url=""):
     folhas = []
+    timbre = ""
+    if timbrado(ctx):
+        timbre = ('<div class="timbre">' + (f'<img src="{escape(logo_url)}" alt="">' if logo_url else "") +
+                  f'<div><b>{escape(ctx.get("razao") or "")}</b><br><small>CNPJ {escape(fmt_cnpj(ctx.get("cnpj")))}'
+                  + (f' · IE {escape(ctx["ie"])}' if ctx.get("ie") else "") + "</small></div></div>")
+    rodape = f'<div class="rodape-doc">{escape(linha_rodape(ctx))}</div>' if timbrado(ctx) else ""
     for _, blocos in docs:
-        partes = []
+        partes = [timbre] if timbre else []
         for tipo, txt in blocos:
             if tipo == "titulo":
                 partes.append(f'<h2>{escape(txt)}</h2>')
@@ -222,8 +291,15 @@ def html(docs, ctx):
             else:
                 cls = "item" if tipo == "item" else "corpo"
                 partes.append(f'<p class="{cls}">{_neg_html(txt)}</p>')
-        folhas.append('<div class="folha" contenteditable="true" spellcheck="false">' + "".join(partes) + "</div>")
+        folhas.append('<div class="folha" contenteditable="true" spellcheck="false">' + "".join(partes) + rodape + "</div>")
     return "".join(folhas)
+
+
+def css_impressao(ctx):
+    """Rodapé com dados da empresa e 'Página X de Y' em cada página impressa (Chrome/Edge)."""
+    txt = linha_rodape(ctx).replace("\\", "").replace('"', "'") if timbrado(ctx) else ""
+    return ("@page{@bottom-left{content:\"" + txt + "\";font:8pt Arial;color:#555}"
+            "@bottom-right{content:\"Página \" counter(page) \" de \" counter(pages);font:8pt Arial;color:#555;width:32mm;white-space:nowrap}}")
 
 
 # ------------------------------------------------------------------ saída Word (.docx) feita à mão
@@ -277,7 +353,52 @@ def _tabela_docx(t):
     return "".join(out) + "</w:tbl>"
 
 
-def docx(docs, ctx):
+def _cabecalho_docx(ctx, img):
+    """header1.xml: logo à esquerda + razão social/CNPJ à direita, com linha embaixo."""
+    w_ns = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+            'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+            'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"')
+    figura = ""
+    if img:
+        w, h = img[2]
+        alt = 540000   # 1,5 cm
+        larg = min(int(alt * w / h), 2160000)   # no máximo 6 cm
+        alt = int(larg * h / w)
+        figura = (f'<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{larg}" cy="{alt}"/>'
+                  '<wp:docPr id="1" name="Logo"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+                  f'<pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="logo.{img[1]}"/><pic:cNvPicPr/></pic:nvPicPr>'
+                  '<pic:blipFill><a:blip r:embed="rIdLogo"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+                  f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{larg}" cy="{alt}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+                  '</pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>')
+    texto = (_runs(f"**{ctx.get('razao') or ''}**").replace("<w:rPr>", '<w:rPr><w:sz w:val="22"/>') +
+             '<w:r><w:br/></w:r>' + _runs(f"CNPJ {fmt_cnpj(ctx.get('cnpj'))}" + (f" · IE {ctx['ie']}" if ctx.get("ie") else ""))
+             .replace("<w:rPr>", '<w:rPr><w:sz w:val="16"/><w:color w:val="555555"/>'))
+    sem = '<w:tblBorders>' + "".join(f'<w:{x} w:val="nil"/>' for x in ("top", "left", "right", "insideH", "insideV")) + \
+          '<w:bottom w:val="single" w:sz="8" w:space="0" w:color="1B3A2A"/></w:tblBorders>'
+    tabela = (f'<w:tbl><w:tblPr><w:tblW w:w="9071" w:type="dxa"/>{sem}<w:tblLayout w:type="fixed"/></w:tblPr>'
+              '<w:tblGrid><w:gridCol w:w="3400"/><w:gridCol w:w="5671"/></w:tblGrid><w:tr>'
+              f'<w:tc><w:tcPr><w:tcW w:w="3400" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:spacing w:after="60"/></w:pPr>{figura}</w:p></w:tc>'
+              f'<w:tc><w:tcPr><w:tcW w:w="5671" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:spacing w:after="60"/><w:jc w:val="right"/></w:pPr>{texto}</w:p></w:tc>'
+              '</w:tr></w:tbl><w:p><w:pPr><w:spacing w:after="0"/></w:pPr></w:p>')
+    return f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr {w_ns}>{tabela}</w:hdr>'
+
+
+def _rodape_docx(ctx):
+    pq = '<w:rPr><w:sz w:val="15"/><w:color w:val="555555"/></w:rPr>'
+    linha = escape(linha_rodape(ctx), quote=False)
+    pag = (f'<w:r>{pq}<w:t xml:space="preserve">Página </w:t></w:r><w:fldSimple w:instr="PAGE"><w:r>{pq}<w:t>1</w:t></w:r></w:fldSimple>'
+           f'<w:r>{pq}<w:t xml:space="preserve"> de </w:t></w:r><w:fldSimple w:instr="NUMPAGES"><w:r>{pq}<w:t>1</w:t></w:r></w:fldSimple>')
+    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:space="4" w:color="999999"/></w:pBdr><w:spacing w:after="0"/>'
+            f'<w:jc w:val="center"/></w:pPr><w:r>{pq}<w:t xml:space="preserve">{linha}</w:t></w:r></w:p>'
+            f'<w:p><w:pPr><w:spacing w:after="0"/><w:jc w:val="right"/></w:pPr>{pag}</w:p></w:ftr>')
+
+
+def docx(docs, ctx, logo_img=None):
+    """logo_img = (bytes, 'png'|'jpg') opcional."""
     corpo = []
     for n, (_, blocos) in enumerate(docs):
         primeiro = True
@@ -303,9 +424,11 @@ def docx(docs, ctx):
             else:
                 corpo.append(_par(txt, "both", recuo=(tipo == "p"), quebra=q))
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-           '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+           '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+           'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>'
            + "".join(corpo) +
-           '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1701" w:right="1134" w:bottom="1134" '
+           ('<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/><w:footerReference w:type="default" r:id="rIdF"/>'
+              if timbrado(ctx) else '<w:sectPr>') + '<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1701" w:right="1134" w:bottom="1134" '
            'w:left="1701" w:header="709" w:footer="709" w:gutter="0"/></w:sectPr></w:body></w:document>')
     estilos = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults>'
@@ -316,8 +439,11 @@ def docx(docs, ctx):
              '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
              '<Default Extension="xml" ContentType="application/xml"/>'
              '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+             '<Default Extension="png" ContentType="image/png"/><Default Extension="jpg" ContentType="image/jpeg"/>'
              '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
-             '</Types>')
+             + ('<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>'
+                '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>'
+                if timbrado(ctx) else "") + '</Types>')
     rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
             '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
@@ -325,7 +451,12 @@ def docx(docs, ctx):
     doc_rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
                 '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
-                '</Relationships>')
+                + ('<Relationship Id="rIdH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>'
+                   '<Relationship Id="rIdF" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>'
+                   if timbrado(ctx) else "") + '</Relationships>')
+    img = None
+    if logo_img and logo_img[0] and tamanho_img(logo_img[0]):
+        img = (logo_img[0], logo_img[1], tamanho_img(logo_img[0]))
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", tipos)
@@ -333,4 +464,14 @@ def docx(docs, ctx):
         z.writestr("word/document.xml", doc)
         z.writestr("word/styles.xml", estilos)
         z.writestr("word/_rels/document.xml.rels", doc_rels)
+        if timbrado(ctx):
+            z.writestr("word/header1.xml", _cabecalho_docx(ctx, img))
+            z.writestr("word/footer1.xml", _rodape_docx(ctx))
+            if img:
+                z.writestr(f"word/media/logo.{img[1]}", img[0])
+                z.writestr("word/_rels/header1.xml.rels",
+                           '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                           '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                           '<Relationship Id="rIdLogo" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+                           f'Target="media/logo.{img[1]}"/></Relationships>')
     return buf.getvalue()

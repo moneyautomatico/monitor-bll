@@ -55,6 +55,7 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "pref_ajustes": "Ajustes salvos e aplicados nas suas empresas (monitores reiniciados).",
           "itens": "Itens trazidos. Confira com o edital e preencha os preços.",
           "avisos": "Teste enviado para o Telegram/ntfy do administrador.",
+          "doc_logo": "Logo da empresa atualizada.",
           "usuario_criado": "Usuário criado. Passe o login e a senha para a pessoa (de preferência pessoalmente ou por telefone).",
           "usuario_excluido": "Usuário excluído e desconectado.", "senha": "Senha trocada. Os seus outros aparelhos foram desconectados.",
           "senha_redefinida": "Senha redefinida e a pessoa foi desconectada dos aparelhos.",
@@ -1758,8 +1759,18 @@ def nomes_empresas():
     return out
 
 
+def logo_url(ctx):
+    nome = ctx.get("_empresa", "")
+    return ("/documentos/logo?" + urllib.parse.urlencode({"emp": nome})) if nome and documentos.logo(nome)[0] else ""
+
+
+def logo_img(ctx):
+    return documentos.logo(ctx.get("_empresa", ""))
+
+
 def dados_doc(nome, ids):
     d = documentos.dados(nome)
+    d["_empresa"] = nome
     if not d["cnpj"]:
         for eid in ids:
             c = ler_env(EMPRESAS / f"{eid}.env").get("EMPRESA_CNPJ", "")
@@ -1881,7 +1892,7 @@ def pg_documentos(q, aviso=""):
 <div class="acoes"><button {"disabled" if falta else ""} onclick="return enviar('/documentos/ver')">👁 Visualizar / imprimir (PDF)</button>
 <button class="sec" {"disabled" if falta else ""} onclick="return enviar('/documentos/docx')">⬇ Baixar Word (.docx)</button></div>
 </form></div>
-<h2 style="margin-top:22px">Dados da empresa <small class="sub">(usados em todas as declarações de {e(nome)})</small></h2>
+<h2 style="margin-top:22px" id="dados">Dados da empresa <small class="sub">(usados nas declarações, propostas e peças de {e(nome)})</small></h2>
 <div class="form" style="max-width:none">
 <form method="post" action="/documentos/dados"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="emp" value="{e(nome)}">
 <div class="linha" style="gap:8px;align-items:flex-end"><div style="flex:1"><label>CNPJ</label>
@@ -1894,8 +1905,28 @@ def pg_documentos(q, aviso=""):
 <div><label>Cargo do representante</label><input class="campo" name="rep_cargo" value="{g('rep_cargo')}" placeholder="Sócio-Administrador"></div>
 <div><label>Nome do representante legal</label><input class="campo" name="rep_nome" value="{g('rep_nome')}"></div>
 <div><label>CPF do representante</label><input class="campo" name="rep_cpf" value="{g('rep_cpf')}" placeholder="000.000.000-00"></div></div>
-<p class="sub">O CPF não vem da Receita: preencha à mão. Os dados ficam só no seu servidor.</p>
-<div class="acoes"><button>Salvar dados da empresa</button></div></form></div>
+<div class="duas"><div><label>RG do representante <small>(alguns editais pedem)</small></label><input class="campo" name="rep_rg" value="{g('rep_rg')}"></div>
+<div><label>Inscrição estadual</label><input class="campo" name="ie" value="{g('ie')}" placeholder="ou ISENTO"></div>
+<div><label>Inscrição municipal</label><input class="campo" name="im" value="{g('im')}"></div>
+<div><label>Telefone</label><input class="campo" name="telefone" value="{g('telefone')}" placeholder="(75) 99999-9999"></div>
+<div><label>E-mail comercial</label><input class="campo" name="email" value="{g('email')}" placeholder="licitacao@empresa.com.br"></div></div>
+<h3>Dados bancários <small class="sub">(vão para as propostas – dá para mudar em cada proposta)</small></h3>
+<div class="duas"><div><label>Banco</label><input class="campo" name="banco" value="{g('banco')}" placeholder="ex.: Banco do Brasil"></div>
+<div><label>PIX</label><input class="campo" name="pix" value="{g('pix')}"></div>
+<div><label>Agência</label><input class="campo" name="agencia" value="{g('agencia')}"></div>
+<div><label>Conta</label><input class="campo" name="conta" value="{g('conta')}"></div></div>
+<label class="dec" style="margin-top:10px"><input type="hidden" name="timbrado" value="0"><input type="checkbox" name="timbrado" value="1" {"checked" if ctx.get("timbrado", "1") != "0" else ""}>
+<b>Usar papel timbrado</b> (logo e dados da empresa no topo, rodapé com contato e “Página X de Y” em todos os documentos)</label>
+<p class="sub">CPF, RG, inscrições e banco não vêm da Receita: preencha à mão. Os dados ficam só no seu servidor.</p>
+<div class="acoes"><button>Salvar dados da empresa</button></div></form>
+<h3>Logo da empresa</h3>
+<div class="linha" style="gap:14px;align-items:center;flex-wrap:wrap">
+{f'<img src="{e(logo_url(ctx))}" alt="logo" style="max-height:60px;max-width:220px;background:#fff;padding:6px;border-radius:6px;border:1px solid var(--borda)">' if logo_url(ctx) else '<span class="sub">Nenhuma logo enviada.</span>'}
+<form method="post" action="/documentos/logo" enctype="multipart/form-data" class="linha" style="gap:8px;align-items:center">
+<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="emp" value="{e(nome)}">
+<input type="file" name="logo" accept="image/png,image/jpeg" required><button class="sec">Enviar logo</button></form>
+{f'<form method="post" action="/documentos/logo" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="emp" value="{e(nome)}"><input type="hidden" name="remover" value="1"><button class="sec">Remover logo</button></form>' if logo_url(ctx) else ''}</div>
+<p class="sub">PNG ou JPG, de preferência com fundo branco ou transparente (até 2 MB). Aparece no topo de declarações, propostas e peças.</p></div>
 <script>
 function marcar(v){{document.querySelectorAll('#fdoc input[name=d]').forEach(x=>{{if(!x.disabled)x.checked=v;}});}}
 function enviar(acao){{const f=document.getElementById('fdoc');
@@ -2074,11 +2105,11 @@ font:inherit;font-size:13px;padding:5px 6px;border:1px solid var(--borda);border
 <label>Prazo de entrega/execução</label><input class="campo" name="entrega" value="{e(c["entrega"])}">
 <label>Pagamento</label><input class="campo" name="pagamento" value="{e(c["pagamento"])}">
 <label>Garantia</label><input class="campo" name="garantia" value="{e(c["garantia"])}"></div>
-<div class="form" style="max-width:none"><h3 style="margin-top:0">Dados bancários <small class="sub">(opcional)</small></h3>
-<label>Banco</label><input class="campo" name="b_banco" value="{e(b.get("banco", ""))}">
-<div class="duas"><div><label>Agência</label><input class="campo" name="b_agencia" value="{e(b.get("agencia", ""))}"></div>
-<div><label>Conta</label><input class="campo" name="b_conta" value="{e(b.get("conta", ""))}"></div></div>
-<label>PIX</label><input class="campo" name="b_pix" value="{e(b.get("pix", ""))}">
+<div class="form" style="max-width:none"><h3 style="margin-top:0">Dados bancários <small class="sub">(vazio = os da empresa, em Declarações → Dados da empresa)</small></h3>
+<label>Banco</label><input class="campo" name="b_banco" value="{e(b.get("banco", ""))}" placeholder="{e(ctx.get("banco", "") or "")}">
+<div class="duas"><div><label>Agência</label><input class="campo" name="b_agencia" value="{e(b.get("agencia", ""))}" placeholder="{e(ctx.get("agencia", "") or "")}"></div>
+<div><label>Conta</label><input class="campo" name="b_conta" value="{e(b.get("conta", ""))}" placeholder="{e(ctx.get("conta", "") or "")}"></div></div>
+<label>PIX</label><input class="campo" name="b_pix" value="{e(b.get("pix", ""))}" placeholder="{e(ctx.get("pix", "") or "")}">
 <label>Observações <small>(saem no fim da proposta)</small></label><textarea class="campo" name="obs" rows="3" style="max-width:100%">{e(p.get("obs", ""))}</textarea></div></div>
 <div class="acoes"><button>💾 Salvar</button>
 <button class="sec" name="depois" value="ver" {"disabled" if falta else ""}>💾 Salvar e visualizar / PDF</button>
@@ -2135,7 +2166,7 @@ def baixar_proposta(handler, pid):
     p = propostas.ler(pid)
     ctx = ctx_proposta(p)
     docs, _ = propostas.montar(p, ctx)
-    dados = documentos.docx(docs, ctx)
+    dados = documentos.docx(docs, ctx, logo_img(ctx))
     nome_arq = re.sub(r"[^\w.-]+", "_", f"Proposta_{p.get('processo') or 'processo'}_{ctx.get('razao', '')[:30]}").strip("_") + ".docx"
     handler.send_response(200)
     handler.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -2154,7 +2185,7 @@ def pg_proposta_ver(pid):
         return pagina("Proposta", f'<h2>Não deu para gerar</h2><p>Faltam os dados da empresa: {e(", ".join(falta))}.</p>'
                       f'<p><a class="btn" href="/propostas/{pid}">Voltar</a></p>', "/documentos")
     docs, _ = propostas.montar(p, ctx)
-    return folhas_html(f"Proposta – {p.get('processo', '')}", documentos.html(docs, ctx), f"/propostas/{pid}/docx")
+    return folhas_html(f"Proposta – {p.get('processo', '')}", documentos.html(docs, ctx, logo_url(ctx)), f"/propostas/{pid}/docx", ctx)
 
 
 def abas_doc(atual):
@@ -2249,22 +2280,8 @@ def pg_peca_ver(pid):
     d = pecas.ler(pid) or {}
     blocos = pecas.blocos_md(d.get("md", ""))
     titulo = pecas.TIPOS.get(d.get("tipo"), ("Peça", ""))[0]
-    corpo = documentos.html([(titulo, blocos)], {})
-    return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{e(titulo)}</title><style>
-body{{background:#e9edf0;margin:0;font-family:Arial,Helvetica,sans-serif;color:#111}}
-.barra{{position:sticky;top:0;background:#1b3a2a;color:#fff;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}}
-.barra button,.barra a{{background:#fff;color:#1b3a2a;border:0;border-radius:6px;padding:8px 14px;font-weight:700;cursor:pointer;text-decoration:none;font-size:14px}}
-.folha{{background:#fff;width:210mm;min-height:297mm;margin:16px auto;padding:30mm 20mm 20mm 30mm;box-sizing:border-box;
- box-shadow:0 2px 10px rgba(0,0,0,.15);font-size:12pt;line-height:1.6;outline:none}}
-.folha h2{{text-align:center;font-size:13pt;margin:10px 0 18px}}.folha h3{{font-size:12pt;margin:16px 0 6px}}
-.folha .corpo{{text-align:justify;text-indent:12.5mm;margin:0 0 8px}}.folha .item{{text-align:justify;margin:4px 0 4px 8mm}}
-@media print{{body{{background:#fff}}.barra{{display:none}}.folha{{margin:0;box-shadow:none;width:auto;min-height:0;padding:0}}
- @page{{size:A4;margin:30mm 20mm 20mm 30mm}}}}
-@media(max-width:820px){{.folha{{width:auto;margin:10px;padding:18px}}}}
-</style></head><body><div class="barra"><button onclick="window.print()">🖨 Imprimir / Salvar em PDF</button>
-<a href="/pecas/{e(pid)}/docx">⬇ Baixar Word</a><span style="font-size:13px">Rascunho – revise antes de protocolar.</span></div>
-{corpo}</body></html>"""
+    ctx = dados_doc(d.get("empresa", ""), nomes_empresas().get(d.get("empresa", ""), [])) if d.get("empresa") else {}
+    return folhas_html(titulo, documentos.html([(titulo, blocos)], ctx, logo_url(ctx)), f"/pecas/{pid}/docx", ctx)
 
 
 def pg_documentos_ver(q):
@@ -2274,11 +2291,12 @@ def pg_documentos_ver(q):
         return pagina("Declarações", f'<h2>Não deu para gerar</h2><p>Faltam: {e(", ".join(falta) or "declarações marcadas")}.</p>'
                       '<p><a class="btn" href="/documentos">Voltar</a></p>', "/documentos")
     url_docx = "/documentos/docx?" + urllib.parse.urlencode(q)
-    return folhas_html(f"Declarações – {ctx.get('razao', '')}", documentos.html(docs, ctx), url_docx)
+    return folhas_html(f"Declarações – {ctx.get('razao', '')}", documentos.html(docs, ctx, logo_url(ctx)), url_docx, ctx)
 
 
-def folhas_html(titulo, conteudo, url_docx):
-    """Página A4 para visualizar/imprimir em PDF (declarações, proposta)."""
+def folhas_html(titulo, conteudo, url_docx, ctx=None):
+    """Página A4 para visualizar/imprimir em PDF (declarações, proposta, peças) – com papel timbrado e nº de páginas."""
+    css_print = documentos.css_impressao(ctx or {})
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{e(titulo)}</title><style>
 body{{background:#e9edf0;margin:0;font-family:Arial,Helvetica,sans-serif;color:#111}}
@@ -2296,6 +2314,13 @@ body{{background:#e9edf0;margin:0;font-family:Arial,Helvetica,sans-serif;color:#
 .folha h3{{font-size:11pt;margin:16px 0 6px}}.tab-doc{{width:100%;border-collapse:collapse;font-size:9pt;line-height:1.35;margin:10px 0}}
 .tab-doc th,.tab-doc td{{border:1px solid #888;padding:3px 5px;vertical-align:top}}.tab-doc th{{background:#d9e2dc}}
 .tab-doc tr.grupo td{{background:#ededed}}
+.folha{{position:relative;padding-top:16mm}}.timbre{{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:2px solid #1b3a2a;
+ padding-bottom:6px;margin-bottom:14mm}}.timbre img{{max-height:15mm;max-width:60mm;object-fit:contain}}.timbre div{{text-align:right;font-size:10pt;line-height:1.35;margin-left:auto}}
+.timbre small{{color:#555;font-size:8pt}}.rodape-doc{{position:absolute;left:30mm;right:20mm;bottom:10mm;border-top:1px solid #999;padding-top:4px;
+ font-size:7.5pt;color:#555;text-align:center;line-height:1.3}}
+@media print{{.rodape-doc{{display:none}}.timbre{{margin-bottom:10mm}}.folha{{padding-top:0}}}}
+@media(max-width:820px){{.rodape-doc{{position:static;margin-top:20px}}}}
+{css_print}
 </style></head><body>
 <div class="barra"><button onclick="window.print()">🖨 Imprimir / Salvar em PDF</button><a href="{e(url_docx)}">⬇ Baixar Word</a>
 <span>Dica: clique no texto para corrigir algo antes de imprimir. No Chrome, escolha “Salvar como PDF”.</span></div>
@@ -4848,7 +4873,8 @@ class Painel(BaseHTTPRequestHandler):
                     return self.enviar(pg_peca_ver(m.group(1)))
                 if m.group(2) == "/docx":
                     d = pecas.ler(m.group(1)) or {}
-                    dados = documentos.docx([("peça", pecas.blocos_md(d.get("md", "")))], {})
+                    ctx_p = dados_doc(d.get("empresa", ""), nomes_empresas().get(d.get("empresa", ""), [])) if d.get("empresa") else {}
+                    dados = documentos.docx([("peça", pecas.blocos_md(d.get("md", "")))], ctx_p, logo_img(ctx_p))
                     nome_arq = re.sub(r"[^\w.-]+", "_", f"{d.get('tipo', 'peca')}_{d.get('titulo', '')[:40]}").strip("_") + ".docx"
                     self.send_response(200)
                     self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -4859,13 +4885,18 @@ class Painel(BaseHTTPRequestHandler):
                     self.wfile.write(dados)
                     return
                 return self.enviar(pg_peca(m.group(1)))
+            if p == "/documentos/logo":
+                dados_l, ext = documentos.logo(q.get("emp", "")) if q.get("emp", "") in nomes_empresas() else (None, "")
+                if not dados_l:
+                    return self.enviar(pagina("Logo", "<h2>Sem logo</h2>"), 404)
+                return self.baixar(dados_l, f"logo.{ext}", "image/png" if ext == "png" else "image/jpeg", True)
             if p == "/documentos/ver":
                 return self.enviar(pg_documentos_ver(q))
             if p == "/documentos/docx":
                 ctx, docs = gerar_docs(q)
                 if documentos.faltando(ctx) or not docs:
                     return self.redirecionar("/documentos")
-                dados = documentos.docx(docs, ctx)
+                dados = documentos.docx(docs, ctx, logo_img(ctx))
                 nome_arq = re.sub(r"[^\w.-]+", "_", f"Declaracoes_{ctx.get('processo') or 'processo'}_{ctx.get('razao', '')[:30]}").strip("_") + ".docx"
                 self.send_response(200)
                 self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -4994,6 +5025,27 @@ class Painel(BaseHTTPRequestHandler):
             if declaracoes:
                 return self.redirecionar("/documentos?" + urllib.parse.urlencode({"emp": nome, "proc": campos.get("proc", ""), "leitura": pid}))
             return self.redirecionar(f"/pecas/{pid}")
+        if self.path.rstrip("/") == "/documentos/logo":
+            if tam > 3 * 1024 * 1024:
+                return self.enviar(pagina("Erro", "<h2>Logo grande demais (máx. 2 MB).</h2>", "/documentos"), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido("/documentos/logo", campos):
+                return
+            nome = campos.get("emp", "")
+            if nome not in nomes_empresas():
+                return self.redirecionar("/documentos")
+            if campos.get("remover") == "1":
+                documentos.remover_logo(nome)
+            else:
+                arq = next((d for n, d in arqs if d), None)
+                try:
+                    documentos.salvar_logo(nome, arq or b"")
+                except ValueError as ex:
+                    return self.enviar(pg_documentos({"emp": nome}, e(str(ex))))
+            self.auditar("logo da empresa", nome)
+            return self.redirecionar("/documentos?" + urllib.parse.urlencode({"emp": nome, "ok": "doc_logo"}) + "#dados")
         m_pia = re.fullmatch(r"/propostas/([0-9a-f]{12})/ia", self.path.rstrip("/"))
         if m_pia:
             if tam > 40 * 1024 * 1024:
@@ -5360,7 +5412,9 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
             if p == "/documentos/dados":
                 nome = f.get("emp", "")
                 if nome in nomes_empresas():
-                    documentos.salvar_dados(nome, f)
+                    valores = dict(f)
+                    valores["timbrado"] = (multi.get("timbrado") or ["1"])[-1]   # caixa marcada manda "0" e "1": vale o último
+                    documentos.salvar_dados(nome, valores)
                 return self.redirecionar("/documentos?" + urllib.parse.urlencode({"emp": nome, "ok": "doc_dados"}))
             if p == "/documentos/cnpj":
                 nome = f.get("emp", "")
@@ -5371,8 +5425,9 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
                 except Exception as ex:  # noqa: BLE001
                     return self.enviar(pg_documentos({"emp": nome}, e(f"Não consegui consultar o CNPJ: {ex}")))
                 atual = documentos.dados(nome)
-                for k in ("rep_cpf",):           # o CPF não vem da Receita: mantém o digitado
-                    novo[k] = atual.get(k, "")
+                for k in documentos.CAMPOS:      # o que não vem da Receita (CPF, RG, IE, banco…) mantém o digitado
+                    if not novo.get(k):
+                        novo[k] = atual.get(k, "")
                 if atual.get("rep_nome") and not novo.get("rep_nome"):
                     novo["rep_nome"], novo["rep_cargo"] = atual["rep_nome"], atual.get("rep_cargo", "")
                 documentos.salvar_dados(nome, novo)
