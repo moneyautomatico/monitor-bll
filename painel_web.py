@@ -1552,6 +1552,7 @@ def pg_buscar(qs, aviso=""):
 <button>🔔 Salvar busca e avisar novas no Telegram</button></form>"""
         corpo += (f'<h3>{len(itens)} resultado(s) nesta página'
                   f'{" (de cerca de " + str(total) + " no PNCP)" if total else ""}</h3>' + salvar +
+                  mapa_busca(itens, qs) +
                   f'<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr))">'
                   f'{cards or "<p>Nada encontrado com esses filtros.</p>"}</div>' + nav)
     lista = buscas.salvas()
@@ -1610,13 +1611,13 @@ def sedes_empresas(nomes, cfg):
     return out
 
 
-def html_mapa(lista, sedes, base, raio, link, rot_nivel):
+def html_mapa(lista, sedes, base, raio, link, rot_nivel, titulo="Mapa das oportunidades"):
     """Mapa do Brasil (Leaflet) com um pino por cidade e a quantidade de licitações."""
     if not geo.cidades():
-        return ('<div class="mapa-box"><div class="mapa-cab"><b>🗺️ Mapa das oportunidades</b>'
+        return (f'<div class="mapa-box"><div class="mapa-cab"><b>🗺️ {e(titulo)}</b>'
                 '<span class="sub">baixando a lista de cidades do Brasil (só na 1ª vez)… recarregue em 1 minuto.</span></div></div>')
     grupos, sem_local = {}, 0
-    ordem = {"alto": 3, "medio": 2, "baixo": 1}
+    ordem = {"alto": 3, "medio": 2, "baixo": 1, "busca": 0}
     hoje = datetime.now().strftime("%Y-%m-%d")
     for r in lista:
         if not r.get("_pt"):
@@ -1624,7 +1625,7 @@ def html_mapa(lista, sedes, base, raio, link, rot_nivel):
             continue
         k = geo.chave(r.get("municipio"), r.get("uf"))
         g = grupos.setdefault(k, {"cidade": r.get("municipio") or "", "uf": r.get("uf") or "", "lat": r["_pt"][0],
-                                  "lon": r["_pt"][1], "n": 0, "nivel": "baixo", "novas": 0, "km": r.get("_km"), "itens": []})
+                                  "lon": r["_pt"][1], "n": 0, "nivel": r.get("nivel") or "baixo", "novas": 0, "km": r.get("_km"), "itens": []})
         g["n"] += 1
         g["novas"] += r.get("achada_em", "")[:10] == hoje
         if ordem.get(r.get("nivel"), 0) > ordem.get(g["nivel"], 0):
@@ -1657,7 +1658,7 @@ def html_mapa(lista, sedes, base, raio, link, rot_nivel):
 .pino{{position:relative;width:38px;height:38px}}
 .pino .gota{{position:absolute;inset:0;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 4px 10px rgba(0,0,0,.35);
  border:2px solid #fff;background:linear-gradient(135deg,#43a047,#1b5e20)}}
-.pino.medio .gota{{background:linear-gradient(135deg,#ffb300,#e65100)}}.pino.baixo .gota{{background:linear-gradient(135deg,#90a4ae,#455a64)}}
+.pino.medio .gota{{background:linear-gradient(135deg,#ffb300,#e65100)}}.pino.baixo .gota{{background:linear-gradient(135deg,#90a4ae,#455a64)}}.pino.busca .gota{{background:linear-gradient(135deg,#42a5f5,#0d47a1)}}
 .pino b{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font:800 13px system-ui;text-shadow:0 1px 2px rgba(0,0,0,.4)}}
 .pino.grande{{width:48px;height:48px}}.pino.grande b{{font-size:15px}}
 .pino .nova{{position:absolute;top:-6px;right:-6px;background:#e53935;color:#fff;border-radius:999px;font:700 10px system-ui;padding:2px 5px;
@@ -1671,7 +1672,7 @@ def html_mapa(lista, sedes, base, raio, link, rot_nivel):
 .pop h4{{margin:0 0 4px}}.pop ul{{margin:6px 0;padding-left:16px;max-height:220px;overflow:auto}}.pop li{{margin-bottom:6px;font-size:12px}}
 .pop .ponto{{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}}
 </style>
-<div class="mapa-box" id="mapaBox"><div class="mapa-cab"><b>🗺️ Mapa das oportunidades</b><span class="sub">{e(resumo)}</span>
+<div class="mapa-box" id="mapaBox"><div class="mapa-cab"><b>🗺️ {e(titulo)}</b><span class="sub">{e(resumo)}</span>
 <div class="mapa-bts"><button type="button" class="sec" id="btMin" onclick="mapaMin()">— Minimizar</button>
 <button type="button" class="sec" id="btMax" onclick="mapaMax()">⤢ Maximizar</button></div></div><div id="mapa"></div></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -1682,7 +1683,7 @@ const D={dados};
 const box=document.getElementById('mapaBox');
 let mapa=null;
 const esc=t=>String(t||'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}})[c]);
-const cor={{alto:'#2e7d32',medio:'#ef6c00',baixo:'#607d8b'}};
+const cor={{alto:'#2e7d32',medio:'#ef6c00',baixo:'#607d8b',busca:'#1565c0'}};
 function criar(){{
  if(mapa||typeof L==='undefined')return;
  mapa=L.map('mapa',{{zoomControl:true,scrollWheelZoom:true,minZoom:3,maxBounds:[[-40,-85],[10,-25]]}}).setView([-14.5,-51],4);
@@ -1901,6 +1902,29 @@ Avisar no Telegram geral as novas com encaixe alto</label>
 <div class="acoes"><button>Salvar e atualizar</button></div></form></div></details>
 <p class="sub" style="margin-top:18px">Fonte: PNCP – Portal Nacional de Contratações Públicas. Só leitura.</p>"""
     return pagina("Oportunidades", corpo, "/oportunidades", aviso)
+
+
+def mapa_busca(itens, qs):
+    """Mapa com os resultados desta página da busca (um pino por cidade, azul)."""
+    lista = []
+    for it in itens:
+        pt = geo.coord(it.get("municipio_nome"), it.get("uf"))
+        lista.append({"municipio": it.get("municipio_nome") or "", "uf": it.get("uf") or "", "_pt": pt, "_km": None,
+                      "nivel": "busca", "pontos": 0, "achada_em": "", "orgao": it.get("orgao_nome") or "",
+                      "objeto": it.get("description") or "", "titulo": it.get("title") or "",
+                      "valor": it.get("valor_total_estimado"), "link": buscas.link_pncp(it), "fim": it.get("data_fim_vigencia") or ""})
+    try:
+        nomes = sorted(oportunidades.ler().get("perfis", {}))
+        sedes = sedes_empresas(nomes, oportunidades.ler()["cfg"])
+    except Exception:  # noqa: BLE001
+        sedes = {}
+
+    def link(cidade="", pagina="", **_):
+        cid, uf = geo.separar(cidade)
+        base = [(k, v) for k, vs in qs.items() if k not in ("pagina", "municipio", "uf") for v in vs]
+        base += [("municipio", cid), ("uf", uf)]
+        return "/buscar?" + urllib.parse.urlencode(base)
+    return html_mapa(lista, sedes, "", 0, link, ROT_NIVEL, "Mapa dos resultados (esta página)")
 
 
 def busca_para_qs(b):
