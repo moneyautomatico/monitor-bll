@@ -3759,7 +3759,9 @@ def ntfy_em_uso(topico, login):
 def limpar_token(txt):
     """Aceita o token como vier colado: a mensagem inteira do BotFather, com o número virado link de telefone
     ([8775…](tel:8775…)), com espaços, quebras de linha ou crases."""
-    t = re.sub(r"\]\((?:tel:|https?://)[^)]*\)", "", txt or "")   # [123](tel:123) -> [123
+    t = unicodedata.normalize("NFKC", txt or "")   # ： (dois-pontos "largo") -> :
+    t = "".join(ch for ch in t if unicodedata.category(ch) not in ("Cf", "Cc") or ch in "\n\t")   # caracteres invisíveis
+    t = re.sub(r"\]\((?:tel:|https?://)[^)]*\)", "", t)   # [123](tel:123) -> [123
     t = re.sub(r"[\[\]`'\"<>]", " ", t)
     t = re.sub(r"\s*:\s*", ":", t)
     m = re.search(r"(?<![\w-])(\d{5,12}):([A-Za-z0-9_-]{30,60})(?![\w-])", t)
@@ -4753,6 +4755,10 @@ class Painel(BaseHTTPRequestHandler):
         if p == "/preferencias/bot":
             tok = limpar_token(f.get("tg_token", ""))
             if not tok:
+                bruto = f.get("tg_token", "")
+                forma = "".join("9" if c.isdigit() else "a" if c.isascii() and c.isalpha() else c if c.isascii() and c.isprintable()
+                                else f"<U+{ord(c):04X}>" for c in bruto)[:200]
+                print(f"Token recusado ({len(bruto)} caracteres), formato: {forma}", flush=True)   # sem o conteúdo
                 return self.enviar(pg_preferencias("Esse token não parece o do BotFather (formato 123456789:AAH…). Copie a linha inteira.", True))
             nome = nome_bot(tok)
             if not nome:
