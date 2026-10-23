@@ -22,7 +22,39 @@ import buscas
 PASTA = Path(__file__).resolve().parent
 DIR = PASTA / "analises"
 LIMITE_PDF = 18 * 1024 * 1024        # o Gemini aceita até ~20 MB por pedido
-MODELOS_PADRAO = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]
+# reserva, se a lista do Google não puder ser consultada (o Google aposenta modelos de tempos em tempos)
+MODELOS_PADRAO = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-2.5-flash"]
+_MODELOS_CACHE = {}
+
+
+def _versao(nome):
+    m = re.search(r"gemini-(\d+(?:\.\d+)?)", nome)
+    return float(m.group(1)) if m else 0.0
+
+
+def modelos_disponiveis(chave_api):
+    """Modelos 'flash' que a chave pode usar agora (consulta o Google; guarda 6 h). Mais novos primeiro."""
+    c = _MODELOS_CACHE.get(chave_api)
+    if c and time.time() - c[0] < 6 * 3600:
+        return c[1]
+    nomes = []
+    try:
+        url = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200"
+        req = urllib.request.Request(url, headers={"x-goog-api-key": chave_api})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            for m in json.load(r).get("models", []):
+                n = (m.get("name") or "").split("/")[-1]
+                if "generateContent" not in (m.get("supportedGenerationMethods") or []):
+                    continue
+                if "flash" not in n or re.search(r"image|tts|audio|live|embed|thinking|exp|preview", n):
+                    continue
+                nomes.append(n)
+    except Exception as ex:  # noqa: BLE001
+        print("analise: não listei os modelos do Gemini:", ex, flush=True)
+    # mais nova primeiro; 'lite' (mais fraco) depois do flash normal da mesma versão
+    nomes.sort(key=lambda n: (-_versao(n), "lite" in n, len(n)))
+    _MODELOS_CACHE[chave_api] = (time.time(), nomes)
+    return nomes
 EM_ANDAMENTO = set()
 TRAVA = threading.Lock()
 
@@ -247,12 +279,16 @@ def gemini(chave_api, modelo, partes, pedido):
     corpo = json.dumps({"contents": [{"role": "user", "parts": conteudo}],
                         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192}}).encode()
     erros = []
-    for m in [modelo] + [x for x in MODELOS_PADRAO if x != modelo]:
-        if not m:
+    fila = [modelo] + modelos_disponiveis(chave_api)[:4] + MODELOS_PADRAO
+    tentados = set()
+    while fila:
+        m = fila.pop(0)
+        if not m or m in tentados:
             continue
+        tentados.add(m)
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
         req = urllib.request.Request(url, corpo, {"Content-Type": "application/json", "x-goog-api-key": chave_api})
-        for tentativa in range(2):
+        for tentativa in range(3):
             try:
                 with urllib.request.urlopen(req, timeout=300) as r:
                     resp = json.load(r)
@@ -268,6 +304,12 @@ def gemini(chave_api, modelo, partes, pedido):
                 if ex.code == 429 and tentativa == 0:
                     time.sleep(30)
                     continue
+                if ex.code in (500, 503) and tentativa < 2:   # "muita demanda": espera e tenta de novo
+                    time.sleep(10 * (tentativa + 1))
+                    continue
+                if ex.code == 404:  # modelo aposentado: o próprio Google diz qual usar
+                    sug = re.findall(r"models/(gemini-[\w.-]+)", msg)
+                    fila[:0] = [x for x in sug if x not in tentados]
                 if ex.code in (400, 401, 403) and "API key" in msg:
                     raise RuntimeError("Chave do Gemini inválida. Confira em Configurações.") from ex
                 break

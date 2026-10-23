@@ -1428,7 +1428,7 @@ def pg_config(aviso=""):
 <p class="sub">Chave gratuita do Google Gemini: entre em <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>, faça login com uma conta Google e clique em “Create API key”.</p>
 <label>Chave do Gemini <small>({"configurada; " if c.get("GEMINI_API_KEY") else ""}deixe vazio para manter)</small></label>
 <input class="campo" type="password" name="GEMINI_API_KEY" autocomplete="off">
-<label>Modelo <small>(vazio = gemini-2.5-flash)</small></label><input class="campo" name="GEMINI_MODELO" value="{g('GEMINI_MODELO')}" placeholder="gemini-2.5-flash">
+<label>Modelo <small>(vazio = automático: usa o modelo “flash” mais novo que a sua chave tiver)</small></label><input class="campo" name="GEMINI_MODELO" value="{g('GEMINI_MODELO')}" placeholder="automático">
 <h3>Ritmo</h3>
 <label>Avisar se uma empresa ficar sem verificação por mais de (minutos)</label>
 <input class="campo" type="number" min="5" name="VIGIA_MINUTOS" value="{g('VIGIA_MINUTOS', '15')}">
