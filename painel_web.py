@@ -123,7 +123,7 @@ _REQ = threading.local()   # usuário da requisição atual
 ROTAS_ADMIN = ("/admin", "/config", "/consumo", "/backup", "/telegram", "/migrar", "/e/", "/oportunidades/config")
 DONO_PADRAO = next((k for k, v in usuarios.carregar().items() if v.get("criado_por") == "migração"), "")
 analise.GLOBAIS.add(DONO_PADRAO)
-ROTAS_ADM_LAYOUT = ("/admin", "/empresas", "/config")   # abas mostradas no layout da Área do administrador
+ROTAS_ADM_LAYOUT = ("/admin", "/empresas", "/config", "/preferencias")   # abas mostradas no layout da Área do administrador
 ROTAS_IA = ("/analise", "/pecas/gerar", "/pecas/declaracoes", "/pergunte/enviar", "/pergunte/estado")
 ROTAS_IA_RE = re.compile(r"/pecas/[0-9a-f]{14}/refazer|/propostas/[0-9a-f]{12}/ia")
 
@@ -2978,7 +2978,7 @@ const p=f.querySelector('.mostra-senha');if(p)p.textContent='Senha gerada: '+s+'
 def abas_admin(atual):
     return '<div class="adm-tab">' + "".join(
         f'<a href="{u}" class="{"on" if k == atual else ""}">{n}</a>' for k, u, n in (
-            ("usu", "/admin", "👥 Usuários"), ("aud", "/admin/auditoria", "📜 Auditoria"), ("emp", "/admin/empresas", "🏢 Empresas"),
+            ("usu", "/admin", "👥 Usuários"), ("avi", "/admin/preferencias", "📣 Meus avisos"), ("aud", "/admin/auditoria", "📜 Auditoria"), ("emp", "/admin/empresas", "🏢 Empresas"),
             ("cfg", "/config", "⚙️ Configurações"), ("ia", "/consumo", "💳 Consumo de IA"))) + "</div>"
 
 
@@ -3075,7 +3075,7 @@ têm custo por uso. Aqui aparecem só os <b>seus</b> usos. Os demais recursos do
 <h3>Por recurso</h3><table><tr><th>Recurso</th><th>Usos</th><th>Média por uso</th><th>Total</th></tr>{linhas_rec or '<tr><td colspan="4">Nenhum uso neste mês.</td></tr>'}</table>
 <h3>Quanto custa cada uso (estimativa)</h3><table><tr><th>Recurso</th><th>Valor por uso</th></tr>{tabela_valores}</table>
 <h3>Meus usos</h3><table><tr><th>Quando</th><th>Recurso</th><th class="ocultar">Empresa</th><th>Valor</th></tr>{linhas or '<tr><td colspan="4">—</td></tr>'}</table>"""
-    return pagina("Meu consumo de IA", corpo, "/preferencias")
+    return pagina("Meu consumo de IA", links_admin(corpo), "/preferencias")
 
 
 def pg_preferencias(aviso="", erro=False):
@@ -3206,7 +3206,19 @@ O texto “Sobre a empresa” e as instruções da análise ficam em <a href="/e
 {botao("/preferencias/sessoes", "🔌 Desconectar meus outros aparelhos", "sec", "Desconectar todos os seus outros aparelhos?")}</div></div>
 </div></div>
 <div class="form" style="max-width:none;margin-top:14px">{form_ajustes}</div>"""
-    return pagina("Minhas configurações", corpo, "/preferencias", aviso, erro)
+    if getattr(_REQ, "admin", False):
+        corpo = ESTILO_ADM + abas_admin("avi") + corpo.replace("Minhas configurações</h2>", "Meus avisos de administrador</h2>", 1)
+    return pagina("Minhas configurações", links_admin(corpo), "/preferencias", aviso, erro)
+
+
+def links_admin(corpo):
+    """Dentro da Área do administrador, os links e formulários do ⚙️ ficam em /admin/... (vale o login do admin, não o do painel)."""
+    if not getattr(_REQ, "admin", False):
+        return corpo
+    for de, para in (('"/preferencias', '"/admin/preferencias'), ('"/meu-consumo', '"/admin/meu-consumo'),
+                     ('href="/conta"', 'href="/admin"'), ('href="/empresas"', 'href="/admin/empresas"')):
+        corpo = corpo.replace(de, para)
+    return corpo
 
 
 def bot_html(u):
@@ -3239,7 +3251,7 @@ Telegram/ntfy de administrador. Os alertas das empresas continuam indo só para 
 {tag(ok_bk and est.get("ok", True), "cópia externa: " + (est.get("quando") or "aguardando o próximo backup (3h)"), "cópia externa NÃO está sendo enviada")}</div>
 <p class="sub">Último backup local: <b>{e(ult_local[2].strftime("%d/%m/%Y %H:%M")) if ult_local else "nenhum"}</b>
 {f" · último resultado: {e(est.get('msg', ''))}" if est.get("msg") else ""}</p>
-<div class="acoes"><a class="btn {"sec" if ok_tg and ok_nt else ""}" href="/preferencias" target="_blank">⚙️ Configurar meu bot e ntfy de administrador</a>
+<div class="acoes"><a class="btn {"sec" if ok_tg and ok_nt else ""}" href="/admin/preferencias">⚙️ Configurar meu bot e ntfy de administrador</a>
 <a class="btn sec" href="/config#backup">🔒 Senha e horário do backup</a>
 {botao("/admin/avisos/testar", "📨 Testar avisos", "sec")}</div>
 <p class="sub">Dica: crie no @BotFather um bot só para você (ex.: <i>licitatudo_admin_bot</i>) – não use o bot de um cliente.</p></div>"""
@@ -4682,7 +4694,7 @@ class Painel(BaseHTTPRequestHandler):
     def redirecionar(self, url):
         if not url.startswith("/") or url.startswith("//"):
             url = "/"
-        if getattr(_REQ, "admin", False) and url.startswith("/empresas"):
+        if getattr(_REQ, "admin", False) and url.startswith(("/empresas", "/preferencias", "/meu-consumo")):
             url = "/admin" + url
         self.send_response(303)
         self.send_header("Location", url)
@@ -4744,7 +4756,7 @@ class Painel(BaseHTTPRequestHandler):
         if not p.startswith(("/mensagens/processo", "/mensagens/busca", "/consumo.csv", "/meu-consumo.csv", "/backup/")) \
                 and not p.endswith(("/docx", "/arquivo", "/pacote")):
             marcar_presenca(self, self.path)
-        if p.startswith("/admin/empresas"):
+        if p.startswith(("/admin/empresas", "/admin/preferencias", "/admin/meu-consumo")):
             p = p[6:]
         try:
             if p == "/":
@@ -5037,7 +5049,7 @@ class Painel(BaseHTTPRequestHandler):
         p = urllib.parse.urlparse(self.path).path.rstrip("/")
         if not self.permitido(p, f):
             return
-        if p.startswith("/admin/empresas"):
+        if p.startswith(("/admin/empresas", "/admin/preferencias", "/admin/meu-consumo")):
             p = p[6:]
         if not p.startswith(("/mensagens/lidas", "/pergunte/enviar", "/pergunte/estado")):
             self.auditar("ação " + p, ", ".join(f"{k}={str(v)[:40]}" for k, v in f.items()
