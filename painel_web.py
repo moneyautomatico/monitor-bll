@@ -2705,7 +2705,12 @@ def pg_preferencias(aviso="", erro=False):
 <ol class="sub"><li>{f'<a class="btn" href="{e(link)}" target="_blank" rel="noopener">📲 Abrir meu bot no Telegram</a>' if link else 'Abra o seu bot no Telegram'} e toque em <b>Iniciar</b>
 {'' if link else f'(ou mande a mensagem <b>{e(cod)}</b>)'}.</li>
 <li>Volte aqui e clique: {botao("/preferencias/descobrir", "🔎 Já iniciei – encontrar minha conversa")}</li></ol>
-<p class="sub">Quer receber num <b>grupo</b>? Adicione o bot ao grupo e mande <b>{e(cod)}</b> no grupo antes de clicar.</p></div></div>"""
+<p class="sub">Quer receber num <b>grupo</b>? Adicione o bot ao grupo e mande <b>{e(cod)}</b> no grupo antes de clicar.</p>
+<details><summary class="sub" style="cursor:pointer">Não achou? Outras formas</summary>
+<form method="post" action="/preferencias/descobrir" class="linha-senha" style="margin:8px 0"><input type="hidden" name="csrf" value="{CSRF}">
+<input class="campo" name="chat_manual" placeholder="digite o chat_id (ex.: 123456789)" style="max-width:260px"><button class="sec">Usar este chat_id</button></form>
+<p class="sub">Se o bot também é usado em outro serviço (webhook), o Telegram não entrega as mensagens aqui:
+{botao("/preferencias/bot/webhook", "Desligar o outro serviço deste bot", "sec", "Desligar o webhook? Se este bot é usado em outro sistema, ele deixa de receber mensagens lá.")}</p></details></div></div>"""
         else:
             tg += f"""<div class="etapa">{ok_i}<div><b>Conversa ligada</b> <span class="sub">(chat {e(chat)})</span>
 {botao("/preferencias/descobrir", "Ligar outra conversa", "sec")}</div></div>"""
@@ -3789,20 +3794,45 @@ def codigo_telegram(login):
     return cod
 
 
-def achar_chat(tok, codigo):
-    """Acha o chat de quem mandou o código ao bot (sem mostrar as conversas das outras pessoas)."""
-    if not tok:
-        return None
+def tg_api(tok, metodo, **params):
+    """Chama a API do Telegram. Devolve (ok, resultado_ou_motivo)."""
+    url = f"https://api.telegram.org/bot{tok}/{metodo}"
+    dados = urllib.parse.urlencode(params).encode() if params else None
     try:
-        with urllib.request.urlopen(f"https://api.telegram.org/bot{tok}/getUpdates", timeout=20) as r:
-            dados = json.load(r)
-    except Exception:  # noqa: BLE001
-        return None
-    for u in reversed(dados.get("result", [])):
-        m = u.get("message") or u.get("channel_post") or {}
-        if codigo.lower() in (m.get("text") or "").lower() and (m.get("chat") or {}).get("id"):
-            return m["chat"]["id"]
-    return None
+        with urllib.request.urlopen(url, dados, timeout=20) as r:
+            j = json.load(r)
+    except urllib.error.HTTPError as ex:
+        try:
+            j = json.loads(ex.read().decode())
+        except Exception:  # noqa: BLE001
+            return False, f"HTTP {ex.code}"
+    except Exception as ex:  # noqa: BLE001
+        return False, str(ex)
+    return (True, j.get("result")) if j.get("ok") else (False, j.get("description") or "erro")
+
+
+def achar_chat(tok, codigo, candidatos=()):
+    """Acha a conversa de quem mandou o código ao bot. Devolve (chat_id, motivo_se_falhou).
+    Se o Telegram não entregar as mensagens (ex.: bot ligado a outro serviço por webhook), testa as conversas já
+    conhecidas deste usuário – o bot só consegue abrir uma conversa em que já foi iniciado."""
+    if not tok:
+        return None, "sem bot"
+    ok, res = tg_api(tok, "getUpdates", limit=100, timeout=0)
+    motivo = ""
+    if ok:
+        for u in reversed(res or []):
+            m = u.get("message") or u.get("channel_post") or u.get("edited_message") or {}
+            if codigo.lower() in (m.get("text") or "").lower() and (m.get("chat") or {}).get("id"):
+                return m["chat"]["id"], ""
+        motivo = "o Telegram não mostrou a mensagem com o código"
+    else:
+        motivo = res
+        print("Telegram getUpdates:", res, flush=True)
+    for c in dict.fromkeys(x for x in candidatos if x):
+        ok2, _ = tg_api(tok, "getChat", chat_id=c)
+        if ok2:
+            return c, ""
+    return None, motivo
 
 
 def nome_bot(tok):
@@ -4807,14 +4837,33 @@ class Painel(BaseHTTPRequestHandler):
             tok = uc.get("tg_token", "")
             if not tok:
                 return self.enviar(pg_preferencias("Conecte o seu bot primeiro (passo 1).", True))
-            chat = achar_chat(tok, codigo_telegram(lg))
-            if not chat:
-                return self.enviar(pg_preferencias("Ainda não achei. Abra o seu bot no Telegram, toque em “Iniciar” (ou mande "
-                                                   f"{codigo_telegram(lg)}) e clique de novo.", True))
+            manual = re.sub(r"[^\d-]", "", f.get("chat_manual", ""))[:20]
+            if manual:
+                ok_m, res_m = tg_api(tok, "getChat", chat_id=manual)
+                if not ok_m:
+                    return self.enviar(pg_preferencias(f"O bot não conseguiu abrir a conversa {manual}: {res_m}. Confira o número e se você já "
+                                                       "tocou em Iniciar no bot.", True))
+                chat = manual
+            else:
+                cands = [uc.get("tg_chat"), CFG_ATUAL().get("TELEGRAM_CHAT_ID")] + [
+                    ler_env(a).get("EMPRESA_TELEGRAM_CHAT_ID") for a in (EMPRESAS.glob("*.env") if EMPRESAS.exists() else [])
+                    if (ler_env(a).get("EMPRESA_DONO") or "").lower() == lg]
+                chat, motivo = achar_chat(tok, codigo_telegram(lg), cands)
+                if not chat:
+                    dica = (" O bot está ligado a outro serviço (webhook) – por isso o Telegram não entrega as mensagens aqui. "
+                            "Use a opção “Desligar o outro serviço” abaixo ou digite o chat_id.") if "webhook" in (motivo or "").lower() else ""
+                    return self.enviar(pg_preferencias("Ainda não achei a sua conversa" + (f" ({motivo})" if motivo else "") + "." + dica +
+                                                       f" Mande {codigo_telegram(lg)} ao bot e clique de novo, ou digite o chat_id.", True))
             usuarios.salvar_cfg(lg, {"tg_chat": str(chat)})
             n = aplicar_alertas_usuario(lg)
             telegram_para(tok, chat, f"✅ <b>Licitatudo conectado!</b>\nOs alertas das suas empresas ({n}) vão chegar aqui.")
             return self.redirecionar("/preferencias?ok=pref_chat")
+        if p == "/preferencias/bot/webhook":
+            tok = uc.get("tg_token", "")
+            ok_w, res_w = tg_api(tok, "deleteWebhook") if tok else (False, "sem bot")
+            self.auditar("desligou o webhook do bot", res_w if not ok_w else "")
+            return self.enviar(pg_preferencias("Pronto: o bot não está mais ligado a outro serviço. Mande o código ao bot e clique em "
+                                               "“Já iniciei – encontrar minha conversa”." if ok_w else f"Não consegui: {res_w}", not ok_w))
         if p == "/preferencias/ntfy":
             t = f.get("ntfy", "").strip()
             if not re.fullmatch(r"[\w-]{12,64}", t):
