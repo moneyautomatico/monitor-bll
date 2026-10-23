@@ -270,3 +270,113 @@ def itens_ia(resultado):
                     "descricao": str(x.get("descricao") or "").strip()[:1500], "unidade": str(x.get("unidade") or ""),
                     "qtd": x.get("qtd") or "", "unit": "", "ref": x.get("valor_estimado") or "", "marca": ""})
     return out
+
+
+# ------------------------------------------------------------------ conferência antes de enviar
+def cnpj_valido(c):
+    n = re.sub(r"\D", "", c or "")
+    if len(n) != 14 or len(set(n)) == 1:
+        return False
+    def dv(base, pesos):
+        s = sum(int(a) * b for a, b in zip(base, pesos)) % 11
+        return "0" if s < 2 else str(11 - s)
+    d1 = dv(n[:12], [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2])
+    return n[12] == d1 and n[13] == dv(n[:12] + d1, [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2])
+
+
+def cpf_valido(c):
+    n = re.sub(r"\D", "", c or "")
+    if len(n) != 11 or len(set(n)) == 1:
+        return False
+    for t in (9, 10):
+        s = sum(int(n[i]) * (t + 1 - i) for i in range(t)) % 11
+        if n[t] != ("0" if s < 2 else str(11 - s)):
+            return False
+    return True
+
+
+def conferir(p, ctx, certidoes=()):
+    """Checagens automáticas. Devolve [(nivel, texto)] com nivel 'erro' | 'atencao' | 'ok'.
+    certidoes = [(nome, status, dias)] da empresa (status 'ok' | 'vence' | 'vencida' | 'sem')."""
+    out = []
+    falta = documentos.faltando(ctx)
+    out.append(("erro", "Dados da empresa incompletos: " + ", ".join(falta)) if falta else ("ok", "Dados da empresa completos"))
+    if ctx.get("cnpj"):
+        out.append(("ok", "CNPJ válido") if cnpj_valido(ctx["cnpj"]) else ("erro", f"CNPJ {ctx['cnpj']} é inválido (dígitos não conferem)"))
+    if ctx.get("rep_cpf"):
+        out.append(("ok", "CPF do representante válido") if cpf_valido(ctx["rep_cpf"])
+                   else ("erro", "CPF do representante é inválido (dígitos não conferem)"))
+    if not (p.get("orgao") or "").strip():
+        out.append(("erro", "Falta o órgão"))
+    if not (p.get("processo") or "").strip():
+        out.append(("erro", "Falta o nº do processo/edital"))
+    itens, total = calcular(p)
+    if not itens:
+        out.append(("erro", "A proposta não tem itens"))
+    else:
+        sem_preco = [i.get("item") or str(n + 1) for n, i in enumerate(itens) if i["_u"] <= 0]
+        sem_qtd = [i.get("item") or str(n + 1) for n, i in enumerate(itens) if i["_q"] <= 0]
+        sem_desc = [i.get("item") or str(n + 1) for n, i in enumerate(itens) if not (i.get("descricao") or "").strip()]
+        acima = [i.get("item") or str(n + 1) for n, i in enumerate(itens) if num(i.get("ref")) and i["_u"] > num(i.get("ref"))]
+        if sem_preco:
+            out.append(("erro", "Itens sem preço: " + ", ".join(sem_preco[:15])))
+        if sem_qtd:
+            out.append(("erro", "Itens sem quantidade: " + ", ".join(sem_qtd[:15])))
+        if sem_desc:
+            out.append(("erro", "Itens sem descrição: " + ", ".join(sem_desc[:15])))
+        if acima:
+            out.append(("atencao", "Preço acima do valor de referência do órgão nos itens: " + ", ".join(acima[:15]) +
+                        " – pode ser desclassificado"))
+        if not (sem_preco or sem_qtd or sem_desc):
+            out.append(("ok", f"{len(itens)} item(ns) com descrição, quantidade e preço · total {brl(total)}"))
+        sem_marca = [i.get("item") or str(n + 1) for n, i in enumerate(itens) if not (i.get("marca") or "").strip()]
+        if sem_marca and len(sem_marca) < len(itens):
+            out.append(("atencao", "Alguns itens têm marca/modelo e outros não: " + ", ".join(sem_marca[:15])))
+    c = {**PADRAO_COND, **(p.get("cond") or {})}
+    val, minimo = num(c.get("validade")), num((p.get("exig") or {}).get("validade"))
+    if minimo and val < minimo:
+        out.append(("erro", f"Validade da proposta ({val:g} dias) é menor que a exigida pelo edital ({minimo:g} dias)"))
+    elif not val:
+        out.append(("atencao", "Validade da proposta não está em dias – confira com o edital"))
+    elif val < 60 and not minimo:
+        out.append(("atencao", f"Validade de {val:g} dias – a maioria dos editais pede pelo menos 60"))
+    else:
+        out.append(("ok", f"Validade da proposta: {val:g} dias" + (f" (edital pede {minimo:g})" if minimo else "")))
+    for k, nome in (("entrega", "prazo de entrega"), ("pagamento", "condição de pagamento")):
+        if (c.get(k) or "").strip().lower() in ("", "conforme o edital"):
+            out.append(("atencao", f"O {nome} está como “conforme o edital” – se o edital pedir o prazo exato, escreva"))
+    for nome, st, dias in certidoes:
+        if st == "vencida":
+            out.append(("erro", f"Certidão vencida: {nome}"))
+        elif st == "vence":
+            out.append(("atencao", f"Certidão vence em {dias} dia(s): {nome}"))
+    if certidoes and all(st == "ok" for _, st, _ in certidoes):
+        out.append(("ok", f"{len(certidoes)} certidão(ões) válidas"))
+    elif not certidoes:
+        out.append(("atencao", "Nenhuma certidão cadastrada para esta empresa (Documentos → Certidões)"))
+    return out
+
+
+def texto_para_ia(p, ctx):
+    itens, total = calcular(p)
+    c = {**PADRAO_COND, **(p.get("cond") or {})}
+    linhas = [f"EMPRESA: {ctx.get('razao', '')} – CNPJ {ctx.get('cnpj', '')} – porte {ctx.get('porte') or 'demais'}",
+              f"ÓRGÃO: {p.get('orgao', '')} · PROCESSO: {p.get('processo', '')} · MODALIDADE: {p.get('modalidade', '')}",
+              f"OBJETO: {p.get('objeto', '')}", "ITENS (lote | item | descrição | marca | unidade | qtd | unitário | total):"]
+    for i in itens:
+        linhas.append(f"{i.get('lote', '')} | {i.get('item', '')} | {(i.get('descricao') or '')[:300]} | {i.get('marca', '')} | "
+                      f"{i.get('unidade', '')} | {qtd_txt(i['_q'])} | {brl(i['_u'])} | {brl(i['_t'])}")
+    linhas += [f"TOTAL: {brl(total)}", f"VALIDADE: {c['validade']} dias · ENTREGA: {c['entrega']} · PAGAMENTO: {c['pagamento']} · "
+               f"GARANTIA: {c['garantia']}"]
+    return "\n".join(linhas)
+
+
+PROMPT_CONFERIR = """Você é um analista de licitações. Compare a PROPOSTA DA EMPRESA com o EDITAL (e anexos) e aponte o que pode
+causar desclassificação ou pedido de correção. Responda SOMENTE com JSON válido, neste formato:
+{"resumo": "uma frase com a conclusão",
+ "achados": [{"nivel": "erro" | "atencao" | "ok", "onde": "item 3 / validade / declaração X…", "problema": "o que está errado",
+              "sugestao": "como corrigir"}]}
+Verifique: itens/lotes faltando ou sobrando; descrição, unidade ou quantidade diferente do edital; preço acima do valor máximo;
+validade, prazo de entrega e pagamento compatíveis; exigência de marca/modelo, catálogo, amostra ou planilha de custos;
+documentos e declarações que o edital pede junto da proposta. Não invente: se o edital não falar de algo, não aponte.
+No máximo 25 achados, os mais importantes primeiro."""

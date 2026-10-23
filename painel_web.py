@@ -6,6 +6,7 @@ Permite cadastrar/editar/pausar/remover empresas e ajustar os alertas sem usar o
 import base64
 import getpass
 import hashlib
+import io
 import hmac
 import html
 import json
@@ -39,6 +40,7 @@ import documentos
 import geo
 import oportunidades
 import pecas
+import pacote
 import propostas
 
 PASTA = Path(__file__).resolve().parent
@@ -126,7 +128,7 @@ DONO_PADRAO = next((k for k, v in usuarios.carregar().items() if v.get("criado_p
 analise.GLOBAIS.add(DONO_PADRAO)
 ROTAS_ADM_LAYOUT = ("/admin", "/empresas", "/config", "/preferencias")   # abas mostradas no layout da Área do administrador
 ROTAS_IA = ("/analise", "/pecas/gerar", "/pecas/declaracoes", "/pergunte/enviar", "/pergunte/estado")
-ROTAS_IA_RE = re.compile(r"/pecas/[0-9a-f]{14}/refazer|/propostas/[0-9a-f]{12}/ia")
+ROTAS_IA_RE = re.compile(r"/pecas/[0-9a-f]{14}/refazer|/propostas/[0-9a-f]{12}/(ia|conferir)")
 
 
 def empresa_liberada(valor):
@@ -2045,6 +2047,11 @@ def pg_proposta(pid, aviso="", erro=False):
                 f'<td class="tot{" acima" if acima else ""}">{propostas.brl(it["_t"], False)}</td>'
                 f'<td><button type="button" class="sec mini-b" onclick="this.closest(\'tr\').remove();calc()" title="Remover">✕</button></td></tr>')
     linhas = "".join(linha(i, it) for i, it in enumerate(itens))
+    conf = propostas.conferir(p, ctx, [(n, st, d) for _, n, st, d, _ in certidoes_empresa(p.get("empresa", ""))])
+    ed_atual = p.get("edital_chave", "")
+    sel_edital_conf = ('<option value="">— edital já analisado em Editais (IA) —</option>' +
+                       "".join(f'<option value="{e(a["chave"])}" {"selected" if a["chave"] == ed_atual else ""}>{e((a.get("titulo") or a["chave"])[:110])}</option>'
+                               for a in analisados))
     bloco_ia = ""
     if ia.get("status") == "gerando":
         bloco_ia = ('<div class="msg">🤖 Lendo o edital para montar a tabela de itens… (1 a 3 minutos – a página atualiza sozinha)</div>'
@@ -2067,6 +2074,16 @@ font:inherit;font-size:13px;padding:5px 6px;border:1px solid var(--borda);border
 <p><a href="/propostas">← Minhas propostas</a></p>
 <h2 style="margin-top:4px">💰 Proposta – {e(p.get("processo") or "sem nº")} <small class="sub">{e(p.get("empresa", ""))}</small></h2>
 {aviso_falta}{bloco_ia}
+{ESTILO_CONF}<details class="op-perfil" id="conferencia" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if itens else ""}>
+<summary style="display:block;cursor:pointer;padding:10px 14px">✅ <b>Conferência antes de enviar</b> –
+{sum(1 for n, _ in conf if n == "erro")} erro(s) · {sum(1 for n, _ in conf if n == "atencao")} atenção</summary>
+<div style="padding:0 14px 12px">{html_conferencia(conf)}{html_conferencia_ia(p.get("conferencia_ia"))}
+<form method="post" action="/propostas/{pid}/conferir" enctype="multipart/form-data" style="margin-top:10px">{aviso_custo("conferencia")}
+<input type="hidden" name="csrf" value="{CSRF}"><div class="duas"><div><label>🤖 Conferir com o edital (IA)</label>
+<select class="campo" name="edital">{sel_edital_conf}</select></div><div><label>…ou envie o PDF do edital</label>
+<input type="file" name="arquivo" accept=".pdf,.docx,.zip" multiple></div></div>
+<div class="acoes"><button class="sec" {"disabled" if (p.get("conferencia_ia") or {}).get("status") == "gerando" else ""}>🤖 Conferir com o edital</button>
+<a class="btn sec" href="/pacote?emp={urllib.parse.quote(p.get("empresa", ""))}&proposta={pid}">📦 Montar o pacote de habilitação</a></div></form></div></details>
 <details class="op-perfil" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if not itens else ""}>
 <summary style="display:block;cursor:pointer;padding:10px 14px">📥 <b>Trazer os itens</b> – do monitor, do PNCP ou lidos do edital pela IA</summary>
 <div style="padding:0 14px 12px"><div class="duas">
@@ -2113,7 +2130,8 @@ font:inherit;font-size:13px;padding:5px 6px;border:1px solid var(--borda);border
 <label>Observações <small>(saem no fim da proposta)</small></label><textarea class="campo" name="obs" rows="3" style="max-width:100%">{e(p.get("obs", ""))}</textarea></div></div>
 <div class="acoes"><button>💾 Salvar</button>
 <button class="sec" name="depois" value="ver" {"disabled" if falta else ""}>💾 Salvar e visualizar / PDF</button>
-<button class="sec" name="depois" value="docx" {"disabled" if falta else ""}>💾 Salvar e baixar Word</button></div></form>
+<button class="sec" name="depois" value="docx" {"disabled" if falta else ""}>💾 Salvar e baixar Word</button>
+<button class="sec" name="depois" value="pdf" {"disabled" if falta else ""}>💾 Salvar e baixar PDF</button></div></form>
 <div class="acoes" style="margin-top:14px">{botao(f"/propostas/{pid}/excluir", "🗑 Excluir proposta", "perigo", "Excluir esta proposta?")}</div>
 <p class="sub">Confira tudo com o edital antes de enviar. Valor em vermelho = acima do valor de referência do órgão.</p>
 <script>
@@ -2155,6 +2173,8 @@ def ler_itens_ia(pid, cfg, partes, usuario):
             if v and cond.get(k, "") in ("", propostas.PADRAO_COND[k]):
                 cond[k] = re.sub(r"\D", "", v) or cond[k] if k == "validade" else v[:300]
         p["cond"] = cond
+        if re.sub(r"\D", "", str(r.get("validade") or "")):
+            p["exig"] = {**(p.get("exig") or {}), "validade": re.sub(r"\D", "", str(r["validade"]))}
         p["ia"] = {"status": "pronto", "n": len(novos), "custo": custos_ia.ultimo(), "quando": datetime.now().isoformat()}
     except Exception as ex:  # noqa: BLE001
         p = propostas.ler(pid) or p
@@ -2185,13 +2205,236 @@ def pg_proposta_ver(pid):
         return pagina("Proposta", f'<h2>Não deu para gerar</h2><p>Faltam os dados da empresa: {e(", ".join(falta))}.</p>'
                       f'<p><a class="btn" href="/propostas/{pid}">Voltar</a></p>', "/documentos")
     docs, _ = propostas.montar(p, ctx)
-    return folhas_html(f"Proposta – {p.get('processo', '')}", documentos.html(docs, ctx, logo_url(ctx)), f"/propostas/{pid}/docx", ctx)
+    return folhas_html(f"Proposta – {p.get('processo', '')}", documentos.html(docs, ctx, logo_url(ctx)), f"/propostas/{pid}/docx", ctx,
+                       url_pdf=f"/propostas/{pid}/pdf")
+
+
+# ------------------------------------------------------------------ PDF no servidor, pacote de habilitação e assinatura
+def logo_data(ctx):
+    dados, ext = logo_img(ctx)
+    return (f"data:image/{'png' if ext == 'png' else 'jpeg'};base64," + base64.b64encode(dados).decode()) if dados else ""
+
+
+def pdf_docs(docs, ctx):
+    """Documentos (blocos) -> PDF A4 com timbre e rodapé, gerado no servidor."""
+    html_doc = folhas_html("", documentos.html(docs, ctx, logo_data(ctx)), "", ctx, para_pdf=True)
+    return pacote.pdf_do_html(html_doc, documentos.linha_rodape(ctx) if documentos.timbrado(ctx) else "")
+
+
+def certidoes_empresa(nome):
+    """[(cid, nome_legivel, status, dias, tem_arquivo)] das certidões da empresa."""
+    out = []
+    for cid, c in agenda.certidoes()["itens"].items():
+        if c.get("empresa") != nome:
+            continue
+        st, dias = agenda.status_cert(c)
+        validade = f" – validade {c['validade'][8:10]}/{c['validade'][5:7]}/{c['validade'][:4]}" if c.get("validade") else ""
+        out.append((cid, agenda.NOME_CERT.get(c.get("tipo"), c.get("tipo") or "Certidão") + validade, st, dias, bool(agenda.arquivo_cert(cid))))
+    return sorted(out, key=lambda x: x[1])
+
+
+def html_conferencia(itens_conf):
+    ic = {"erro": "❌", "atencao": "⚠️", "ok": "✅"}
+    ordem = sorted(itens_conf, key=lambda x: {"erro": 0, "atencao": 1, "ok": 2}.get(x[0], 3))
+    erros = sum(1 for n, _ in itens_conf if n == "erro")
+    aten = sum(1 for n, _ in itens_conf if n == "atencao")
+    topo = ("✅ <b>Tudo certo nas checagens automáticas.</b>" if not erros and not aten else
+            f"<b>{erros} erro(s)</b> e <b>{aten} ponto(s) de atenção</b> – corrija antes de enviar.")
+    return (f'<p style="margin:4px 0 8px">{topo}</p><ul class="conf">' +
+            "".join(f'<li class="{n}">{ic.get(n, "")} {e(t)}</li>' for n, t in ordem) + "</ul>")
+
+
+ESTILO_CONF = ('<style>ul.conf{list-style:none;padding:0;margin:0}ul.conf li{padding:5px 8px;border-radius:6px;margin:3px 0;font-size:14px}'
+               'ul.conf li.erro{background:rgba(198,40,40,.12)}ul.conf li.atencao{background:rgba(249,168,37,.15)}'
+               'ul.conf li.ok{color:var(--sub)}</style>')
+
+
+def html_conferencia_ia(conf):
+    if not conf:
+        return ""
+    if conf.get("status") == "gerando":
+        return ('<div class="msg">🤖 Comparando a proposta com o edital… (1 a 3 minutos – a página atualiza sozinha)</div>'
+                '<script>setTimeout(()=>location.reload(),8000)</script>')
+    if conf.get("status") == "erro":
+        return f'<div class="msg erro">A IA não conseguiu conferir: {e(conf.get("erro", ""))}</div>'
+    r = conf.get("resultado") or {}
+    itens = [(a.get("nivel", "atencao"), f'{a.get("onde", "")}: {a.get("problema", "")}' + (f' → {a.get("sugestao")}' if a.get("sugestao") else ""))
+             for a in r.get("achados") or []]
+    return (f'<h4 style="margin:12px 0 4px">🤖 Conferência com o edital <small class="sub">({e(conf.get("quando", ""))}) '
+            f'{custo_uso(conf.get("custo"))}</small></h4><p class="sub" style="margin:0 0 6px">{e(r.get("resumo", ""))}</p>'
+            + html_conferencia(itens) + '<p class="sub">A IA pode errar – confira no edital os pontos apontados.</p>')
+
+
+def conferir_ia(pid, cfg, partes, usuario):
+    p = propostas.ler(pid) or {}
+    try:
+        api = cfg.get("GEMINI_API_KEY", "")
+        if not api:
+            raise RuntimeError("Falta a chave do Gemini (Configurações → Inteligência artificial).")
+        ctx = ctx_proposta(p)
+        custos_ia.contexto("conferencia", p.get("empresa", ""), p.get("processo", ""), usuario)
+        md, _, _ = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(),
+                                  partes + [("txt", "PROPOSTA DA EMPRESA", propostas.texto_para_ia(p, ctx))],
+                                  propostas.PROMPT_CONFERIR, prazo=600)
+        r = propostas.extrair_json(md)
+        p = propostas.ler(pid) or p
+        p["conferencia_ia"] = {"status": "pronto", "resultado": r, "custo": custos_ia.ultimo(),
+                               "quando": datetime.now().strftime("%d/%m/%Y %H:%M")}
+    except Exception as ex:  # noqa: BLE001
+        p = propostas.ler(pid) or p
+        p["conferencia_ia"] = {"status": "erro", "erro": str(ex)[:300]}
+    propostas.gravar(pid, p)
+
+
+GUIA_ASSINATURA = """<div class="form" style="max-width:none"><h3 style="margin-top:0">✍️ Como assinar os documentos</h3>
+<p class="sub">Assine sempre o <b>PDF final</b> (de preferência o pacote) e <b>não edite depois de assinar</b> – qualquer mudança invalida a assinatura.
+Confira no edital qual assinatura é aceita.</p>
+<div class="duas-ass"><div><h4>1) gov.br – gratuita</h4><ol>
+<li>Acesse <a href="https://assinador.iti.br" target="_blank" rel="noopener">assinador.iti.br</a> e entre com a conta gov.br do representante
+(precisa ser nível <b>prata</b> ou <b>ouro</b>).</li>
+<li>Envie o PDF, clique no lugar da assinatura (acima do nome do representante) e confirme com o código que chega no celular.</li>
+<li>Baixe o PDF assinado e envie esse arquivo na plataforma.</li></ol>
+<p class="sub">Assinatura eletrônica avançada (Lei 14.063/2020) – aceita pela maioria dos órgãos.</p></div>
+<div><h4>2) Certificado digital ICP-Brasil (e-CNPJ / e-CPF)</h4><ol>
+<li>Com certificado A1 (arquivo) ou A3 (token/cartão) instalado no computador.</li>
+<li>Abra o PDF no <b>Adobe Acrobat Reader</b> → <i>Todas as ferramentas</i> → <i>Usar um certificado</i> → <i>Assinar digitalmente</i>,
+ou use o <b>Assinador SERPRO</b> (gratuito).</li>
+<li>Escolha o certificado, digite a senha/PIN e salve o PDF assinado.</li></ol>
+<p class="sub">Assinatura qualificada – vale em qualquer órgão.</p></div></div>
+<p class="sub">Para conferir uma assinatura: <a href="https://validar.iti.gov.br" target="_blank" rel="noopener">validar.iti.gov.br</a>.
+Algumas plataformas (BLL, BNC, Portal de Compras) também têm assinador próprio no envio dos documentos.</p></div>
+<style>.duas-ass{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:800px){.duas-ass{grid-template-columns:1fr}}
+.duas-ass ol{padding-left:18px;line-height:1.6;margin:6px 0}</style>"""
+
+
+def pg_assinatura():
+    return pagina("Como assinar", "<h2>📄 Documentos</h2>" + abas_doc("ass") + GUIA_ASSINATURA, "/documentos")
+
+
+TAG_VENCIDA = ' <small style="color:var(--erro)">VENCIDA</small>'
+
+
+def pg_pacote(q, aviso="", erro=False):
+    emps = nomes_empresas()
+    if not emps:
+        return pagina("Pacote", f"<h2>📄 Documentos</h2>{abas_doc('pac')}<p>Cadastre uma empresa primeiro.</p>", "/documentos")
+    prop_q = propostas.ler(q.get("proposta", "")) if re.fullmatch(r"[0-9a-f]{12}", q.get("proposta", "")) else None
+    if prop_q and not visivel(prop_q.get("empresa"), prop_q.get("usuario")):
+        prop_q = None
+    nome = (prop_q or {}).get("empresa") or (q.get("emp", "") if q.get("emp", "") in emps else sorted(emps)[0])
+    ctx = dados_doc(nome, emps.get(nome, []))
+    props = [p for p in propostas.listar() if p.get("empresa") == nome and visivel(p.get("empresa"), p.get("usuario"))]
+    sel_prop = ('<option value="">— sem proposta —</option>' + "".join(
+        f'<option value="{e(p["id"])}" {"selected" if prop_q and p["id"] == prop_q["id"] else ""}>{e(p.get("processo") or "sem nº")} – '
+        f'{e((p.get("orgao") or "")[:60])} · {propostas.brl(propostas.calcular(p)[1])}</option>' for p in props))
+    sel_emp = "".join(f'<option value="{e(n)}" {"selected" if n == nome else ""}>{e(n)}</option>' for n in sorted(emps))
+    certs = certidoes_empresa(nome)
+    caixas_cert = "".join(
+        f'<label class="dec"><input type="checkbox" name="cert" value="{e(cid)}" {"checked" if st != "vencida" and arq else ""} {"" if arq else "disabled"}> '
+        f'{ {"ok": "✅", "vence": "⚠️", "vencida": "❌", "sem": "•"}.get(st, "")} {e(n)}'
+        f'{"" if arq else " <small>(sem PDF anexado)</small>"}{TAG_VENCIDA if st == "vencida" else ""}</label>'
+        for cid, n, st, dias, arq in certs) or '<p class="sub">Nenhuma certidão cadastrada. Cadastre em <a href="/certidoes">Certidões</a>.</p>'
+    caixas_dec = "".join(f'<label class="dec"><input type="checkbox" name="d" value="{i}" {"checked" if i in documentos.PADRAO else ""}'
+                         f'{" disabled" if i == "meepp" and ctx.get("porte") not in ("ME", "EPP") else ""}> {e(t)}</label>'
+                         for i, t, _ in documentos.DECLARACOES)
+    conf = propostas.conferir(prop_q, ctx, [(n, st, d) for _, n, st, d, _ in certs]) if prop_q else \
+        [("erro", "Dados da empresa incompletos: " + ", ".join(documentos.faltando(ctx)))] if documentos.faltando(ctx) else []
+    corpo = f"""{ESTILO_CONF}<style>.dec{{display:flex;gap:8px;align-items:flex-start;font-weight:400;margin:5px 0}}.dec input{{margin-top:3px}}
+.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}@media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}</style>
+<h2>📄 Documentos</h2>{abas_doc("pac")}
+<p class="sub">Junta tudo num <b>único PDF</b> pronto para enviar: capa com sumário, proposta comercial, declarações, certidões e outros
+arquivos (contrato social, atestados…), com papel timbrado, marcadores e “Página X de Y” em todas as páginas.</p>
+{f'<div class="form" style="max-width:none"><h3 style="margin-top:0">✅ Conferência</h3>{html_conferencia(conf)}</div>' if conf else ''}
+<form method="post" action="/pacote/gerar" enctype="multipart/form-data" class="form" style="max-width:none;margin-top:12px">
+<input type="hidden" name="csrf" value="{CSRF}">
+<div class="duas"><div><label>Empresa</label><select class="campo" name="emp" onchange="location.href='/pacote?emp='+encodeURIComponent(this.value)">{sel_emp}</select></div>
+<div><label>Proposta comercial</label><select class="campo" name="proposta" onchange="location.href='/pacote?emp={urllib.parse.quote(nome)}&proposta='+this.value">{sel_prop}</select></div>
+<div><label>Órgão <small>(vazio = o da proposta)</small></label><input class="campo" name="orgao" value="{e((prop_q or {}).get("orgao", ""))}"></div>
+<div><label>Nº do processo/edital <small>(vazio = o da proposta)</small></label><input class="campo" name="processo" value="{e((prop_q or {}).get("processo", ""))}"></div></div>
+<label class="dec" style="margin-top:8px"><input type="checkbox" name="capa" value="1" checked> <b>Capa com sumário</b> (lista dos documentos e a página de cada um)</label>
+<div class="duas"><div><h3>Declarações</h3>{caixas_dec}
+<label class="dec" style="margin-top:8px"><input type="checkbox" name="unificada" value="1"> Juntar numa “Declaração unificada”</label></div>
+<div><h3>Certidões</h3>{caixas_cert}
+<h3>Outros documentos <small class="sub">(PDF, PNG ou JPG – contrato social, atestados, balanço…)</small></h3>
+<input type="file" name="extra" accept=".pdf,.png,.jpg,.jpeg" multiple>
+<p class="sub">Entram no fim, na ordem em que você escolher os arquivos. Use o nome do arquivo para identificar (ex.: “Atestado de capacidade técnica.pdf”).</p></div></div>
+<div class="acoes"><button {"disabled" if documentos.faltando(ctx) else ""}>📦 Gerar o pacote em PDF</button></div>
+<p class="sub">Ordem: capa → proposta → declarações → certidões → outros. Leva de 10 a 40 segundos.</p></form>
+<div style="margin-top:14px">{GUIA_ASSINATURA}</div>"""
+    return pagina("Pacote de habilitação", corpo, "/documentos", aviso, erro)
+
+
+def gerar_pacote(campos, arqs, multi_d, multi_cert):
+    """Monta o pacote. Devolve (bytes, nome_arquivo, avisos)."""
+    emps = nomes_empresas()
+    nome = campos.get("emp", "")
+    ctx = dados_doc(nome, emps.get(nome, []))
+    prop = propostas.ler(campos.get("proposta", "")) if re.fullmatch(r"[0-9a-f]{12}", campos.get("proposta", "")) else None
+    if prop and (prop.get("empresa") != nome or not visivel(prop.get("empresa"), prop.get("usuario"))):
+        prop = None
+    orgao = campos.get("orgao", "").strip() or (prop or {}).get("orgao", "")
+    processo = campos.get("processo", "").strip() or (prop or {}).get("processo", "")
+    ctx.update(orgao=orgao, processo=processo, modalidade=(prop or {}).get("modalidade") or "Pregão Eletrônico",
+               cidade_data=ctx.get("cidade", ""), data=documentos.data_extenso())
+    secoes = []   # (titulo, pdf)
+    if prop:
+        docs_p, _ = propostas.montar(prop, ctx)
+        secoes.append(("Proposta comercial", pdf_docs(docs_p, ctx)))
+    ids = [x for x in multi_d if any(x == d[0] for d in documentos.DECLARACOES)]
+    if ids:
+        docs_d = documentos.montar(ids, ctx, campos.get("unificada") == "1")
+        if campos.get("unificada") == "1":
+            secoes.append(("Declaração unificada", pdf_docs(docs_d, ctx)))
+        else:
+            for titulo, blocos in docs_d:
+                secoes.append((titulo, pdf_docs([(titulo, blocos)], ctx)))
+    certs = {cid: n for cid, n, _, _, arq in certidoes_empresa(nome) if arq}
+    for cid in multi_cert:
+        if cid in certs:
+            a = agenda.arquivo_cert(cid)
+            dados = a.read_bytes()
+            ext = a.suffix.lower().lstrip(".")
+            secoes.append((certs[cid], dados if ext == "pdf" else pacote.pdf_da_imagem(dados, "png" if ext == "png" else "jpg")))
+    for n, dados in arqs:
+        if not dados:
+            continue
+        ext = n.lower().rsplit(".", 1)[-1]
+        titulo = re.sub(r"\.(pdf|png|jpe?g)$", "", n, flags=re.I)[:80]
+        if ext == "pdf":
+            secoes.append((titulo, dados))
+        elif ext in ("png", "jpg", "jpeg"):
+            secoes.append((titulo, pacote.pdf_da_imagem(dados, "png" if ext == "png" else "jpg")))
+    if not secoes:
+        raise ValueError("Escolha pelo menos um documento.")
+    if campos.get("capa") == "1":
+        from pypdf import PdfReader
+        paginas, inicio, lista = [], 2, []
+        for titulo, dados in secoes:
+            try:
+                n_pag = len(PdfReader(io.BytesIO(dados)).pages)
+            except Exception:  # noqa: BLE001
+                n_pag = 0
+            lista.append([str(len(lista) + 1), titulo, str(inicio) if n_pag else "—"])
+            inicio += n_pag
+        ref = [("dir", f"À\n{orgao}"), ("dir", f"Ref.: {ctx['modalidade']} nº {processo or '____/____'}")] if orgao else []
+        capa = ref + [("titulo", "DOCUMENTOS DE HABILITAÇÃO E PROPOSTA"),
+                      ("p", f"**{ctx.get('razao', '')}**, CNPJ **{documentos.fmt_cnpj(ctx.get('cnpj'))}**, apresenta a seguir os "
+                            "documentos para o certame em referência:"),
+                      ("tabela", {"linhas": [["Nº", "Documento", "Página"]] + lista, "larguras": [700, 6800, 1400], "alinhar": "clc"}),
+                      ("vazio", ""), ("data", f"{ctx.get('cidade') or '__________'}, {documentos.data_extenso()}."),
+                      ("vazio", ""), ("vazio", ""), ("assinatura", "")]
+        secoes.insert(0, ("Capa e sumário", pdf_docs([("Capa", capa)], ctx)))
+    dados, avisos = pacote.montar(secoes)
+    arquivo = re.sub(r"[^\w.-]+", "_", f"Pacote_{processo or 'habilitacao'}_{ctx.get('razao', '')[:30]}").strip("_") + ".pdf"
+    return dados, arquivo, avisos
 
 
 def abas_doc(atual):
     return ('<div class="acoes" style="margin:6px 0 12px">'
             f'<a class="btn {"" if atual == "dec" else "sec"}" href="/documentos">📄 Declarações</a>'
             f'<a class="btn {"" if atual == "pro" else "sec"}" href="/propostas">💰 Proposta comercial</a>'
+            f'<a class="btn {"" if atual == "pac" else "sec"}" href="/pacote">📦 Pacote de habilitação</a>'
+            f'<a class="btn {"" if atual == "ass" else "sec"}" href="/assinatura">✍️ Como assinar</a>'
             f'<a class="btn {"" if atual == "pec" else "sec"}" href="/pecas">⚖️ Peças com IA (recurso, contrarrazões…)</a>'
             f'<a class="btn {"" if atual == "cer" else "sec"}" href="/certidoes">📑 Certidões</a></div>')
 
@@ -2294,9 +2537,15 @@ def pg_documentos_ver(q):
     return folhas_html(f"Declarações – {ctx.get('razao', '')}", documentos.html(docs, ctx, logo_url(ctx)), url_docx, ctx)
 
 
-def folhas_html(titulo, conteudo, url_docx, ctx=None):
-    """Página A4 para visualizar/imprimir em PDF (declarações, proposta, peças) – com papel timbrado e nº de páginas."""
-    css_print = documentos.css_impressao(ctx or {})
+def folhas_html(titulo, conteudo, url_docx, ctx=None, para_pdf=False, url_pdf=""):
+    """Página A4 para visualizar/imprimir em PDF (declarações, proposta, peças) – com papel timbrado e nº de páginas.
+    para_pdf=True: versão para o servidor gerar o PDF (sem barra; o rodapé vai pelo Chromium)."""
+    css_print = "" if para_pdf else documentos.css_impressao(ctx or {})
+    barra = "" if para_pdf else (
+        f'<div class="barra"><button onclick="window.print()">🖨 Imprimir / Salvar em PDF</button>'
+        + (f'<a href="{e(url_pdf)}">⬇ Baixar PDF</a>' if url_pdf else "") + f'<a href="{e(url_docx)}">⬇ Baixar Word</a>'
+        '<a href="/assinatura" target="_blank">✍️ Como assinar</a>'
+        '<span>Dica: clique no texto para corrigir algo antes de imprimir. No Chrome, escolha “Salvar como PDF”.</span></div>')
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{e(titulo)}</title><style>
 body{{background:#e9edf0;margin:0;font-family:Arial,Helvetica,sans-serif;color:#111}}
@@ -2320,10 +2569,10 @@ body{{background:#e9edf0;margin:0;font-family:Arial,Helvetica,sans-serif;color:#
  font-size:7.5pt;color:#555;text-align:center;line-height:1.3}}
 @media print{{.rodape-doc{{display:none}}.timbre{{margin-bottom:10mm}}.folha{{padding-top:0}}}}
 @media(max-width:820px){{.rodape-doc{{position:static;margin-top:20px}}}}
+@media print{{.folha:last-of-type{{page-break-after:auto}}}}
 {css_print}
 </style></head><body>
-<div class="barra"><button onclick="window.print()">🖨 Imprimir / Salvar em PDF</button><a href="{e(url_docx)}">⬇ Baixar Word</a>
-<span>Dica: clique no texto para corrigir algo antes de imprimir. No Chrome, escolha “Salvar como PDF”.</span></div>
+{barra}
 {conteudo}</body></html>"""
 
 
@@ -2861,7 +3110,7 @@ def aviso_custo(recurso):
     nome = custos_ia.RECURSOS.get(recurso, (recurso, 0))[0]
     valor = custos_ia.brl(cliente if p["cobrar"] and p["acrescimo"] else base)
     return (f'<div class="aviso-ia">💳 <b>Recurso com IA paga por uso</b> – {e(nome)}: custo estimado de <b>~{valor}</b> por uso'
-            f'{f" (média dos últimos {n} usos)" if n else " (estimativa)"}. <a href="/consumo">ver consumo e valores</a></div>')
+            f'{f" (média dos últimos {n} usos)" if n else " (estimativa)"}. <a href="{"/consumo" if eh_admin() else "/meu-consumo"}">ver consumo e valores</a></div>')
 
 
 def custo_uso(reg):
@@ -4079,14 +4328,14 @@ enviado para melhorar seus produtos; editais são públicos, mas evite enviar do
     return pagina("Editais (IA)", corpo, "/editais", aviso, erro)
 
 
-def ler_multipart(handler, tam):
-    """Retorna (campos, arquivos[(nome, bytes)]) de um formulário multipart."""
+def ler_multipart(handler, tam, listas=False):
+    """Retorna (campos, arquivos[(nome, bytes)]) de um formulário multipart (listas=True: também {nome: [valores]})."""
     from email.parser import BytesParser
     from email.policy import default
     bruto = handler.rfile.read(tam)
     msg = BytesParser(policy=default).parsebytes(
         b"Content-Type: " + handler.headers.get("Content-Type", "").encode() + b"\r\n\r\n" + bruto)
-    campos, arqs = {}, []
+    campos, arqs, todos = {}, [], {}
     for parte in msg.iter_parts():
         nome = parte.get_param("name", header="content-disposition")
         arq = parte.get_filename()
@@ -4096,7 +4345,8 @@ def ler_multipart(handler, tam):
                 arqs.append((Path(arq).name, dados))
         elif nome:
             campos[nome] = dados.decode("utf-8", "ignore")
-    return campos, arqs
+            todos.setdefault(nome, []).append(campos[nome])
+    return (campos, arqs, todos) if listas else (campos, arqs)
 
 
 # ------------------------------------------------------------------ vigia (aviso de monitor parado)
@@ -4860,7 +5110,23 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_pecas(q, AVISOS.get(q.get("ok", ""), "")))
             if p == "/propostas":
                 return self.enviar(pg_propostas(q, AVISOS.get(q.get("ok", ""), "")))
-            m = re.fullmatch(r"/propostas/([0-9a-f]{12})(/ver|/docx)?", p)
+            if p == "/pacote":
+                return self.enviar(pg_pacote(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/assinatura":
+                return self.enviar(pg_assinatura())
+            m = re.fullmatch(r"/propostas/([0-9a-f]{12})(/ver|/docx|/pdf)?", p)
+            if m and propostas.ler(m.group(1)) and m.group(2) == "/pdf":
+                prop = propostas.ler(m.group(1))
+                ctx = ctx_proposta(prop)
+                if documentos.faltando(ctx):
+                    return self.redirecionar(f"/propostas/{m.group(1)}")
+                try:
+                    dados = pdf_docs(propostas.montar(prop, ctx)[0], ctx)
+                    dados, _ = pacote.montar([("Proposta comercial", dados)])
+                except Exception as ex:  # noqa: BLE001
+                    return self.enviar(pg_proposta(m.group(1), f"Não consegui gerar o PDF no servidor: {e(str(ex)[:200])}", True))
+                nome_arq = re.sub(r"[^\w.-]+", "_", f"Proposta_{prop.get('processo') or 'processo'}_{ctx.get('razao', '')[:30]}").strip("_") + ".pdf"
+                return self.baixar(dados, nome_arq, "application/pdf")
             if m and propostas.ler(m.group(1)):
                 if m.group(2) == "/ver":
                     return self.enviar(pg_proposta_ver(m.group(1)))
@@ -5046,6 +5312,53 @@ class Painel(BaseHTTPRequestHandler):
                     return self.enviar(pg_documentos({"emp": nome}, e(str(ex))))
             self.auditar("logo da empresa", nome)
             return self.redirecionar("/documentos?" + urllib.parse.urlencode({"emp": nome, "ok": "doc_logo"}) + "#dados")
+        if self.path.rstrip("/") == "/pacote/gerar":
+            if tam > 60 * 1024 * 1024:
+                return self.enviar(pg_pacote({}, "Arquivos grandes demais (máx. 60 MB no total).", True), 413)
+            campos, arqs, listas = ler_multipart(self, tam, listas=True)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido("/pacote/gerar", campos):
+                return
+            if campos.get("emp", "") not in nomes_empresas():
+                return self.redirecionar("/pacote")
+            try:
+                dados, arquivo, avisos = gerar_pacote(campos, arqs[:15], listas.get("d", []), listas.get("cert", []))
+            except Exception as ex:  # noqa: BLE001
+                print("Pacote:", repr(ex)[:300], flush=True)
+                return self.enviar(pg_pacote({"emp": campos.get("emp", ""), "proposta": campos.get("proposta", "")},
+                                             f"Não consegui montar o pacote: {e(str(ex)[:250])}", True))
+            self.auditar("gerou pacote de habilitação", f"{campos.get('emp', '')} {arquivo} {'; '.join(avisos)[:120]}")
+            return self.baixar(dados, arquivo, "application/pdf")
+        m_conf = re.fullmatch(r"/propostas/([0-9a-f]{12})/conferir", self.path.rstrip("/"))
+        if m_conf:
+            if tam > 40 * 1024 * 1024:
+                return self.enviar(pagina("Erro", "<h2>Arquivos grandes demais (máx. 40 MB).</h2>", "/documentos"), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido(self.path.rstrip("/"), campos):
+                return
+            pid = m_conf.group(1)
+            prop = propostas.ler(pid)
+            if not prop:
+                return self.redirecionar("/propostas")
+            partes = []
+            for n_a, d_a in [(n, d) for n, d in arqs if d][:8]:
+                partes += analise.preparar(n_a, d_a)
+            edital = campos.get("edital") or prop.get("edital_chave", "")
+            if not partes and edital:
+                if not ve_analise(analise.ler(edital) or {}):
+                    return self.negar("Esta análise é de outro usuário.")
+                partes, _ = pecas.partes_edital(edital)
+            if not partes:
+                return self.enviar(pg_proposta(pid, "Para conferir com IA, escolha o edital já analisado ou envie o PDF do edital.", True))
+            prop["conferencia_ia"] = {"status": "gerando"}
+            if edital:
+                prop["edital_chave"] = edital
+            propostas.gravar(pid, prop)
+            threading.Thread(target=conferir_ia, args=(pid, cfg_ia(), partes, login_atual()), daemon=True).start()
+            return self.redirecionar(f"/propostas/{pid}#conferencia")
         m_pia = re.fullmatch(r"/propostas/([0-9a-f]{12})/ia", self.path.rstrip("/"))
         if m_pia:
             if tam > 40 * 1024 * 1024:
@@ -5067,6 +5380,7 @@ class Painel(BaseHTTPRequestHandler):
                 if not ve_analise(analise.ler(campos["edital"]) or {}):
                     return self.negar("Esta análise é de outro usuário.")
                 partes, _ = pecas.partes_edital(campos["edital"])
+                prop["edital_chave"] = campos["edital"]
             if not partes:
                 return self.enviar(pg_proposta(pid, "Escolha um edital já analisado ou envie o PDF do edital.", True))
             prop["ia"] = {"status": "gerando", "substituir": campos.get("substituir") == "1"}
@@ -5391,6 +5705,8 @@ class Painel(BaseHTTPRequestHandler):
 location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver">Abrir a proposta</a>""")
                     if f.get("depois") == "docx":
                         return baixar_proposta(self, pid)
+                    if f.get("depois") == "pdf":
+                        return self.redirecionar(f"/propostas/{pid}/pdf")
                     return self.redirecionar(f"/propostas/{pid}?ok=feito")
                 novos, msg = [], ""
                 if f.get("fonte") == "monitor":

@@ -21,6 +21,7 @@ RECURSOS = {
     "declaracoes": ("📄 Declarações exigidas pelo edital", 0.25),
     "peca": ("⚖️ Peça com IA (recurso, contrarrazões…)", 0.50),
     "proposta": ("💰 Proposta: itens lidos do edital", 0.30),
+    "conferencia": ("✅ Conferência da proposta com o edital", 0.30),
     "pergunta": ("💬 Pergunte ao Licitatudo (por pergunta)", 0.20),
 }
 
