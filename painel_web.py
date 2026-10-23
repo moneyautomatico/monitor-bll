@@ -29,6 +29,8 @@ import analise
 import backup
 import urgencia
 import buscas
+import concorrentes
+import resumo
 import documentos
 import geo
 import oportunidades
@@ -48,6 +50,7 @@ AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "busca_rodando": "Verificando agora. Se houver novidades, chegam no Telegram em instantes.",
           "doc_dados": "Dados da empresa salvos.",
           "doc_cnpj": "Dados preenchidos pela Receita e salvos. Confira e complete o CPF do representante (não vem da Receita).",
+          "resumo_enviado": "Resumo enviado agora no Telegram geral.",
           "prazo": "Prazo salvo. Você recebe aviso no Telegram 24 h e 2 h antes.",
           "agendado": "Prazo colocado na Agenda.",
           "cert_ok": "Certidão salva.",
@@ -553,7 +556,7 @@ mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.a
 @media (max-width:700px){.ocultar{display:none}nav a{padding:12px 8px}}
 """
 
-ABAS = [("/", "Visão geral"), ("/mensagens", "Mensagens"), ("/processos", "Processos"), ("/agenda", "Agenda"),
+ABAS = [("/", "Visão geral"), ("/mensagens", "Mensagens"), ("/processos", "Processos"), ("/agenda", "Agenda"), ("/concorrentes", "Concorrentes"),
         ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/documentos", "Documentos"), ("/empresas", "Empresas"), ("/config", "Configurações")]
 
 
@@ -1915,6 +1918,147 @@ As certidões são emitidas por você nos sites oficiais (eles têm captcha).</p
     return pagina("Certidões", corpo, "/documentos", aviso)
 
 
+CAT_DOC = {"declaracao": "Declaração", "proposta": "Proposta/técnico", "outra": "Outro"}
+
+
+def html_habilitacao(ch, q):
+    """'Posso participar?': documentos exigidos (lidos pela IA) x certidões cadastradas da empresa."""
+    jobs = [x for x in pecas.listar(200) if x.get("tipo") == "habilitacao" and x.get("edital") == ch]
+    job = jobs[0] if jobs else None
+    cab = '<h2 id="hab" style="margin-top:24px">✅ Posso participar?</h2>'
+    botao_ler = (f'<form method="post" action="/analise/{ch}/habilitacao" style="display:inline"><input type="hidden" name="csrf" value="{CSRF}">'
+                 f'<button {"class=sec" if job else ""}>🤖 {"Ler de novo" if job else "Ver os documentos exigidos e comparar com as certidões"}</button></form>')
+    if not job:
+        return cab + f'<p class="sub">A IA lista os documentos de habilitação do edital e o sistema confere com as certidões cadastradas de cada empresa.</p>{botao_ler}'
+    if job.get("status") == "gerando":
+        return cab + '<div class="msg">🤖 Lendo os documentos exigidos… (1 a 3 minutos)</div><script>setTimeout(()=>location.reload(),8000)</script>'
+    if job.get("status") == "erro":
+        return cab + f'<div class="msg erro">{e(job.get("erro", ""))}</div>{botao_ler}'
+    r = job.get("resultado") or {}
+    emps = sorted(nomes_empresas())
+    emp = q.get("emp", "") if q.get("emp", "") in emps else (emps[0] if emps else "")
+    try:
+        sessao = datetime.fromisoformat(r.get("data_sessao")) if r.get("data_sessao") else None
+    except ValueError:
+        sessao = None
+    ref = (sessao.date() if sessao else date.today())
+    certs = [c for c in agenda.certidoes()["itens"].values() if c.get("empresa") == emp]
+    links = {k: u for k, _, u in agenda.TIPOS_CERT if u}
+    linhas, faltas, atencao = "", [], []
+    for doc in r.get("documentos", []):
+        cat = doc.get("categoria", "outra")
+        if cat in agenda.NOME_CERT and cat != "outra":
+            do_tipo = [c for c in certs if c.get("tipo") == cat]
+            validas = sorted([c for c in do_tipo if c.get("validade")], key=lambda c: c["validade"], reverse=True)
+            if do_tipo and not validas:   # documento sem validade (atestado, contrato social…): basta estar cadastrado
+                st = "✅ cadastrado"
+            elif not validas:
+                st = '❌ não cadastrada' + (f' · <a href="{e(links[cat])}" target="_blank" rel="noopener">emitir</a>' if cat in links else "")
+                faltas.append(doc["nome"])
+            elif date.fromisoformat(validas[0]["validade"]) < ref:
+                st = f'🟠 vence {date.fromisoformat(validas[0]["validade"]):%d/%m} – antes da sessão' if sessao else "🟠 vencida"
+                atencao.append(doc["nome"])
+            else:
+                st = f'✅ válida até {date.fromisoformat(validas[0]["validade"]):%d/%m/%Y}'
+        elif cat == "declaracao":
+            st = f'📄 <a href="/documentos?emp={e(urllib.parse.quote(emp))}">gerar em Declarações</a>'
+        else:
+            st = "⚪ conferir"
+        linhas += (f'<tr><td>{e(doc.get("nome", ""))}<div class="sub">{e(doc.get("obs", ""))}</div></td>'
+                   f'<td class="ocultar">{e(doc.get("item", ""))}</td><td class="ocultar">{e(agenda.NOME_CERT.get(cat) or CAT_DOC.get(cat, cat))}</td><td>{st}</td></tr>')
+    if faltas or atencao:
+        semaforo = (f'<div class="msg erro">🔴 <b>{e(emp)}</b> ainda não está pronta: '
+                    + (f'faltam {len(faltas)} documento(s) ({e(", ".join(faltas[:4]))})' if faltas else "")
+                    + ("; " if faltas and atencao else "") + (f'{len(atencao)} vence(m) antes da sessão' if atencao else "") + '.</div>')
+    else:
+        semaforo = (f'<div class="msg">🟢 As certidões exigidas de <b>{e(emp)}</b> estão cadastradas e válidas'
+                    f'{" na data da sessão" if sessao else ""}. Confira os itens “⚪ conferir” e as declarações.</div>')
+    sel = "".join(f'<option value="{e(n)}" {"selected" if n == emp else ""}>{e(n)}</option>' for n in emps)
+    agendar = ""
+    if sessao:
+        agendar = (f'<form method="post" action="/agenda/novo" style="display:inline"><input type="hidden" name="csrf" value="{CSRF}">'
+                   f'<input type="hidden" name="titulo" value="{e(("🗓️ Sessão – " + (job.get("titulo") or "")).strip(" –")[:150])}">'
+                   f'<input type="hidden" name="data" value="{sessao:%Y-%m-%d}"><input type="hidden" name="hora" value="{sessao:%H:%M}">'
+                   f'<input type="hidden" name="voltar" value="/agenda?ok=agendado"><button class="sec">📅 Agendar a sessão ({sessao:%d/%m %H:%M})</button></form>')
+    return (cab + f'<div class="acoes"><select class="campo" style="max-width:280px" onchange="location.href=\'/analise/{ch}?emp=\'+encodeURIComponent(this.value)+\'#hab\'">{sel}</select>'
+            f'{agendar}{botao_ler}</div>{semaforo}'
+            + (f'<div class="msg">⚠️ {e(r.get("observacoes"))}</div>' if r.get("observacoes") else "")
+            + f'<table><tr><th>Documento exigido</th><th class="ocultar">Item</th><th class="ocultar">Tipo</th><th>{e(emp)}</th></tr>'
+            f'{linhas or "<tr><td colspan=4>A IA não encontrou a lista de documentos.</td></tr>"}</table>'
+            f'<p class="sub">Lido em {e(job.get("fim", ""))}. A IA pode errar – confira no edital. Cadastre/atualize as certidões em '
+            f'<a href="/certidoes?emp={e(urllib.parse.quote(emp))}">Documentos → Certidões</a>.</p>')
+
+
+# ------------------------------------------------------------------ concorrentes
+def _pct(v):
+    return "—" if v is None else (f"+{v:.1f}%" if v > 0 else f"{v:.1f}%").replace(".", ",")
+
+
+def _rs(v):
+    return buscas.moeda(v) if v else "—"
+
+
+def pg_concorrentes(q):
+    emp = q.get("emp", "")
+    dados = concorrentes.analisar(emp)
+    r, lista = dados["resumo"], dados["concorrentes"]
+    sel = ('<select class="campo" style="max-width:280px" onchange="location.href=\'/concorrentes?emp=\'+encodeURIComponent(this.value)">'
+           '<option value="">Todas as nossas empresas</option>' +
+           "".join(f'<option value="{e(n)}" {"selected" if n == emp else ""}>{e(n)}</option>' for n in dados["empresas"]) + "</select>")
+    alvo = q.get("c", "")
+    if alvo:
+        c = next((x for x in lista if x["chave"] == alvo), None)
+        if not c:
+            return pagina("Concorrente", "<h2>Concorrente não encontrado</h2>", "/concorrentes")
+        det = "".join(
+            f'<tr><td>{e(d["processo"])}<div class="sub">{e(d["orgao"][:60])}</div></td><td>L{e(str(int(d["lote"])) if str(d["lote"]).isdigit() else d["lote"])}'
+            f'<div class="sub">{e(d["desc"][:70])}</div></td>'
+            f'<td><b>{e(str(d["pos"]) + "º" if d["pos"] else "❌")}</b> {_rs(d["valor"])}{"<div class=sub>marca " + e(d["marca"]) + "</div>" if d.get("marca") else ""}</td>'
+            f'<td>{e(str(d["nossa_pos"]) + "º" if d["nossa_pos"] else "❌")} {_rs(d["nosso"])}<div class="sub">{e(d["empresa"])}</div></td>'
+            f'<td>{_pct((d["valor"] - d["nosso"]) / d["nosso"] * 100 if d.get("valor") and d.get("nosso") else None)}</td>'
+            f'<td class="ocultar">{e(d["quando"][:10])}</td></tr>' for d in c["det"])
+        corpo = (f'<h2>🥊 {e(c["nome"])}</h2><p><a class="btn sec" href="/concorrentes?emp={e(urllib.parse.quote(emp))}">← Voltar</a></p>'
+                 f'<div class="kpis"><div class="kpi"><div class="v">{c["lotes"]}</div><div class="l">lotes contra nós</div></div>'
+                 f'<div class="kpi"><div class="v">{c["ganhou_de_nos"]}</div><div class="l">ficou à nossa frente</div></div>'
+                 f'<div class="kpi"><div class="v">{c["perdeu_para_nos"]}</div><div class="l">ficou atrás de nós</div></div>'
+                 f'<div class="kpi"><div class="v">{c["vitorias"]}</div><div class="l">vezes em 1º lugar</div></div>'
+                 f'<div class="kpi"><div class="v">{_pct(c["dif_media"])}</div><div class="l">preço médio dele vs. o nosso</div></div>'
+                 f'<div class="kpi"><div class="v">{c["desclass"]}</div><div class="l">vezes desclassificado</div></div></div>'
+                 f'<table><tr><th>Processo</th><th>Lote/item</th><th>Ele</th><th>Nós</th><th>Diferença</th><th class="ocultar">Lido em</th></tr>{det}</table>'
+                 '<p class="sub">Diferença = quanto o preço dele ficou acima (+) ou abaixo (−) do nosso no mesmo lote/item.</p>')
+        return pagina("Concorrente", corpo, "/concorrentes")
+    taxa = (r["ganhos"] / r["lotes"] * 100) if r["lotes"] else 0
+    linhas = "".join(
+        f'<tr><td><a href="/concorrentes?{e(urllib.parse.urlencode({"emp": emp, "c": c["chave"]}))}"><b>{e(c["nome"])}</b></a>'
+        f'<div class="sub">{c["orgaos"]} órgão(s) · último encontro {e(c["ultimo"][8:10] + "/" + c["ultimo"][5:7] + "/" + c["ultimo"][:4] if c["ultimo"] else "—")}</div></td>'
+        f'<td>{c["lotes"]}</td><td><b style="color:#c62828">{c["ganhou_de_nos"]}</b></td><td style="color:#2e7d32">{c["perdeu_para_nos"]}</td>'
+        f'<td class="ocultar">{c["vitorias"]}</td><td>{_pct(c["dif_media"])}</td><td class="ocultar">{c["desclass"]}</td></tr>'
+        for c in lista[:150])
+    perdas = "".join(
+        f'<tr><td>{e(p["processo"])}<div class="sub">{e(p["orgao"][:50])}</div></td><td>L{e(str(int(p["lote"])) if str(p["lote"]).isdigit() else p["lote"])} '
+        f'<span class="sub">{e(p["desc"][:50])}</span></td><td>{e(str(p["nossa_pos"]) + "º" if p["nossa_pos"] else "❌")} {_rs(p["nosso"])}</td>'
+        f'<td>{e(p["lider"][:40])}{" <span class=tag>nossa</span>" if p["propria"] else ""} {_rs(p["valor_lider"])}</td><td><b>{_pct(p["gap"])}</b></td></tr>'
+        for p in dados["perdas"][:40] if p["gap"] > 0)
+    plats = " · ".join(f"{k}: {v[1]}/{v[0]}" for k, v in sorted(r["por_plat"].items()))
+    corpo = f"""<h2>🥊 Inteligência de concorrentes</h2>
+<p class="sub">Feito com as classificações que o monitor já leu (BLL, BNC, Portal de Compras). Mostra quem disputa com vocês,
+quem fica à frente e por quanto. Quanto mais processos lidos, mais confiável.</p>
+<div class="acoes">{sel}</div>
+<div class="kpis"><div class="kpi"><div class="v">{r["lotes"]}</div><div class="l">lotes/itens disputados</div></div>
+<div class="kpi"><div class="v">{r["ganhos"]} <small>({taxa:.0f}%)</small></div><div class="l">em 1º lugar · {e(plats) or "—"}</div></div>
+<div class="kpi"><div class="v">{r["segundos"]}</div><div class="l">em 2º lugar</div></div>
+<div class="kpi"><div class="v">{_pct(r["gap_medio"])}</div><div class="l">quanto ficamos acima do 1º, em média, quando não ganhamos</div></div>
+<div class="kpi"><div class="v">{r["perto"]}</div><div class="l">perdidos por até 3% (dava para ganhar)</div></div>
+<div class="kpi"><div class="v">{r["desclass"]}</div><div class="l">vezes desclassificados/inabilitados</div></div></div>
+<h3>Quem mais disputa com vocês</h3>
+<table><tr><th>Concorrente</th><th>Lotes juntos</th><th>Ficou à frente</th><th>Ficou atrás</th><th class="ocultar">1º lugares</th>
+<th>Preço dele vs. nosso</th><th class="ocultar">Desclass.</th></tr>{linhas or '<tr><td colspan="7">Ainda não há classificações lidas.</td></tr>'}</table>
+<h3 style="margin-top:22px">Onde perdemos por menos</h3>
+<p class="sub">Lotes em que não ficamos em 1º, do menor para o maior “gap” – bons candidatos a revisar preço/margem.</p>
+<table><tr><th>Processo</th><th>Lote/item</th><th>Nós</th><th>1º colocado</th><th>Ficamos acima</th></tr>{perdas or '<tr><td colspan="5">Nada ainda.</td></tr>'}</table>"""
+    return pagina("Concorrentes", corpo, "/concorrentes")
+
+
 def pg_config(aviso=""):
     c = CFG_ATUAL()
     g = lambda k, d="": e(c.get(k, d))  # noqa: E731
@@ -1963,6 +2107,12 @@ mensagens, processos, classificações, buscas e análises.</p>
 <h3>Cópias no servidor</h3>
 <table><tr><th>Arquivo</th><th>Tamanho</th><th>Data</th></tr>{"".join(f'<tr><td><a href="/backup/{e(n)}">{e(n)}</a></td><td>{t / 1024 / 1024:.1f} MB</td><td>{d:%d/%m/%Y %H:%M}</td></tr>' for n, t, d in backup.listar()) or '<tr><td colspan="3">Nenhum ainda.</td></tr>'}</table>
 <p class="sub">Para abrir a cópia do Telegram: <code>openssl enc -d -aes-256-cbc -pbkdf2 -in ARQUIVO.enc -out backup.tar.gz</code> (pede a senha).</p></div>
+<h2 style="margin-top:22px">☀️ Resumo diário no Telegram</h2><div class="form">
+<form method="post" action="/config/resumo"><input type="hidden" name="csrf" value="{CSRF}">
+<label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" name="RESUMO_ATIVO" value="1" {"checked" if c.get("RESUMO_ATIVO", "1") != "0" else ""}>
+Mandar todo dia um resumo: prazos de hoje/amanhã, certidões vencendo, o que mudou nos processos e oportunidades novas</label>
+<label>Hora do resumo <small>(0 a 23)</small></label><input class="campo" type="number" min="0" max="23" name="RESUMO_HORA" value="{g('RESUMO_HORA', '7')}" style="max-width:120px">
+<div class="acoes"><button>Salvar</button><button class="sec" name="acao" value="agora">📨 Enviar um resumo agora</button></div></form></div>
 <h2 style="margin-top:22px" id="seguranca">🛡️ Segurança</h2><div class="form">
 <p class="sub">Acesso ao painel: {"<b>HTTPS (cadeado) ativo</b>" if HOST == "127.0.0.1" else "<b style='color:var(--erro)'>sem HTTPS</b> – rode <code>bash seguranca.sh</code> no servidor"} ·
 sessões abertas: <b>{len(_sessoes())}</b> · senha {"<b style='color:var(--erro)'>fraca</b>" if senha_fraca(SENHA) else "<b>forte</b>"}</p>
@@ -2510,7 +2660,7 @@ def botao_analisar(cnpj, ano, seq, titulo):
             f'<button>🤖 Analisar edital (IA)</button></form>')
 
 
-def pg_analise(ch):
+def pg_analise(ch, q=None):
     d = analise.ler(ch)
     if not d:
         return pagina("Análise", "<h2>Análise não encontrada</h2>", "/editais")
@@ -2534,7 +2684,7 @@ def pg_analise(ch):
              f'<div class="analise">{analise.md_html(d.get("md", ""))}</div>'
              f'<p class="sub">Gerado em {e(d.get("fim", ""))} por {e(d.get("modelo", ""))} · Arquivos lidos: {e(arqs) or "—"}<br>'
              '⚠️ A IA pode errar ou deixar algo de fora. Confira sempre no edital antes de enviar documentos e proposta.</p>'
-             + form_refazer(ch, d))
+             + html_habilitacao(ch, q or {}) + form_refazer(ch, d))
     return pagina("Análise", corpo, "/editais")
 
 
@@ -2936,6 +3086,8 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_config(AVISOS.get(q.get("ok", ""), "")))
             if p == "/documentos":
                 return self.enviar(pg_documentos(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/concorrentes":
+                return self.enviar(pg_concorrentes(q))
             if p == "/agenda":
                 return self.enviar(pg_agenda(q, AVISOS.get(q.get("ok", ""), "")))
             if p == "/certidoes":
@@ -3006,7 +3158,7 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_editais(AVISOS.get(q.get("ok", ""), "")))
             m = re.fullmatch(r"/analise/([a-z0-9-]+)", p)
             if m:
-                return self.enviar(pg_analise(m.group(1)))
+                return self.enviar(pg_analise(m.group(1), q))
             if p == "/classificacao":
                 return self.enviar(pg_classificacao(q))
             if p == "/buscar/itens":
@@ -3187,6 +3339,21 @@ class Painel(BaseHTTPRequestHandler):
                 else:
                     analise.salvar_config_ia(f.get("instrucoes", ""), f.get("empresa", ""))
                 return self.redirecionar("/editais?ok=ia")
+            m = re.fullmatch(r"/analise/([\w-]{3,60})/habilitacao", p)
+            if m and analise.ler(m.group(1)):
+                ch = m.group(1)
+                d_an = analise.ler(ch) or {}
+                pid = pecas.novo_id("hab", ch)
+                pecas.iniciar(pid, CFG_ATUAL(), {"tipo": "habilitacao", "edital": ch, "ctx": {}, "empresa": "",
+                                                 "titulo": d_an.get("titulo", ""), "anexos": []})
+                return self.redirecionar(f"/analise/{ch}#hab")
+            if p == "/config/resumo":
+                gravar_env(CONFIG, {"RESUMO_ATIVO": "1" if f.get("RESUMO_ATIVO") else "0",
+                                    "RESUMO_HORA": re.sub(r"\D", "", f.get("RESUMO_HORA", "7"))[:2] or "7"})
+                if f.get("acao") == "agora":
+                    threading.Thread(target=lambda: resumo.enviar_partes(telegram_geral, resumo.montar()), daemon=True).start()
+                    return self.redirecionar("/config?ok=resumo_enviado")
+                return self.redirecionar("/config?ok=config")
             if p == "/agenda/novo":
                 try:
                     dt = datetime.strptime(f.get("data", "")[:10] + " " + (f.get("hora") or "23:59")[:5], "%Y-%m-%d %H:%M")
@@ -3356,4 +3523,5 @@ if __name__ == "__main__":
     threading.Thread(target=backup.ciclo, args=(CFG_ATUAL, telegram_geral), daemon=True).start()
     threading.Thread(target=oportunidades.ciclo, args=(telegram_geral,), daemon=True).start()
     threading.Thread(target=agenda.ciclo, args=(telegram_geral, CFG_ATUAL), daemon=True).start()
+    threading.Thread(target=resumo.ciclo, args=(telegram_geral, CFG_ATUAL), daemon=True).start()
     ThreadingHTTPServer((HOST, PORTA), Painel).serve_forever()

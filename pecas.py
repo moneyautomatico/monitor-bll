@@ -85,6 +85,23 @@ PROMPT_DECL = """Leia o edital enviado e responda SOMENTE com um JSON válido (s
 """
 
 
+PROMPT_HAB = """Leia o edital enviado e responda SOMENTE com um JSON válido (sem texto antes ou depois), neste formato:
+{"data_sessao": "AAAA-MM-DDTHH:MM", "documentos": [{"nome": "...", "categoria": "...", "item": "...", "obs": "..."}],
+ "observacoes": "..."}
+
+- "data_sessao": data e hora de abertura da sessão/disputa (vazio se não achar).
+- "documentos": TODOS os documentos de HABILITAÇÃO e de proposta exigidos do licitante (jurídica, fiscal, social,
+  trabalhista, econômico-financeira, técnica, declarações e outros). Um por linha.
+- "categoria": use exatamente uma destas: federal (CND Receita/PGFN), fgts (CRF), trabalhista (CNDT), estadual,
+  municipal, falencia (certidão de falência/recuperação), balanco (balanço/índices contábeis), alvara, sanitario
+  (licença/alvará sanitário), contrato (ato constitutivo/contrato social/documentos dos sócios), atestado (atestado de
+  capacidade técnica), declaracao, proposta (proposta, planilha, catálogo, ficha técnica, amostra), outra.
+- "item": número do item do edital (ex.: "9.4.2"). "obs": exigências especiais em até 20 palavras (ex.: "mínimo 50% do
+  quantitativo", "emitida há no máximo 90 dias", "índices LG/SG/LC > 1").
+- "observacoes": até 3 frases com pontos de atenção (ex.: vistoria obrigatória, amostra, garantia de proposta).
+"""
+
+
 # ------------------------------------------------------------------ armazenamento
 def arquivo(pid):
     return DIR / f"{pid}.json"
@@ -209,7 +226,19 @@ def _rodar(pid, cfg, pedido):
             partes += analise.preparar(nome, dados)
             nomes.append(nome)
         ctx = pedido["ctx"]
-        if pedido["tipo"] == "declaracoes":
+        if pedido["tipo"] == "habilitacao":
+            if not partes:
+                raise RuntimeError("Não achei os arquivos deste edital para ler de novo.")
+            md, modelo, usados = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes, PROMPT_HAB)
+            m = re.search(r"\{.*\}", md, re.S)
+            res = json.loads(m.group(0)) if m else {}
+            docs = [{"nome": str(x.get("nome", ""))[:200], "categoria": str(x.get("categoria", "outra"))[:20],
+                     "item": str(x.get("item", ""))[:30], "obs": str(x.get("obs", ""))[:200]}
+                    for x in res.get("documentos", []) if isinstance(x, dict) and x.get("nome")][:80]
+            base.update(status="pronto", resultado={"documentos": docs, "data_sessao": str(res.get("data_sessao", ""))[:16],
+                                                    "observacoes": str(res.get("observacoes", ""))[:800]},
+                        modelo=modelo, arquivos=usados or nomes, fim=datetime.now().strftime("%d/%m/%Y %H:%M"))
+        elif pedido["tipo"] == "declaracoes":
             if not partes:
                 raise RuntimeError("Escolha um edital já analisado ou envie o PDF do edital.")
             ids = ", ".join(f"{i} ({t})" for i, t, _ in documentos.DECLARACOES)
