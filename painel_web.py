@@ -994,11 +994,17 @@ def pg_chat(q):
 <section class="mc-dir"><div id="conversa">{direita}</div></section></div>
 <script>
 let filtroAba='todos';
+function passaAba(a){{if(filtroAba==='naolidos')return a.dataset.nl==='1'; if(filtroAba==='urgentes')return a.dataset.urg==='1';
+ if(filtroAba.startsWith('plat:'))return a.dataset.plat===filtroAba.slice(5); return true;}}
 function filtrar(){{const t=document.querySelector('.mc-busca').value.toLowerCase();
- const em=(document.querySelector('.mc-emp')||{{}}).value||'';
- document.querySelectorAll('#lista .it').forEach(a=>{{let ok=(!t||a.dataset.busca.includes(t))&&(!em||a.dataset.emp===em);
-  if(filtroAba==='naolidos')ok=ok&&a.dataset.nl==='1'; else if(filtroAba==='urgentes')ok=ok&&a.dataset.urg==='1';
-  else if(filtroAba.startsWith('plat:'))ok=ok&&a.dataset.plat===filtroAba.slice(5);
+ const its=[...document.querySelectorAll('#lista .it')]; const se=document.querySelector('.mc-emp');
+ if(se){{  // o menu mostra só as empresas da plataforma/aba escolhida
+  const cont={{}}; let tot=0; its.forEach(a=>{{if(passaAba(a)){{cont[a.dataset.emp]=(cont[a.dataset.emp]||0)+1; tot++;}}}});
+  [...se.options].forEach(o=>{{if(!o.value){{o.textContent='🏢 Todas as empresas ('+tot+')'; return;}}
+   const n=cont[o.value]||0; o.hidden=!n; o.disabled=!n; o.textContent=o.value+' ('+n+')';}});
+  if(se.value&&!cont[se.value])se.value='';}}
+ const em=se?se.value:'';
+ its.forEach(a=>{{const ok=(!t||a.dataset.busca.includes(t))&&(!em||a.dataset.emp===em)&&passaAba(a);
   a.style.display=ok?'':'none';}});}}
 function aba(b){{document.querySelectorAll('.aba').forEach(x=>x.classList.remove('on'));b.classList.add('on');filtroAba=b.dataset.f;filtrar();
  try{{sessionStorage.setItem('aba',filtroAba);}}catch(e){{}}}}
