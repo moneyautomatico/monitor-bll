@@ -71,6 +71,8 @@ def carregar_config(empresa=None):
         "EMPRESA_ID": "",
         "EMPRESA_NOME": "",
         "ENVIAR_PARA": "geral",       # geral | proprio | ambos
+        "TELEGRAM_DESTINO": "",       # vazio = ENVIAR_PARA (as "Minhas configurações" do dono preenchem)
+        "NTFY_DESTINO": "",
         "EMPRESA_TELEGRAM_TOKEN": "",
         "EMPRESA_TELEGRAM_CHAT_ID": "",
         "EMPRESA_NTFY_TOPICO": "",
@@ -126,7 +128,7 @@ def log(msg):
 def destinos_telegram():
     geral = (CFG["TELEGRAM_TOKEN"], CFG["TELEGRAM_CHAT_ID"])
     proprio = (CFG.get("EMPRESA_TELEGRAM_TOKEN") or CFG["TELEGRAM_TOKEN"], CFG.get("EMPRESA_TELEGRAM_CHAT_ID", ""))
-    modo = (CFG.get("ENVIAR_PARA") or "geral").lower() if CFG.get("EMPRESA_ID") else "geral"
+    modo = (CFG.get("TELEGRAM_DESTINO") or CFG.get("ENVIAR_PARA") or "geral").lower() if CFG.get("EMPRESA_ID") else "geral"
     lista = []
     if modo in ("geral", "ambos"):
         lista.append(geral)
@@ -211,7 +213,7 @@ def _avisar_uma_vez(chave, texto):
 
 def alarme(titulo, texto, prioridade="5"):
     """Notificação no app ntfy. Prioridade 5 = máxima (toca alto); 3 = normal."""
-    modo = (CFG.get("ENVIAR_PARA") or "geral").lower() if CFG.get("EMPRESA_ID") else "geral"
+    modo = (CFG.get("NTFY_DESTINO") or CFG.get("ENVIAR_PARA") or "geral").lower() if CFG.get("EMPRESA_ID") else "geral"
     topicos = []
     if modo in ("geral", "ambos"):
         topicos.append(CFG.get("NTFY_TOPICO", "").strip())

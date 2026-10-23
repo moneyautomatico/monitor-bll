@@ -47,7 +47,9 @@ PY = PASTA / "venv" / "bin" / "python"
 CSRF = secrets.token_hex(16)
 AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "pref": "Configurações salvas.", "pref_aplicadas": "Configurações salvas e aplicadas em todas as suas empresas (monitores reiniciados).",
-          "pref_chat": "Achei o seu chat do Telegram e salvei. Clique em “Testar” para conferir.", "pref_resumo": "Resumo enviado no seu Telegram.",
+          "pref_chat": "Pronto! Conversa ligada e aplicada em todas as suas empresas – chegou uma mensagem de confirmação no seu Telegram.",
+          "pref_bot": "Bot conectado! Agora faça o passo 2: abra o bot e toque em Iniciar.",
+          "pref_ntfy": "Tópico criado e aplicado em todas as suas empresas. Inscreva o mesmo nome no app ntfy do celular.", "pref_resumo": "Resumo enviado no seu Telegram.",
           "usuario_criado": "Usuário criado. Passe o login e a senha para a pessoa (de preferência pessoalmente ou por telefone).",
           "usuario_excluido": "Usuário excluído e desconectado.", "senha": "Senha trocada. Os seus outros aparelhos foram desconectados.",
           "senha_redefinida": "Senha redefinida e a pessoa foi desconectada dos aparelhos.",
@@ -1605,12 +1607,11 @@ def pg_empresas(aviso="", erro=False):
 
 def form_empresa(eid=None):
     cfg = ler_env(EMPRESAS / f"{eid}.env") if eid else {}
-    if not eid:   # empresa nova: começa com os alertas das "Minhas configurações"
-        uc = usuarios.cfg(login_atual())
-        if uc.get("tg_chat") or uc.get("ntfy"):
-            cfg = {"ENVIAR_PARA": uc.get("modo") or "proprio", "EMPRESA_TELEGRAM_CHAT_ID": uc.get("tg_chat", ""),
-                   "EMPRESA_NTFY_TOPICO": uc.get("ntfy", ""), "EMPRESA_TELEGRAM_TOKEN": uc.get("tg_token", "")}
     g = lambda k, d="": e(cfg.get(k, d))  # noqa: E731
+    dono_f = cfg.get("EMPRESA_DONO", "") if eid else login_atual()
+    ucd = usuarios.cfg(dono_f) if dono_f else {}
+    aviso_alertas = ('<div class="msg">🔔 Os alertas desta empresa seguem o bot/ntfy de <b>⚙️ Minhas configurações</b> do dono '
+                     f'({e(dono_f)}) – o que estiver lá vale mais que os campos abaixo.</div>') if (ucd.get("tg_chat") or ucd.get("ntfy")) else ""
     modo = cfg.get("ENVIAR_PARA", "geral")
     plat = cfg.get("PLATAFORMA", "bll").lower()
     sel = lambda v: "selected" if modo == v else ""  # noqa: E731
@@ -1641,7 +1642,7 @@ def form_empresa(eid=None):
 <input class="campo" name="cnpj" value="{g('EMPRESA_CNPJ')}" placeholder="00.000.000/0000-00">
 <label>Tipo de funcionário <small>(opcional; vazio = primeira opção, ex.: Representante Legal)</small></label>
 <input class="campo" name="funcao" value="{g('LICITANET_FUNCAO')}"></div>
-<h3>Alertas</h3>
+<h3>Alertas</h3>{aviso_alertas}
 <label>Para onde vão os alertas</label><select class="campo" name="enviar_para">
 <option value="geral" {sel('geral')}>Telegram geral (o mesmo de todas)</option>
 <option value="proprio" {sel('proprio')}>Telegram próprio desta empresa</option>
@@ -2675,47 +2676,74 @@ def pg_preferencias(aviso="", erro=False):
     lg = u["login"]
     uc = usuarios.cfg(lg)
     minhas = sorted(a.stem for a in EMPRESAS.glob("*.env") if (ler_env(a).get("EMPRESA_DONO") or "").lower() == lg) if EMPRESAS.exists() else []
-    tok = uc.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
-    bot = nome_bot(tok) if tok else ""
-    # sem configuração salva: mostra como as empresas dele já estão hoje (para não mudar nada sem querer)
-    modo = uc.get("modo") or (ler_env(EMPRESAS / f"{minhas[0]}.env").get("ENVIAR_PARA") if minhas else "") or "proprio"
-    sel = lambda v: "selected" if modo == v else ""  # noqa: E731
     leitura = u["papel"] == "leitura"
-    sugestao_ntfy = "licitatudo-" + re.sub(r"[^a-z0-9]", "", lg)[:12] + "-" + secrets.token_hex(4)
+    bot, chat, topico = uc.get("bot_nome", ""), uc.get("tg_chat", ""), uc.get("ntfy", "")
+    tem_bot = bool(uc.get("tg_token"))
+    cod = codigo_telegram(lg)
+    sugestao_ntfy = uc.get("ntfy_sugestao") or ("licitatudo-" + re.sub(r"[^a-z0-9]", "", lg)[:12] + "-" + secrets.token_hex(4))
+    if not uc.get("ntfy_sugestao"):
+        usuarios.salvar_cfg(lg, {"ntfy_sugestao": sugestao_ntfy})
+    ok_i = '<span class="passo ok">✓</span>'
+    n_i = lambda n: f'<span class="passo">{n}</span>'  # noqa: E731
+    # ---- Telegram
+    if not tem_bot:
+        tg = f"""<div class="etapa">{n_i(1)}<div><b>Crie o seu bot no Telegram</b> (leva 1 minuto)
+<ol class="sub"><li>Abra o <a href="https://t.me/BotFather" target="_blank" rel="noopener"><b>@BotFather</b></a> no Telegram e toque em <b>Iniciar</b>.</li>
+<li>Mande <code>/newbot</code>, escolha um nome (ex.: <i>Alertas da Minha Empresa</i>) e um usuário terminado em <b>bot</b> (ex.: <i>minhaempresa_alertas_bot</i>).</li>
+<li>O BotFather responde com um <b>token</b> parecido com <code>123456789:AAH…</code>. Copie e cole aqui:</li></ol>
+<form method="post" action="/preferencias/bot" class="linha-senha"><input type="hidden" name="csrf" value="{CSRF}">
+<input class="campo" name="tg_token" placeholder="cole o token do seu bot" autocomplete="off" style="max-width:420px" required>
+{'' if leitura else '<button>Conectar bot</button>'}</form></div></div>
+<div class="etapa apagada">{n_i(2)}<div><b>Ligue o bot à sua conversa</b></div></div>"""
+    else:
+        link = f"https://t.me/{bot}?start={cod}" if bot else ""
+        tg = f"""<div class="etapa">{ok_i}<div><b>Bot conectado:</b> {f'<a href="https://t.me/{e(bot)}" target="_blank" rel="noopener">@{e(bot)}</a>' if bot else '(nome não lido)'}
+{'' if leitura else botao("/preferencias/bot/remover", "Trocar/remover bot", "sec", "Desconectar este bot? Os alertas das suas empresas voltam para o padrão do sistema.")}</div></div>"""
+        if not chat:
+            tg += f"""<div class="etapa">{n_i(2)}<div><b>Ligue o bot à sua conversa</b>
+<ol class="sub"><li>{f'<a class="btn" href="{e(link)}" target="_blank" rel="noopener">📲 Abrir meu bot no Telegram</a>' if link else 'Abra o seu bot no Telegram'} e toque em <b>Iniciar</b>
+{'' if link else f'(ou mande a mensagem <b>{e(cod)}</b>)'}.</li>
+<li>Volte aqui e clique: {botao("/preferencias/descobrir", "🔎 Já iniciei – encontrar minha conversa")}</li></ol>
+<p class="sub">Quer receber num <b>grupo</b>? Adicione o bot ao grupo e mande <b>{e(cod)}</b> no grupo antes de clicar.</p></div></div>"""
+        else:
+            tg += f"""<div class="etapa">{ok_i}<div><b>Conversa ligada</b> <span class="sub">(chat {e(chat)})</span>
+{botao("/preferencias/descobrir", "Ligar outra conversa", "sec")}</div></div>"""
+    # ---- ntfy
+    if not topico:
+        nt = f"""<div class="etapa">{n_i(1)}<div><b>Instale o app ntfy</b> no celular:
+<a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener">Android</a> ·
+<a href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank" rel="noopener">iPhone</a></div></div>
+<div class="etapa">{n_i(2)}<div><b>Crie o seu tópico</b> – já sugerimos um nome único, só seu:
+<form method="post" action="/preferencias/ntfy" class="linha-senha" style="margin-top:6px"><input type="hidden" name="csrf" value="{CSRF}">
+<input class="campo" name="ntfy" value="{e(sugestao_ntfy)}" style="max-width:340px">{'' if leitura else '<button>Criar meu tópico</button>'}</form>
+<p class="sub">Pode trocar o nome, mas use algo difícil de adivinhar: no ntfy, quem souber o nome recebe os alarmes.</p></div></div>"""
+    else:
+        nt = f"""<div class="etapa">{ok_i}<div><b>Seu tópico:</b> <code style="font-size:15px">{e(topico)}</code>
+<button type="button" class="sec" onclick="navigator.clipboard.writeText('{e(topico)}');this.textContent='Copiado!'">📋 Copiar</button>
+{'' if leitura else botao("/preferencias/ntfy/remover", "Remover", "sec", "Remover o tópico ntfy? Os alarmes das suas empresas voltam para o padrão do sistema.")}</div></div>
+<div class="etapa">{n_i("📱")}<div><b>No celular:</b> abra o app ntfy → <b>+</b> → digite <b>{e(topico)}</b> → Inscrever.
+No celular, este link já abre o app: <a href="ntfy://ntfy.sh/{e(topico)}">ntfy://ntfy.sh/{e(topico)}</a></div></div>"""
+    pronto = tem_bot and chat
     form_ia = "" if leitura else f"""<form method="post" action="/preferencias/ia"><input type="hidden" name="csrf" value="{CSRF}">
-<label>Minha chave do Gemini <small>(opcional – gere em aistudio.google.com; vazio = manter)</small></label>
+<label>Minha chave do Gemini <small>(opcional; gere em aistudio.google.com; vazio = manter)</small></label>
 <input class="campo" type="password" name="gemini_key" autocomplete="off">
 {'<label class="ck"><input type="checkbox" name="tirar_chave" value="1"> Remover minha chave e usar a do sistema</label>' if uc.get("gemini_key") else ''}
 <div class="acoes"><button>Salvar</button></div></form>"""
-    corpo = f"""{ESTILO_ADM}<h2>⚙️ Minhas configurações</h2>
-<p class="sub">Valem só para você ({e(lg)}) e para as suas empresas. {"As configurações gerais do sistema ficam na Área do administrador." if eh_admin() else ""}</p>
+    corpo = f"""{ESTILO_ADM}<style>.etapa{{display:flex;gap:10px;align-items:flex-start;margin:10px 0}}.etapa.apagada{{opacity:.45}}
+.passo{{flex:0 0 26px;height:26px;border-radius:50%;background:var(--borda);display:grid;place-items:center;font-weight:700;font-size:13px}}
+.passo.ok{{background:var(--verde);color:#fff}}.etapa ol{{margin:6px 0;padding-left:18px;line-height:1.7}}.etapa form{{display:inline}}
+.status-al{{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0 10px}}</style>
+<h2>⚙️ Minhas configurações</h2>
+<p class="sub">Valem só para você (<b>{e(lg)}</b>) e para as suas {len(minhas)} empresa(s). O bot e o ntfy que você cadastrar aqui recebem
+<b>apenas</b> os alertas das suas empresas – nenhum outro usuário recebe nem vê.{" As configurações gerais do sistema ficam na Área do administrador." if eh_admin() else ""}</p>
+<div class="status-al"><span class="tag {"ok" if pronto else "parado"}">{"✅ Telegram pronto" if pronto else "Telegram: não configurado"}</span>
+<span class="tag {"ok" if topico else "parado"}">{"✅ Alarme ntfy pronto" if topico else "ntfy: não configurado"}</span>
+{botao("/preferencias/testar", "📨 Testar meus alertas", "sec") if (pronto or topico) else ""}</div>
 <div class="duas-adm"><div>
-<div class="form" style="max-width:none"><h3 style="margin-top:0">🔔 Alertas das minhas empresas</h3>
-<p class="sub">Para onde vão as mensagens do pregoeiro, diligências, prazos e alarmes das empresas que você cadastrou.</p>
-<form method="post" action="/preferencias/alertas"><input type="hidden" name="csrf" value="{CSRF}">
-<label>Enviar para</label><select class="campo" name="modo">
-<option value="proprio" {sel("proprio")}>Só o meu: o chat do Telegram e o ntfy que eu informar abaixo</option>
-<option value="geral" {sel("geral")}>Telegram geral do sistema (o configurado pelo administrador – como funciona hoje)</option>
-<option value="ambos" {sel("ambos")}>Os dois</option></select>
-<label>Meu chat do Telegram <small>(chat_id – o número da sua conversa ou grupo no Telegram; veja “Não sei o meu chat_id” abaixo)</small></label>
-<input class="campo" name="tg_chat" value="{e(uc.get("tg_chat", ""))}" placeholder="ex.: 123456789">
-<label>Bot próprio <small>(opcional – token do seu bot; vazio = bot do sistema{", já cadastrado: deixe vazio para manter" if uc.get("tg_token") else ""})</small></label>
-<input class="campo" type="password" name="tg_token" autocomplete="off">
-{'<label class="ck"><input type="checkbox" name="tirar_token" value="1"> Remover meu bot e usar o do sistema</label>' if uc.get("tg_token") else ''}
-<label>Tópico ntfy <small>(alarme que toca no celular – app ntfy)</small></label>
-<input class="campo" name="ntfy" id="ntfy" value="{e(uc.get("ntfy", ""))}" placeholder="ex.: {e(sugestao_ntfy)}">
-<p class="sub" style="margin:4px 0 0">É só seu: o sistema não deixa outro usuário usar o mesmo tópico. No ntfy, quem souber o nome recebe
-os alarmes, então use um nome difícil de adivinhar – sugestão: <a href="#" onclick="document.getElementById('ntfy').value='{e(sugestao_ntfy)}';return false"><b>{e(sugestao_ntfy)}</b></a> (clique para usar)
-e assine o mesmo nome no app ntfy do celular.</p>
-<label class="ck"><input type="checkbox" name="aplicar" value="1" checked> Aplicar agora em todas as minhas empresas ({len(minhas)})</label>
-<p class="sub">Empresas que você cadastrar depois já começam com esses alertas.</p>
-<div class="acoes">{'' if leitura else '<button>Salvar</button>'}</div></form>
-<div class="acoes">{botao("/preferencias/testar", "📨 Testar meus alertas", "sec")}</div>
-<details style="margin-top:10px"><summary><b>Não sei o meu chat_id</b></summary>
-<ol class="sub" style="line-height:1.7"><li>No Telegram, abra {f'<a href="https://t.me/{e(bot)}" target="_blank" rel="noopener">@{e(bot)}</a>' if bot else 'o bot do sistema (peça o nome ao administrador)'} e toque em <b>Iniciar</b>.</li>
-<li>Mande esta mensagem para o bot: <b style="font-size:16px">{e(codigo_telegram(lg))}</b></li>
-<li>Clique no botão abaixo – o sistema encontra só a sua conversa e salva.</li></ol>
-{botao("/preferencias/descobrir", "🔎 Encontrar meu chat")}</details></div>
+<div class="form" style="max-width:none"><h3 style="margin-top:0">💬 Meu bot do Telegram</h3>
+<p class="sub">Mensagens do pregoeiro, diligências, classificação, prazos e certidões das suas empresas.</p>{tg}</div>
+<div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">🔔 Meu alarme no celular (ntfy)</h3>
+<p class="sub">Toca alto no celular nas mensagens urgentes, mesmo no silencioso.</p>{nt}</div>
 </div><div>
 <div class="form" style="max-width:none"><h3 style="margin-top:0">☀️ Meu resumo diário</h3>
 <p class="sub">Um resumo por dia no seu Telegram, só com as suas empresas: prazos, certidões vencendo e o que mudou nos processos.</p>
@@ -3643,6 +3671,76 @@ def telegram_para(tok, chat, texto):
         return False
 
 
+def alertas_do_usuario(uc):
+    """Valores para o .env das empresas a partir das "Minhas configurações" do dono."""
+    v = {}
+    if uc.get("tg_token") and uc.get("tg_chat"):
+        v.update(TELEGRAM_DESTINO="proprio", EMPRESA_TELEGRAM_TOKEN=uc["tg_token"], EMPRESA_TELEGRAM_CHAT_ID=uc["tg_chat"])
+    else:
+        v.update(TELEGRAM_DESTINO="")
+    if uc.get("ntfy"):
+        v.update(NTFY_DESTINO="proprio", EMPRESA_NTFY_TOPICO=uc["ntfy"])
+    else:
+        v.update(NTFY_DESTINO="")
+    return v
+
+
+def aplicar_alertas_usuario(login, so_eid=None):
+    """Grava o bot/ntfy do usuário em TODAS as empresas dele (e só nelas) e reinicia os monitores ligados."""
+    uc = usuarios.cfg(login)
+    v = alertas_do_usuario(uc)
+    n = 0
+    for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
+        if (so_eid and a.stem != so_eid) or (ler_env(a).get("EMPRESA_DONO") or "").lower() != login:
+            continue
+        antigo = ler_env(a)
+        w = dict(v)
+        if not uc.get("tg_token") and antigo.get("EMPRESA_TELEGRAM_TOKEN") and antigo.get("TELEGRAM_DESTINO") == "proprio":
+            w.update(EMPRESA_TELEGRAM_TOKEN="", EMPRESA_TELEGRAM_CHAT_ID="")   # bot removido
+        if not uc.get("ntfy") and antigo.get("NTFY_DESTINO") == "proprio":
+            w.update(EMPRESA_NTFY_TOPICO="")
+        gravar_env(a, w)
+        if not so_eid and ativo(a.stem):
+            sh("systemctl", "restart", f"monitor-bll@{a.stem}")
+        n += 1
+    return n
+
+
+def destinos_alerta(nomes, criador=""):
+    """Para onde vão os avisos da agenda/certidões: o mesmo destino das empresas (o dono), nunca o de outro usuário."""
+    g = CFG_ATUAL()
+    lista = [x.strip().upper() for x in (nomes or "").split(",") if x.strip()]
+    tgs, tops = [], []
+    if not lista:   # prazo manual sem empresa: vai para quem criou (ou para o geral, se for do sistema)
+        uc = usuarios.cfg(criador) if criador else {}
+        if uc.get("tg_token") and uc.get("tg_chat"):
+            tgs.append((uc["tg_token"], uc["tg_chat"]))
+        elif not criador or criador == DONO_PADRAO or (usuarios.obter(criador) or {}).get("papel") == "admin":
+            tgs.append((g.get("TELEGRAM_TOKEN"), g.get("TELEGRAM_CHAT_ID")))
+        if uc.get("ntfy"):
+            tops.append(uc["ntfy"])
+    for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
+        c = ler_env(a)
+        if (c.get("EMPRESA_NOME") or a.stem).upper().strip() not in lista:
+            continue
+        mt = (c.get("TELEGRAM_DESTINO") or c.get("ENVIAR_PARA") or "geral").lower()
+        mn = (c.get("NTFY_DESTINO") or c.get("ENVIAR_PARA") or "geral").lower()
+        if mt in ("geral", "ambos"):
+            tgs.append((g.get("TELEGRAM_TOKEN"), g.get("TELEGRAM_CHAT_ID")))
+        if mt in ("proprio", "ambos"):
+            tgs.append((c.get("EMPRESA_TELEGRAM_TOKEN") or g.get("TELEGRAM_TOKEN"), c.get("EMPRESA_TELEGRAM_CHAT_ID")))
+        if mn in ("geral", "ambos"):
+            tops.append(g.get("NTFY_TOPICO"))
+        if mn in ("proprio", "ambos"):
+            tops.append(c.get("EMPRESA_NTFY_TOPICO"))
+    tgs = list(dict.fromkeys((t, c) for t, c in tgs if t and c))
+    tops = list(dict.fromkeys(t.strip() for t in tops if t and t.strip()))
+    return tgs, tops
+
+
+agenda.ROTEAR = destinos_alerta
+
+
 def ntfy_em_uso(topico, login):
     """Tópico ntfy já usado por outro usuário (nas configurações dele ou em empresa de outro dono) ou o geral do sistema."""
     t = topico.lower()
@@ -3770,9 +3868,11 @@ def salvar_empresa(f, eid=None):
         v["BLL_SENHA"] = senha
     if f.get("tg_token", "").strip():
         v["EMPRESA_TELEGRAM_TOKEN"] = f["tg_token"].strip()
-    elif novo and usuarios.cfg(dono).get("tg_token"):
-        v["EMPRESA_TELEGRAM_TOKEN"] = usuarios.cfg(dono)["tg_token"]
+
+    v["TELEGRAM_DESTINO"] = v["NTFY_DESTINO"] = ""   # o formulário manda; as "Minhas configurações" do dono (se houver) sobrepõem
     gravar_env(arq, v)
+    if usuarios.cfg(dono).get("tg_chat") or usuarios.cfg(dono).get("ntfy"):
+        aplicar_alertas_usuario(dono, eid)
     login_mudou = (senha or antigo.get("BLL_EMAIL") != v["BLL_EMAIL"] or antigo.get("BLL_PERFIL") != v["BLL_PERFIL"]
                    or antigo.get("PLATAFORMA", "bll") != plat or antigo.get("EMPRESA_CNPJ", "") != v["EMPRESA_CNPJ"])
     if login_mudou and not novo:
@@ -4640,51 +4740,58 @@ class Painel(BaseHTTPRequestHandler):
     def preferencias(self, p, f):
         lg = login_atual()
         uc = usuarios.cfg(lg)
-        if p == "/preferencias/alertas":
-            modo = f.get("modo", "proprio") if f.get("modo") in ("proprio", "geral", "ambos") else "proprio"
-            chat = re.sub(r"[^\d-]", "", f.get("tg_chat", ""))[:20]
-            ntfy = re.sub(r"[^\w-]", "", f.get("ntfy", ""))[:64]
-            tok = f.get("tg_token", "").strip()
-            if tok and not re.fullmatch(r"\d{5,12}:[\w-]{30,60}", tok):
-                return self.enviar(pg_preferencias("O token do bot parece errado (formato 123456789:ABC…).", True))
-            if ntfy and ntfy_em_uso(ntfy, lg):
-                return self.enviar(pg_preferencias("Esse tópico ntfy já é usado por outro usuário. Escolha outro nome "
-                                                   "(use o sugerido – nomes difíceis de adivinhar são mais seguros).", True))
-            if ntfy and len(ntfy) < 12:
-                return self.enviar(pg_preferencias("Use um tópico ntfy com pelo menos 12 caracteres (ex.: o sugerido) – no ntfy, "
-                                                   "quem souber o nome do tópico recebe os alarmes.", True))
-            if modo in ("proprio", "ambos") and not chat and not ntfy:
-                return self.enviar(pg_preferencias("Para receber no seu Telegram/celular, informe o chat_id ou o tópico ntfy.", True))
-            usuarios.salvar_cfg(lg, {"modo": modo, "tg_chat": chat, "ntfy": ntfy,
-                                     "tg_token": None if f.get("tirar_token") else (tok or uc.get("tg_token") or None)})
-            uc = usuarios.cfg(lg)
-            n = 0
-            if f.get("aplicar"):
-                for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
-                    if (ler_env(a).get("EMPRESA_DONO") or "").lower() != lg:
-                        continue
-                    gravar_env(a, {"ENVIAR_PARA": modo, "EMPRESA_TELEGRAM_CHAT_ID": chat, "EMPRESA_NTFY_TOPICO": ntfy,
-                                   "EMPRESA_TELEGRAM_TOKEN": uc.get("tg_token", "")})
-                    if ativo(a.stem):
-                        sh("systemctl", "restart", f"monitor-bll@{a.stem}")
-                    n += 1
-            return self.redirecionar(f"/preferencias?ok={'pref_aplicadas' if n else 'pref'}")
+        if p == "/preferencias/bot":
+            tok = re.sub(r"\s", "", f.get("tg_token", ""))
+            if not re.fullmatch(r"\d{5,12}:[\w-]{30,60}", tok):
+                return self.enviar(pg_preferencias("Esse token não parece o do BotFather (formato 123456789:AAH…). Copie a linha inteira.", True))
+            nome = nome_bot(tok)
+            if not nome:
+                return self.enviar(pg_preferencias("O Telegram não reconheceu esse token. Confira se copiou certo.", True))
+            if tok == CFG_ATUAL().get("TELEGRAM_TOKEN") and not eh_admin():
+                return self.enviar(pg_preferencias("Esse é o bot geral do sistema. Crie um bot só seu no @BotFather.", True))
+            for outro, u in usuarios.carregar().items():
+                if outro != lg and (u.get("cfg") or {}).get("tg_token") == tok:
+                    return self.enviar(pg_preferencias("Esse bot já está cadastrado por outro usuário. Crie um bot só seu.", True))
+            usuarios.salvar_cfg(lg, {"tg_token": tok, "bot_nome": nome, "tg_chat": None})
+            return self.redirecionar("/preferencias?ok=pref_bot")
+        if p == "/preferencias/bot/remover":
+            usuarios.salvar_cfg(lg, {"tg_token": None, "bot_nome": None, "tg_chat": None})
+            aplicar_alertas_usuario(lg)
+            return self.redirecionar("/preferencias?ok=pref")
+        if p == "/preferencias/descobrir":
+            tok = uc.get("tg_token", "")
+            if not tok:
+                return self.enviar(pg_preferencias("Conecte o seu bot primeiro (passo 1).", True))
+            chat = achar_chat(tok, codigo_telegram(lg))
+            if not chat:
+                return self.enviar(pg_preferencias("Ainda não achei. Abra o seu bot no Telegram, toque em “Iniciar” (ou mande "
+                                                   f"{codigo_telegram(lg)}) e clique de novo.", True))
+            usuarios.salvar_cfg(lg, {"tg_chat": str(chat)})
+            n = aplicar_alertas_usuario(lg)
+            telegram_para(tok, chat, f"✅ <b>Licitatudo conectado!</b>\nOs alertas das suas empresas ({n}) vão chegar aqui.")
+            return self.redirecionar("/preferencias?ok=pref_chat")
+        if p == "/preferencias/ntfy":
+            t = f.get("ntfy", "").strip()
+            if not re.fullmatch(r"[\w-]{12,64}", t):
+                return self.enviar(pg_preferencias("Use de 12 a 64 caracteres: letras, números, - ou _ (sem espaços).", True))
+            if ntfy_em_uso(t, lg):
+                return self.enviar(pg_preferencias("Esse tópico já é usado por outro usuário. Use o nome sugerido.", True))
+            usuarios.salvar_cfg(lg, {"ntfy": t})
+            aplicar_alertas_usuario(lg)
+            agenda.ntfy({"NTFY_TOPICO": t}, "Licitatudo conectado", "Os alarmes das suas empresas vão tocar aqui.")
+            return self.redirecionar("/preferencias?ok=pref_ntfy")
+        if p == "/preferencias/ntfy/remover":
+            usuarios.salvar_cfg(lg, {"ntfy": None})
+            aplicar_alertas_usuario(lg)
+            return self.redirecionar("/preferencias?ok=pref")
         if p == "/preferencias/testar":
-            tok = uc.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
             res = []
-            if uc.get("tg_chat") and tok:
-                res.append("Telegram: " + ("✅ enviado" if telegram_para(tok, uc["tg_chat"], f"✅ Teste do Licitatudo para <b>{e(lg)}</b>: os alertas das suas empresas chegam aqui.") else "❌ falhou (confira o chat_id e se você mandou uma mensagem ao bot)"))
+            if uc.get("tg_token") and uc.get("tg_chat"):
+                res.append("Telegram: " + ("✅ enviado" if telegram_para(uc["tg_token"], uc["tg_chat"], f"✅ Teste do Licitatudo para <b>{e(lg)}</b>: os alertas das suas empresas chegam aqui.") else "❌ falhou (abra o bot e toque em Iniciar)"))
             if uc.get("ntfy"):
                 agenda.ntfy({"NTFY_TOPICO": uc["ntfy"]}, "Teste do Licitatudo", "Os alarmes das suas empresas tocam aqui.")
                 res.append("ntfy: enviado (veja no app)")
-            return self.enviar(pg_preferencias(" · ".join(res) or "Cadastre o chat_id do Telegram ou o tópico ntfy primeiro.", not res))
-        if p == "/preferencias/descobrir":
-            tok = uc.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
-            chat = achar_chat(tok, codigo_telegram(lg))
-            if not chat:
-                return self.enviar(pg_preferencias(f"Não achei a mensagem “{codigo_telegram(lg)}”. Mande esse código ao bot no Telegram e clique de novo.", True))
-            usuarios.salvar_cfg(lg, {"tg_chat": str(chat)})
-            return self.redirecionar("/preferencias?ok=pref_chat")
+            return self.enviar(pg_preferencias(" · ".join(res) or "Configure o bot ou o ntfy primeiro.", not res))
         if p == "/preferencias/ia":
             k = f.get("gemini_key", "").strip()
             if k and not re.fullmatch(r"[\w-]{30,60}", k):
@@ -4698,10 +4805,9 @@ class Painel(BaseHTTPRequestHandler):
                 hora = 7
             usuarios.salvar_cfg(lg, {"resumo_ativo": f.get("ativo") == "1", "resumo_hora": hora})
             if f.get("acao") == "agora":
-                tok = uc.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
-                if not (uc.get("tg_chat") and tok):
-                    return self.enviar(pg_preferencias("Cadastre o seu Telegram em “Alertas” primeiro.", True))
-                resumo.enviar_partes(lambda t: telegram_para(tok, uc["tg_chat"], t), resumo.montar(None, nomes_do_usuario(lg), lg))
+                if not (uc.get("tg_token") and uc.get("tg_chat")):
+                    return self.enviar(pg_preferencias("Conecte o seu bot do Telegram primeiro.", True))
+                resumo.enviar_partes(lambda t: telegram_para(uc["tg_token"], uc["tg_chat"], t), resumo.montar(None, nomes_do_usuario(lg), lg))
                 return self.redirecionar("/preferencias?ok=pref_resumo")
             return self.redirecionar("/preferencias?ok=pref")
         return self.redirecionar("/preferencias")

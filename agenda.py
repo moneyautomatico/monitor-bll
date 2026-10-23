@@ -520,6 +520,27 @@ def _fmt(q):
     return q.strftime("%d/%m/%Y") + ("" if q.hour == 23 and q.minute == 59 else q.strftime(" às %H:%M"))
 
 
+ROTEAR = None   # o painel define: (empresas, criado_por) -> ([(token, chat)], [tópicos ntfy]) – alerta vai para o dono
+
+
+def _enviar_rota(enviar, cfg, nomes, criador, txt, ntfy_tit=None, ntfy_txt="", prio="4"):
+    if ROTEAR is None:
+        enviar(txt)
+        if ntfy_tit:
+            ntfy(cfg, ntfy_tit, ntfy_txt, prio)
+        return
+    tgs, topicos = ROTEAR(nomes, criador)
+    for tok, chat in tgs:
+        try:
+            dados = urllib.parse.urlencode({"chat_id": chat, "text": txt, "parse_mode": "HTML", "disable_web_page_preview": "true"}).encode()
+            urllib.request.urlopen(f"https://api.telegram.org/bot{tok}/sendMessage", dados, timeout=20).read()
+        except Exception as ex:  # noqa: BLE001
+            print("agenda telegram:", ex, flush=True)
+    if ntfy_tit:
+        for t in topicos:
+            ntfy({"NTFY_TOPICO": t}, ntfy_tit, ntfy_txt, prio)
+
+
 def avisar_prazos(enviar, cfg, novos=()):
     import html as h
     agora = datetime.now()
@@ -556,9 +577,9 @@ def avisar_prazos(enviar, cfg, novos=()):
                f"Até: <b>{_fmt(q)}</b> ({falta_txt(q, agora)})"
                + ("\n<i>Data estimada – confira na ata/chat.</i>" if it.get("estimado") else "")
                + (f"\n\n{h.escape(it.get('obs', '')[:400])}" if "novo" in pendentes else ""))
-        enviar(txt)
-        if mk in ("2h", "venceu") or ("novo" in pendentes and falta <= timedelta(hours=6)):
-            ntfy(cfg, f"Prazo {it['titulo']}", f"{it.get('empresa', '')} – até {_fmt(q)}", "5" if mk == "2h" else "4")
+        toca = mk in ("2h", "venceu") or ("novo" in pendentes and falta <= timedelta(hours=6))
+        _enviar_rota(enviar, cfg, it.get("empresa", ""), it.get("criado_por", ""), txt,
+                     f"Prazo {it['titulo']}" if toca else None, f"{it.get('empresa', '')} – até {_fmt(q)}", "5" if mk == "2h" else "4")
     if mudou:
         with TRAVA:
             atual = prazos()
@@ -588,7 +609,7 @@ def avisar_certidoes(enviar):
         else:
             msg = (f"📑 <b>Certidão vence {'HOJE' if dias == 0 else f'em {dias} dia(s)'}</b>: {h.escape(nome)}\n"
                    f"{h.escape(c.get('empresa', ''))} – validade {date.fromisoformat(c['validade']):%d/%m/%Y}")
-        enviar(msg + "\nRenove e anexe a nova no painel → Documentos → Certidões.")
+        _enviar_rota(enviar, {}, c.get("empresa", ""), "", msg + "\nRenove e anexe a nova no painel → Documentos → Certidões.")
     if mudou:
         with TRAVA:
             atual = certidoes()
