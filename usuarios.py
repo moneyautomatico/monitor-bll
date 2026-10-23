@@ -40,7 +40,16 @@ def confere(senha, guardado):
 
 
 def senha_fraca(sen):
+    """Recomendação (aviso): 12+ caracteres com letras e números."""
     return len(sen) < 12 or not (re.search(r"[A-Za-z]", sen) and re.search(r"\d", sen))
+
+
+def senha_invalida(sen):
+    """Mínimo obrigatório: 8 caracteres, com letras e números."""
+    return len(sen) < 8 or not (re.search(r"[A-Za-z]", sen) and re.search(r"\d", sen))
+
+
+MSG_SENHA = "A senha precisa ter pelo menos 8 caracteres, com letras e números (recomendado: 12 ou mais)."
 
 
 # ------------------------------------------------------------------ armazenamento
@@ -73,8 +82,8 @@ def criar(login, nome, senha, papel="operador", empresas=(), ia=True, por="", tr
         raise ValueError("Login: 3 a 32 caracteres, só letras minúsculas, números, ponto, hífen ou _.")
     if papel not in PAPEIS:
         raise ValueError("Papel inválido.")
-    if senha_fraca(senha):
-        raise ValueError("A senha precisa ter 12 ou mais caracteres, com letras e números.")
+    if senha_invalida(senha):
+        raise ValueError(MSG_SENHA)
     with TRAVA:
         d = carregar()
         if login in d:
@@ -82,7 +91,7 @@ def criar(login, nome, senha, papel="operador", empresas=(), ia=True, por="", tr
         d[login] = {"nome": (nome or login).strip()[:80], "hash": hash_senha(senha), "papel": papel,
                     "empresas": sorted({x.upper().strip() for x in empresas if x.strip()}), "ia": bool(ia), "ativo": True,
                     "criado": datetime.now().strftime("%d/%m/%Y %H:%M"), "criado_por": por, "ultimo_acesso": "",
-                    "trocar_senha": bool(trocar)}
+                    "trocar_senha": bool(trocar), "senha_fraca": senha_fraca(senha)}
         _salvar(d)
 
 
@@ -106,14 +115,14 @@ def atualizar(login, por="", **campos):
 
 
 def trocar_senha(login, nova, obrigar_troca=False):
-    if senha_fraca(nova):
-        raise ValueError("A senha precisa ter 12 ou mais caracteres, com letras e números.")
+    if senha_invalida(nova):
+        raise ValueError(MSG_SENHA)
     with TRAVA:
         d = carregar()
         if login not in d:
             raise ValueError("Usuário não encontrado.")
         d[login]["hash"] = hash_senha(nova)
-        d[login]["senha_fraca"] = False
+        d[login]["senha_fraca"] = senha_fraca(nova)
         d[login]["trocar_senha"] = bool(obrigar_troca)
         _salvar(d)
 
@@ -199,7 +208,7 @@ if __name__ == "__main__":
     import sys
     if len(sys.argv) == 3 and sys.argv[1] in ("--novo-admin", "--nova-senha"):
         lg = sys.argv[2].strip().lower()
-        s1 = getpass.getpass("Senha (12+ caracteres, letras e números): ")
+        s1 = getpass.getpass("Senha (mínimo 8 caracteres, com letras e números): ")
         if s1 != getpass.getpass("Repita a senha: "):
             sys.exit("As senhas não conferem.")
         try:

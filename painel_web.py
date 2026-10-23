@@ -268,7 +268,7 @@ def acesso_novo(ip, navegador):
                                        f"Configurações → Segurança e clique em “Encerrar todas as sessões”.", 0)
 
 
-def pg_login(erro="", destino="/"):
+def pg_login(erro="", destino="/", admin=False):
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar – Licitatudo</title>{TEMA_JS}
 <style>
@@ -318,7 +318,7 @@ button.entrar:hover{{transform:translateY(-1px);box-shadow:0 14px 28px rgba(31,9
 <div class="rodape">© {datetime.now().year} Licitatudo · acesso restrito</div></section>
 <button type="button" class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>
 <section class="lado"><form class="cartao" method="post" action="/login">
-<h2>Bem-vindo de volta</h2><p class="sub">Entre para acessar o painel.</p>
+{'<h2>🛡️ Acesso do administrador</h2><p class="sub">Entrada exclusiva para administradores do Licitatudo.</p><input type="hidden" name="so_admin" value="1">' if admin else '<h2>Bem-vindo de volta</h2><p class="sub">Entre para acessar o painel.</p>'}
 {f'<div class="erro">{e(erro)}</div>' if erro else ''}
 <input type="hidden" name="destino" value="{e(destino)}">
 <label for="u">Usuário</label><div class="campo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
@@ -668,9 +668,9 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
         abas.append(("/admin", "🛡️ Admin"))
     nav = "".join(f'<a href="{x}" class="{"on" if x == aba else ""}" title="{"Configurações" if x == "/config" else n}">{n}</a>' for x, n in abas)
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
-    if u and (u.get("senha_fraca") or u.get("trocar_senha")) and aba != "/conta":
+    if u and (u.get("trocar_senha") or (u.get("senha_fraca") and aba == "/admin")) and aba != "/conta":
         msg += ('<div class="msg erro">🛡️ ' + ("Defina uma senha nova (a atual foi criada pelo administrador). " if u.get("trocar_senha") else
-                "A sua senha é fraca (menos de 12 caracteres ou sem letras e números). ") +
+                "A sua senha é curta (recomendado: 12 ou mais caracteres). ") +
                 '<a href="/conta">Trocar agora em Minha conta</a>.</div>')
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
@@ -2507,6 +2507,7 @@ border:1px solid var(--borda);text-decoration:none;color:inherit;font-size:14px}
 .emps-ck label,.ck{display:flex;gap:6px;align-items:center;font-weight:400;margin:0}.emps-ck input,.ck input{width:auto}
 .papel{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:var(--verde2);color:var(--verde)}
 .papel.admin{background:#ede7f6;color:#4527a0}.papel.leitura{background:#eceff1;color:#455a64}.inativo{opacity:.55}
+.linha-senha{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.linha-senha .campo{max-width:220px;margin:0}
 .duas-adm{display:grid;grid-template-columns:1.3fr 1fr;gap:16px}@media(max-width:900px){.duas-adm{grid-template-columns:1fr}}</style>
 <script>function gerarSenha(f){const c='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';const a=new Uint32Array(16);crypto.getRandomValues(a);
 let s='';a.forEach((x,i)=>{s+=c[x%c.length];if(i==7)s+='-'});s=s.slice(0,15)+(a[0]%10);f.senha.value=s;f.senha2.value=s;f.senha.type='text';
@@ -2548,9 +2549,9 @@ def pg_conta(aviso="", erro=False):
 <h3>Trocar a minha senha</h3>
 <form method="post" action="/conta/senha"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Senha atual</label><input class="campo" type="password" name="atual" required autocomplete="current-password">
-<label>Senha nova <small>(12 ou mais caracteres, com letras e números)</small></label>
-<input class="campo" type="password" name="nova" required minlength="12" autocomplete="new-password">
-<label>Repita a senha nova</label><input class="campo" type="password" name="nova2" required minlength="12" autocomplete="new-password">
+<label>Senha nova <small>(mínimo 8 caracteres, com letras e números; recomendado 12+)</small></label>
+<input class="campo" type="password" name="nova" required minlength="8" autocomplete="new-password">
+<label>Repita a senha nova</label><input class="campo" type="password" name="nova2" required minlength="8" autocomplete="new-password">
 <div class="acoes"><button>Trocar senha</button></div></form>
 <p class="sub">Ao trocar, os seus outros aparelhos são desconectados. Esqueceu a senha? Peça ao administrador para redefinir.</p></div>"""
     return pagina("Minha conta", corpo, "/conta", aviso, erro)
@@ -2583,6 +2584,14 @@ def pg_admin(q, aviso="", erro=False, f=None):
 <a class="kpi" href="/empresas" style="text-decoration:none;color:inherit{';border-color:#c62828' if ativos < len(emps_all) else ''}"><div class="v">{ativos}/{len(emps_all)}</div><div class="l">monitores ligados</div></a>
 <a class="kpi" href="/consumo" style="text-decoration:none;color:inherit"><div class="v">{custos_ia.brl(sum(v["brl"] for v in gasto.values()))}</div><div class="l">💳 IA neste mês</div></a>
 <div class="kpi"><div class="v" style="font-size:18px">{https}</div><div class="l">HTTPS (Caddy)</div></div></div>
+<div class="form" style="max-width:none;margin-bottom:14px"><h3 style="margin-top:0">🔑 Minha senha <small class="sub">({e(login_atual())})</small></h3>
+<form method="post" action="/conta/senha" class="linha-senha"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="volta" value="admin">
+<input class="campo" type="password" name="atual" placeholder="Senha atual" required autocomplete="current-password">
+<input class="campo" type="password" name="nova" placeholder="Senha nova" required minlength="8" autocomplete="new-password">
+<input class="campo" type="password" name="nova2" placeholder="Repita a senha nova" required minlength="8" autocomplete="new-password">
+<button>Trocar minha senha</button></form>
+<p class="sub" style="margin:6px 0 0">Mínimo 8 caracteres com letras e números (recomendado 12+). Seu acesso exclusivo de administrador:
+<a href="/admin/entrar"><b>/admin/entrar</b></a> – guarde nos favoritos.</p></div>
 <div class="duas-adm"><div><h3>Usuários</h3>
 <table><tr><th>Login</th><th>Papel</th><th class="ocultar">Empresas</th><th>IA</th><th class="ocultar">Último acesso</th><th>Sessões</th><th class="ocultar">IA no mês</th><th></th></tr>
 {linhas}</table>
@@ -2596,8 +2605,8 @@ def pg_admin(q, aviso="", erro=False, f=None):
 <label>Empresas que pode ver <small>(nenhuma marcada = todas; o administrador sempre vê todas)</small></label>
 {caixas_empresas([])}
 <label class="ck"><input type="checkbox" name="ia" value="1" {"" if f and f.get("ia") != "1" else "checked"}> Pode usar recursos com IA (têm custo)</label>
-<label>Senha inicial</label><input class="campo" type="password" name="senha" required minlength="12" autocomplete="new-password">
-<label>Repita a senha</label><input class="campo" type="password" name="senha2" required minlength="12" autocomplete="new-password">
+<label>Senha inicial</label><input class="campo" type="password" name="senha" required minlength="8" autocomplete="new-password">
+<label>Repita a senha</label><input class="campo" type="password" name="senha2" required minlength="8" autocomplete="new-password">
 <p class="sub mostra-senha"></p>
 <label class="ck"><input type="checkbox" name="trocar" value="1" checked> Pedir para a pessoa trocar a senha no 1º acesso</label>
 <div class="acoes"><button>Criar usuário</button><button type="button" class="sec" onclick="gerarSenha(this.form)">🎲 Gerar senha forte</button></div>
@@ -2628,8 +2637,8 @@ def pg_usuario(lg, aviso="", erro=False):
 <div class="acoes"><button>Salvar</button><a class="btn sec" href="/admin">Voltar</a></div></form></div>
 <div><div class="form"><h3>Redefinir senha</h3>
 <form method="post" action="/admin/usuario/{e(lg)}/senha" autocomplete="off"><input type="hidden" name="csrf" value="{CSRF}">
-<label>Senha nova</label><input class="campo" type="password" name="senha" required minlength="12" autocomplete="new-password">
-<label>Repita</label><input class="campo" type="password" name="senha2" required minlength="12" autocomplete="new-password">
+<label>Senha nova</label><input class="campo" type="password" name="senha" required minlength="8" autocomplete="new-password">
+<label>Repita</label><input class="campo" type="password" name="senha2" required minlength="8" autocomplete="new-password">
 <p class="sub mostra-senha"></p>
 <label class="ck"><input type="checkbox" name="trocar" value="1" {"" if eu else "checked"}> Pedir para trocar no próximo acesso</label>
 <div class="acoes"><button>Redefinir</button><button type="button" class="sec" onclick="gerarSenha(this.form)">🎲 Gerar</button></div></form></div>
@@ -3638,6 +3647,8 @@ class Painel(BaseHTTPRequestHandler):
             return self.permitido(caminho, q0)
         _REQ.user = None
         if self.command == "GET" and not self.path.startswith(("/mensagens/processo", "/mensagens/busca")):
+            if self.path.startswith("/admin"):
+                return self.redirecionar("/admin/entrar") and False
             return self.redirecionar("/login?destino=" + urllib.parse.quote(self.path)) and False
         self.send_response(401)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -3656,13 +3667,17 @@ class Painel(BaseHTTPRequestHandler):
         destino = f.get("destino", "/")
         if not destino.startswith("/") or destino.startswith("//") or destino.startswith("/login"):
             destino = "/"
+        so_admin = f.get("so_admin") == "1"
         if len(TENTATIVAS[ip]) >= 5:
-            return self.enviar(pg_login("Muitas tentativas. Aguarde 10 minutos e tente de novo.", destino), 429)
+            return self.enviar(pg_login("Muitas tentativas. Aguarde 10 minutos e tente de novo.", destino, so_admin), 429)
         if len(FALHAS_GERAIS) >= 20:   # ataque vindo de vários endereços: tranca o login por 15 min
             alerta_seguranca("geral", "<b>Login do painel trancado por 15 minutos</b>: mais de 20 senhas erradas "
                                       "vindas de vários endereços. Pode ser uma tentativa de invasão.")
-            return self.enviar(pg_login("Login temporariamente bloqueado por segurança. Tente em 15 minutos.", destino), 429)
+            return self.enviar(pg_login("Login temporariamente bloqueado por segurança. Tente em 15 minutos.", destino, so_admin), 429)
         u = usuarios.autenticar(f.get("usuario", ""), f.get("senha", ""))
+        if u and so_admin and u["papel"] != "admin":
+            usuarios.auditar(u["login"], ip, "tentou o acesso do administrador sem ser admin")
+            return self.enviar(pg_login("Este acesso é só para administradores. Use o endereço normal do painel.", "/", True), 403)
         ok = u is not None
         if not ok:
             usuarios.auditar(f.get("usuario", "")[:32], ip, "login recusado")
@@ -3672,11 +3687,11 @@ class Painel(BaseHTTPRequestHandler):
             if len(TENTATIVAS[ip]) >= 5:
                 alerta_seguranca(f"ip|{ip}", f"<b>Tentativas de senha no painel</b>: 5 senhas erradas seguidas do IP "
                                              f"{e(ip)}. Esse endereço ficou bloqueado por 10 minutos.")
-            return self.enviar(pg_login("Usuário ou senha incorretos.", destino), 401)
+            return self.enviar(pg_login("Usuário ou senha incorretos.", destino, so_admin), 401)
         TENTATIVAS.pop(ip, None)
         acesso_novo(ip, self.headers.get("User-Agent", ""))
         usuarios.marcar_acesso(u["login"], ip)
-        usuarios.auditar(u["login"], ip, "entrou no painel")
+        usuarios.auditar(u["login"], ip, "entrou pelo acesso do administrador" if so_admin else "entrou no painel")
         dias = 30 if f.get("lembrar") else 1
         tok = criar_sessao(dias, u["login"])
         self.send_response(303)
@@ -3719,6 +3734,11 @@ class Painel(BaseHTTPRequestHandler):
         if caminho == "/login":
             q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
             return self.enviar(pg_login("", q0.get("destino", "/")))
+        if caminho == "/admin/entrar":
+            u0 = usuarios.obter(sessao_usuario(self.cookie("lt_sessao")) or "")
+            if u0 and u0["papel"] == "admin" and u0.get("ativo", True):
+                return self.redirecionar("/admin")
+            return self.enviar(pg_login("", "/admin", True))
         if caminho == "/sair":
             lg = sessao_usuario(self.cookie("lt_sessao"))
             if lg:
@@ -3984,7 +4004,7 @@ class Painel(BaseHTTPRequestHandler):
             if p == "/conta/senha":
                 u = usuario_atual()
                 if not usuarios.autenticar(u["login"], f.get("atual", "")):
-                    return self.enviar(pg_conta("A senha atual não confere.", True))
+                    return self.enviar((pg_admin({}, "A senha atual não confere.", True) if f.get("volta") == "admin" else pg_conta("A senha atual não confere.", True)))
                 if f.get("nova", "") != f.get("nova2", ""):
                     return self.enviar(pg_conta("As duas senhas novas não são iguais.", True))
                 if f.get("nova", "") == f.get("atual", ""):
@@ -3992,10 +4012,10 @@ class Painel(BaseHTTPRequestHandler):
                 try:
                     usuarios.trocar_senha(u["login"], f.get("nova", ""))
                 except ValueError as ex:
-                    return self.enviar(pg_conta(str(ex), True))
+                    return self.enviar((pg_admin({}, str(ex), True) if f.get("volta") == "admin" else pg_conta(str(ex), True)))
                 encerrar_do_usuario(u["login"], menos=self.cookie("lt_sessao"))
                 self.auditar("trocou a própria senha")
-                return self.redirecionar("/conta?ok=senha")
+                return self.redirecionar("/admin?ok=senha" if f.get("volta") == "admin" else "/conta?ok=senha")
             if p == "/admin/usuarios/novo":
                 try:
                     if f.get("senha", "") != f.get("senha2", ""):
