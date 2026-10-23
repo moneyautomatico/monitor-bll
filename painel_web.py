@@ -2680,6 +2680,7 @@ def pg_preferencias(aviso="", erro=False):
     modo = uc.get("modo") or "proprio"
     sel = lambda v: "selected" if modo == v else ""  # noqa: E731
     leitura = u["papel"] == "leitura"
+    sugestao_ntfy = "licitatudo-" + re.sub(r"[^a-z0-9]", "", lg)[:12] + "-" + secrets.token_hex(4)
     form_ia = "" if leitura else f"""<form method="post" action="/preferencias/ia"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Minha chave do Gemini <small>(opcional – gere em aistudio.google.com; vazio = manter)</small></label>
 <input class="campo" type="password" name="gemini_key" autocomplete="off">
@@ -2701,7 +2702,10 @@ def pg_preferencias(aviso="", erro=False):
 <input class="campo" type="password" name="tg_token" autocomplete="off">
 {'<label class="ck"><input type="checkbox" name="tirar_token" value="1"> Remover meu bot e usar o do sistema</label>' if uc.get("tg_token") else ''}
 <label>Tópico ntfy <small>(alarme que toca no celular – app ntfy)</small></label>
-<input class="campo" name="ntfy" value="{e(uc.get("ntfy", ""))}" placeholder="ex.: licitacoes-minhaempresa-x7k2">
+<input class="campo" name="ntfy" id="ntfy" value="{e(uc.get("ntfy", ""))}" placeholder="ex.: {e(sugestao_ntfy)}">
+<p class="sub" style="margin:4px 0 0">É só seu: o sistema não deixa outro usuário usar o mesmo tópico. No ntfy, quem souber o nome recebe
+os alarmes, então use um nome difícil de adivinhar – sugestão: <a href="#" onclick="document.getElementById('ntfy').value='{e(sugestao_ntfy)}';return false"><b>{e(sugestao_ntfy)}</b></a> (clique para usar)
+e assine o mesmo nome no app ntfy do celular.</p>
 <label class="ck"><input type="checkbox" name="aplicar" value="1" checked> Aplicar agora em todas as minhas empresas ({len(minhas)})</label>
 <p class="sub">Empresas que você cadastrar depois já começam com esses alertas.</p>
 <div class="acoes">{'' if leitura else '<button>Salvar</button>'}</div></form>
@@ -3638,6 +3642,21 @@ def telegram_para(tok, chat, texto):
         return False
 
 
+def ntfy_em_uso(topico, login):
+    """Tópico ntfy já usado por outro usuário (nas configurações dele ou em empresa de outro dono) ou o geral do sistema."""
+    t = topico.lower()
+    if t == (CFG_ATUAL().get("NTFY_TOPICO") or "").lower() and not eh_admin():
+        return True
+    for lg, u in usuarios.carregar().items():
+        if lg != login and ((u.get("cfg") or {}).get("ntfy") or "").lower() == t:
+            return True
+    for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
+        c = ler_env(a)
+        if (c.get("EMPRESA_NTFY_TOPICO") or "").lower() == t and (c.get("EMPRESA_DONO") or "").lower() != login:
+            return True
+    return False
+
+
 def codigo_telegram(login):
     cod = usuarios.cfg(login).get("tg_codigo")
     if not cod:
@@ -3716,6 +3735,8 @@ def salvar_empresa(f, eid=None):
         c = ler_env(a)
         if a.stem != eid and (c.get("EMPRESA_NOME") or "").upper().strip() == nome.upper() and (c.get("EMPRESA_DONO") or "").lower() != dono:
             return "Já existe uma empresa com esse nome cadastrada por outro usuário. Use um nome diferente (ex.: acrescente a cidade)."
+    if f.get("ntfy", "").strip() and ntfy_em_uso(f["ntfy"].strip(), dono):
+        return "Esse tópico ntfy já é usado por outro usuário. Escolha outro nome (difícil de adivinhar)."
     if novo:
         eid = gerar_id(nome)
         n = 2
@@ -4625,6 +4646,12 @@ class Painel(BaseHTTPRequestHandler):
             tok = f.get("tg_token", "").strip()
             if tok and not re.fullmatch(r"\d{5,12}:[\w-]{30,60}", tok):
                 return self.enviar(pg_preferencias("O token do bot parece errado (formato 123456789:ABC…).", True))
+            if ntfy and ntfy_em_uso(ntfy, lg):
+                return self.enviar(pg_preferencias("Esse tópico ntfy já é usado por outro usuário. Escolha outro nome "
+                                                   "(use o sugerido – nomes difíceis de adivinhar são mais seguros).", True))
+            if ntfy and len(ntfy) < 12:
+                return self.enviar(pg_preferencias("Use um tópico ntfy com pelo menos 12 caracteres (ex.: o sugerido) – no ntfy, "
+                                                   "quem souber o nome do tópico recebe os alarmes.", True))
             if modo in ("proprio", "ambos") and not chat and not ntfy:
                 return self.enviar(pg_preferencias("Para receber no seu Telegram/celular, informe o chat_id ou o tópico ntfy.", True))
             usuarios.salvar_cfg(lg, {"modo": modo, "tg_chat": chat, "ntfy": ntfy,
