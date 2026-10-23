@@ -82,6 +82,7 @@ def carregar_config(empresa=None):
         "LICITANET_FUNCAO": "",       # Licitanet: tipo de funcionário (vazio = primeira opção)
         "LICITANET_MAX_LOTES": "80",
     }
+    padroes = dict(cfg)
     _ler_env(PASTA / "config.env", cfg)
     if empresa:
         arq = PASTA / "empresas" / f"{empresa}.env"
@@ -93,6 +94,9 @@ def carregar_config(empresa=None):
     for k in cfg:
         if os.environ.get(k):
             cfg[k] = os.environ[k]
+    for k, v in padroes.items():   # valor em branco no arquivo = usa o padrão (não derruba o monitor)
+        if v and not str(cfg.get(k, "")).strip():
+            cfg[k] = v
     return cfg
 
 

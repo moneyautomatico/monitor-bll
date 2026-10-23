@@ -603,7 +603,8 @@ def paginacao(pag, total_pag, base):
 
 
 def CFG_ATUAL():
-    return ler_env(CONFIG)
+    """Valores em branco contam como "não definido" (assim vale o padrão de cada lugar)."""
+    return {k: v for k, v in ler_env(CONFIG).items() if str(v).strip() != ""}
 
 
 # ------------------------------------------------------------------ HTML
@@ -4550,10 +4551,15 @@ class Painel(BaseHTTPRequestHandler):
                     return self.enviar(pg_empresas(e(err), True))
                 return self.redirecionar("/empresas?ok=cadastrada")
             if p == "/config":
-                urgencia.ARQ.write_text(f.get("URGENTE_PALAVRAS", "").replace("\r\n", "\n").strip() + "\n", encoding="utf-8")
-                v = {k: f.get(k, "").strip() for k in ("TELEGRAM_CHAT_ID", "NTFY_TOPICO", "CHAMADA_USUARIO",
-                                                        "INTERVALO_MINUTOS", "MAX_NAVEGADORES", "HORARIO_INICIO",
-                                                        "HORARIO_FIM", "SITUACOES_IGNORADAS", "BUSCA_INTERVALO_MINUTOS", "VIGIA_MINUTOS")}
+                if "INTERVALO_MINUTOS" not in f or "URGENTE_PALAVRAS" not in f:   # formulário incompleto: não apaga nada
+                    return self.enviar(pg_config("O formulário chegou incompleto – nada foi alterado. Recarregue a página e salve de novo."), 400)
+                if f.get("URGENTE_PALAVRAS", "").strip():
+                    urgencia.ARQ.write_text(f["URGENTE_PALAVRAS"].replace("\r\n", "\n").strip() + "\n", encoding="utf-8")
+                v = {k: f.get(k, "").strip() for k in ("TELEGRAM_CHAT_ID", "NTFY_TOPICO", "CHAMADA_USUARIO", "SITUACOES_IGNORADAS")}
+                for k in ("INTERVALO_MINUTOS", "MAX_NAVEGADORES", "HORARIO_INICIO", "HORARIO_FIM", "BUSCA_INTERVALO_MINUTOS", "VIGIA_MINUTOS"):
+                    x = f.get(k, "").strip().replace(",", ".")
+                    if re.fullmatch(r"\d{1,4}(\.\d{1,2})?", x):   # número válido; em branco = mantém o que estava
+                        v[k] = x
                 v["ALARME_SO_URGENTE"] = "1" if f.get("ALARME_SO_URGENTE") else "0"
                 v["CHAT_URGENTE"] = "1" if f.get("CHAT_URGENTE") else "0"
                 if f.get("TELEGRAM_TOKEN", "").strip():
