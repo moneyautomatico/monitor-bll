@@ -72,17 +72,22 @@ for arq in sorted(EMP.glob("*.env")):
             st = f"erro ao ler o banco: {ex}"
     du = data(ult)
     minutos = int((agora - du).total_seconds() / 60) if du else None
-    erros = sh("bash", "-c", f"journalctl -u monitor-bll@{eid} --since '-60min' --no-pager | grep -cE 'Traceback|Error|ERRO|Erro'")
+    # só conta o que aconteceu desde que o monitor ligou desta vez (erros antigos, já resolvidos, não contam)
+    desde = sh("systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", f"monitor-bll@{eid}") or "-60min"
+    erros = sh("bash", "-c", f"journalctl -u monitor-bll@{eid} --since '{desde}' --no-pager | grep -cE 'Traceback|Error|ERRO|Erro'")
     reinicios = sh("bash", "-c", f"journalctl -u monitor-bll@{eid} --since '-60min' --no-pager | grep -c 'Scheduled restart'")
+    rodando_desde = sh("bash", "-c", f"date -d '{desde}' '+%d/%m %H:%M'") if desde != "-60min" else "?"
     tg = "sim" if (c.get("EMPRESA_TELEGRAM_CHAT_ID") and (c.get("TELEGRAM_DESTINO") or c.get("ENVIAR_PARA")) in ("proprio", "ambos")) \
         or ((c.get("TELEGRAM_DESTINO") or c.get("ENVIAR_PARA") or "geral") in ("geral", "ambos") and geral.get("TELEGRAM_CHAT_ID")) else "NÃO"
     nt = "sim" if c.get("EMPRESA_NTFY_TOPICO") or geral.get("NTFY_TOPICO") else "NÃO"
-    ok = ativo == "active" and minutos is not None and minutos <= max(30, int(float(intervalo)) * 3) and "Erro" not in st and reinicios in ("0", "")
+    ok = ativo == "active" and minutos is not None and minutos <= max(30, int(float(intervalo)) * 3) and "Erro" not in st \
+        and (erros or "0") == "0"
     problemas += 0 if ok else 1
     linha.append(f"   {'✅' if ok else '❌'} serviço: {ativo} · última verificação: {ult or 'nunca'}"
                  f"{f' (há {minutos} min)' if minutos is not None else ''} · ciclo: {dur or '?'} s")
     linha.append(f"   situação: {st[:120] or '—'}")
     linha.append(f"   processos: {nproc} · lotes com classificação: {nlote} · mensagens novas em 24 h: {n24}")
-    linha.append(f"   última hora: {erros or 0} linha(s) de erro no log · {reinicios or 0} reinício(s) · alertas: Telegram {tg} · ntfy {nt}")
+    linha.append(f"   rodando desde {rodando_desde}: {erros or 0} erro(s) no log · reinícios na última hora: {reinicios or 0} · "
+                 f"alertas: Telegram {tg} · ntfy {nt}")
     print("\n".join(linha) + "\n")
 print("RESULTADO:", "tudo funcionando ✅" if not problemas else f"{problemas} empresa(s) com problema ❌ – mande este resultado no chat")
