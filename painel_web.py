@@ -1584,9 +1584,17 @@ def pg_oportunidades(q, aviso=""):
     cfg = d["cfg"]
     filtro = q.get("f", "boas")
     emp_f = q.get("emp", "")
+    uf_f = q.get("uf", "").upper()
+    uf_f = uf_f if uf_f in buscas.UFS else ""
     hoje = datetime.now().strftime("%Y-%m-%d")
     todas = [r for r in d["itens"].values() if not r.get("descartado")]
-    descartadas = [r for r in d["itens"].values() if r.get("descartado")]
+    ufs_cont = {}
+    for r in todas:
+        if r.get("uf") and (not emp_f or emp_f in r.get("empresas", [])):
+            ufs_cont[r["uf"]] = ufs_cont.get(r["uf"], 0) + 1
+    if uf_f:   # os contadores dos botões passam a valer só para o estado escolhido
+        todas = [r for r in todas if r.get("uf") == uf_f]
+    descartadas = [r for r in d["itens"].values() if r.get("descartado") and (not uf_f or r.get("uf") == uf_f)]
     lista = descartadas if filtro == "descartadas" else todas
     if filtro == "novas":
         lista = [r for r in lista if r.get("achada_em", "")[:10] == hoje]
@@ -1603,7 +1611,7 @@ def pg_oportunidades(q, aviso=""):
     trecho = lista[(pag - 1) * 40: pag * 40]
 
     def link(**k):
-        base = {"f": filtro, "emp": emp_f}
+        base = {"f": filtro, "emp": emp_f, "uf": uf_f}
         base.update(k)
         return "/oportunidades?" + urllib.parse.urlencode({a: b for a, b in base.items() if b})
 
@@ -1621,6 +1629,10 @@ def pg_oportunidades(q, aviso=""):
                    f'<option value="{link(emp="", pagina="")}">Todas as empresas</option>' +
                    "".join(f'<option value="{link(emp=n, pagina="")}" {"selected" if n == emp_f else ""}>{e(n)}</option>' for n in nomes) +
                    "</select>")
+    sel_uf = ('<select class="campo" style="max-width:200px" onchange="location.href=this.value" title="Filtrar por estado">'
+              f'<option value="{link(uf="", pagina="")}">📍 Todos os estados</option>' +
+              "".join(f'<option value="{link(uf=u, pagina="")}" {"selected" if u == uf_f else ""}>{u} ({n})</option>'
+                      for u, n in sorted(ufs_cont.items())) + "</select>")
     cards = ""
     for r in trecho:
         rot, cor = ROT_NIVEL.get(r.get("nivel"), ROT_NIVEL["baixo"])
@@ -1670,7 +1682,7 @@ def pg_oportunidades(q, aviso=""):
 <p class="sub">Licitações <b>abertas</b> no PNCP que combinam com o que cada empresa já disputou (produtos dos lotes, categorias e
 órgãos lidos pelo monitor). {estado}</p>
 {f'<div class="msg erro">{e(d["erro"])}</div>' if d.get("erro") else ''}
-<div class="acoes">{abas}{sel_emp}{botao("/oportunidades/atualizar", "⟳ Atualizar agora", "sec")}</div>
+<div class="acoes">{abas}{sel_emp}{sel_uf}{botao("/oportunidades/atualizar", "⟳ Atualizar agora", "sec")}</div>
 <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr));margin-top:12px">{cards or '<p>Nada por aqui ainda. Clique em “Atualizar agora” (leva 1 a 3 minutos).</p>'}</div>
 {nav}
 <details class="op-perfil" style="margin-top:24px;border:1px solid var(--borda);border-radius:10px;background:var(--card)">

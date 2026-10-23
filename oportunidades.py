@@ -28,14 +28,14 @@ norm = buscas.norm
 # categoria -> (trechos dos itens que indicam a categoria, termo pesquisado no PNCP)
 CATEGORIAS = {
     "Material de limpeza": (r"papel higien|papel toalha|sabao|sabonete|detergente|desinfetante|agua sanitaria|"
-                            r"alvejante|rodo|vassoura|saco (plastico )?(para )?lixo|pano de (chao|prato)|esponja|"
+                            r"alvejante|rodos?(?![a-z])|vassoura|saco (plastico )?(para )?lixo|pano de (chao|prato)|esponja|"
                             r"limpa|multiuso|cera |inseticida|lixeira|carrinho .*limpeza|alcool|flanela|"
                             r"luva (de )?(latex|borracha)|balde|pa de lixo|amaciante|lustra", "material de limpeza"),
     "Higiene": (r"papel higien|sabonete|creme dental|escova dental|fralda|absorvente|shampoo|desodorante|"
                 r"papel toalha|lenco", "higiene"),
     "Gêneros alimentícios": (r"arroz|feijao|acucar|cafe|leite|oleo de soja|carne|frango|biscoito|bolacha|macarrao|"
                              r"farinha|fuba|margarina|manteiga|sal refinado|tempero|extrato de tomate|sardinha|"
-                             r"achocolatado|suco|polpa|fruta|verdura|legume|ovo|queijo|presunto|pao |cuscuz|"
+                             r"achocolatado|suco|polpa|fruta|verdura|legume|ovos?(?![a-z])|queijo|presunto|pao |cuscuz|"
                              r"flocos de milho|milho|aveia|mel |vinagre|alho|cebola|batata|tomate|banana", "generos alimenticios"),
     "Alimentação escolar": (r"merenda|alimentacao escolar|pnae", "alimentacao escolar"),
     "Copa e cozinha / descartáveis": (r"copo descart|prato descart|talher descart|guardanapo|garrafa termica|"
@@ -43,17 +43,17 @@ CATEGORIAS = {
                                       r"panela|caneca|jarra|descartav", "copa e cozinha"),
     "Material de expediente": (r"papel a4|papel sulfite|resma|caneta|lapis|borracha escolar|grampeador|grampo|clipe|"
                                r"pasta (suspensa|catalogo|az|aba)|envelope|cola |fita adesiva|marca texto|"
-                               r"pincel atomico|corretivo|tesoura|perfurador|caderno|agenda|post-it|bloco", "material de expediente"),
+                               r"pincel atomico|corretivo|tesoura|perfurador|caderno|agenda|post-it|bloco (de )?(anotac|rascunho|nota|recado)", "material de expediente"),
     "Material escolar": (r"lapis de cor|giz de cera|massa de modelar|caderno|mochila|apontador|kit escolar", "material escolar"),
-    "Informática e suprimentos": (r"toner|cartucho|computador|notebook|impressora|mouse|teclado|monitor|pen drive|"
+    "Informática e suprimentos": (r"toner|cartucho|computador|notebook|impressora|mouse|teclado|monitor(es)?(?![a-z])|pen drive|"
                                   r"hd externo|cabo (hdmi|usb|de rede)|roteador|nobreak|estabilizador", "informatica"),
     "Material hospitalar": (r"seringa|agulha|gaze|atadura|luva de procedimento|esparadrapo|algodao hidrofilo|"
-                            r"mascara cirurgica|cateter|sonda|equipo|termometro|estetoscopio", "material hospitalar"),
+                            r"mascara cirurgica|cateter|sonda|equipos? (macro|micro|para|de soro)|termometro|estetoscopio", "material hospitalar"),
     "Medicamentos": (r"comprimido|capsula|solucao injetavel|xarope|ampola|\bmg\b.*(cp|comp)", "medicamentos"),
     "Material de construção": (r"cimento|tijolo|bloco ceramico|areia|brita|vergalhao|tinta (acrilica|latex|esmalte)|"
-                               r"telha|tubo pvc|conexao|registro|torneira|fio (eletrico|flexivel)|disjuntor|lampada", "material de construcao"),
+                               r"telha|tubo pvc|conexoes? (pvc|soldave|roscave)|registro de (gaveta|pressao|esfera)|torneira|fio (eletrico|flexivel)|disjuntor|lampada", "material de construcao"),
     "Água e gás": (r"agua mineral|galao|gas de cozinha|glp|botijao", "agua mineral"),
-    "EPI e uniformes": (r"bota|capacete|colete|uniforme|camiseta|jaleco|avental|protetor auricular|oculos de protecao", "uniformes"),
+    "EPI e uniformes": (r"botas?(?![a-z])|capacete|colete|uniforme|camiseta|jaleco|avental|protetor auricular|oculos de protecao", "uniformes"),
     "Combustíveis": (r"gasolina|diesel|etanol|lubrificante|oleo de motor", "combustivel"),
     "Pneus e autopeças": (r"pneu|camara de ar|bateria automotiva|pastilha de freio|filtro de oleo", "pneus"),
 }
@@ -158,7 +158,7 @@ def perfis():
                     if not d:
                         continue
                     for cat, (rx, _) in CATEGORIAS.items():
-                        if (cat, chave_proc) not in vistos and re.search(rx, d):
+                        if (cat, chave_proc) not in vistos and re.search(r"(?<![a-z])(?:" + rx + ")", d):
                             vistos.add((cat, chave_proc))
                             p["cats"][cat] += 1
                     c = cabeca(desc)
@@ -220,7 +220,7 @@ def pontuar(it, pf, termos, ufs_perfil):
     texto = norm(" ".join(str(it.get(k) or "") for k in ("title", "description")))
     pontos, achou = 0, []
     for termo, peso, tipo, rot in termos:
-        if _tem(termo, texto) or (tipo == "categoria" and re.search(CATEGORIAS.get(rot, ("^$",))[0], texto)):
+        if _tem(termo, texto) or (tipo == "categoria" and re.search(r"(?<![a-z])(?:" + CATEGORIAS.get(rot, ("^$",))[0] + ")", texto)):
             pontos += peso
             achou.append(rot)
     if not achou:
