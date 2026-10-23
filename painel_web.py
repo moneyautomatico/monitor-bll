@@ -1751,8 +1751,9 @@ def pg_oportunidades(q, aviso=""):
     sedes = sedes_empresas(nomes_pf, cfg)
     raio = int(re.sub(r"\D", "", q.get("raio", "")) or 0)
     raio = raio if raio in RAIOS else 0
-    base = q.get("base", "") or emp_f or (nomes_pf[0] if len(nomes_pf) == 1 else "")
-    base = base if base in sedes else ""
+    base = q.get("base", "") or emp_f
+    if base not in sedes:  # sem escolha: usa a 1ª empresa que tem cidade-sede conhecida (a mesma que o menu mostra)
+        base = next((n for n in nomes_pf if sedes[n].get("pt")), nomes_pf[0] if nomes_pf else "")
     ponto_base = sedes.get(base, {}).get("pt") if base else None
     for r in d["itens"].values():
         r["_pt"] = geo.coord(r.get("municipio"), r.get("uf"))
@@ -1814,8 +1815,10 @@ def pg_oportunidades(q, aviso=""):
                         for k in RAIOS) + "</select>")
     aviso_raio = ""
     if raio and not ponto_base:
-        aviso_raio = ('<div class="msg erro">Para usar o raio, escolha uma empresa com cidade-sede conhecida '
-                      '(⚙️ Perfil e ajustes → Cidade-sede).</div>')
+        cid = sedes.get(base, {}).get("cidade", "")
+        aviso_raio = ('<div class="msg erro">' + (f'Não achei a cidade “{e(cid)}” de {e(base)} no mapa. Confira o nome em '
+                      if cid else f'{e(base)} ainda não tem cidade-sede. Preencha em ') +
+                      '⚙️ Perfil e ajustes → Cidade-sede (formato Cidade/UF).</div>')
     chip_cidade = (f'<a class="btn sec" href="{link(cidade="", pagina="")}" title="Tirar o filtro de cidade">📍 {e(cidade_f)} ✕</a>'
                    if cidade_f else "")
     mapa = html_mapa(lista, sedes, base, raio, link, ROT_NIVEL)
