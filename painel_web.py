@@ -39,6 +39,7 @@ import custos_ia
 import resumo
 import documentos
 import geo
+import kanban
 import oportunidades
 import pecas
 import pacote
@@ -749,7 +750,7 @@ mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.a
 @media (max-width:700px){.ocultar{display:none}nav a{padding:12px 8px}}
 """
 
-ABAS = [("/", "Início"), ("/mensagens", "Mensagens"), ("/processos", "Processos"), ("/disputa", "🎯 Disputa"), ("/agenda", "Agenda"),
+ABAS = [("/", "Início"), ("/licitacoes", "🗂️ Licitações"), ("/mensagens", "Mensagens"), ("/processos", "Processos"), ("/disputa", "🎯 Disputa"), ("/agenda", "Agenda"),
         ("/concorrentes", "Concorrentes"), ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais"),
         ("/documentos", "Documentos"), ("/contratos", "💼 Contratos"), ("/empresas", "Empresas"), ("/preferencias", "⚙️")]
 
@@ -906,7 +907,7 @@ O histórico e o login atuais são mantidos.</p>
     kpi_contr = (f'<a class="kpi" href="/contratos" style="text-decoration:none;color:inherit{";border-color:#c62828" if atraso_rec else ""}">'
                  f'<div class="v">{contratos.brl(atraso_rec if atraso_rec else a_rec)}</div><div class="l">💼 '
                  f'{"a receber EM ATRASO" if atraso_rec else "a receber dos contratos"}</div></a>') if _ct else ""
-    kpis = f"""<div class="kpis">{kpi_contr}
+    kpis = ESTILO_KANBAN + barra_conta(compacta=True) + f"""<div class="kpis">{kpi_contr}
 {f'<a class="kpi" href="/consumo" style="text-decoration:none;color:inherit"><div class="v">{custos_ia.brl(custos_ia.resumo_mes(datetime.now().strftime("%Y-%m"))["total_brl"])}</div><div class="l">💳 IA neste mês</div></a>' if eh_admin() else ""}
 <a class="kpi" href="/agenda" style="text-decoration:none;color:inherit{';border-color:#c62828' if n_prazo_urg else ''}"><div class="v">{n_prazo_urg}</div><div class="l">📅 prazos atrasados ou para hoje · {n_prazo_sem} na semana</div></a>
 <a class="kpi" href="/certidoes" style="text-decoration:none;color:inherit{';border-color:#c62828' if n_cert else ''}"><div class="v">{n_cert}</div><div class="l">📑 certidões vencidas ou vencendo (15 dias)</div></a>
@@ -2678,6 +2679,282 @@ def pg_contrato(cid, aviso="", erro=False):
     return pagina("Contrato", corpo, "/contratos", aviso, erro)
 
 
+# ------------------------------------------------------------------ minhas licitações: kanban + siga-me
+def _norm_proc(x):
+    return re.sub(r"\W", "", (x or "").upper())
+
+
+def dados_monitor():
+    """{empresa: {(processo, promotor): {"situacao", "disputa", "eid", "pos": set()}}} das empresas do usuário."""
+    out = {}
+    for nome, ids in nomes_empresas().items():
+        d = out.setdefault(nome, {})
+        for eid in ids:
+            db = EMPRESAS / eid / "bll_monitor.db"
+            if not db.exists():
+                continue
+            try:
+                con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+                for pr, po, st, disp in con.execute("SELECT processo, promotor, situacao, disputa FROM processos"):
+                    d[(pr, po)] = {"situacao": st or "", "disputa": disp or "", "eid": eid, "pos": set()}
+                try:
+                    for pr, po, pos in con.execute("SELECT processo, promotor, nossa_pos FROM classificacao"):
+                        if (pr, po) in d:
+                            d[(pr, po)]["pos"].add(pos)
+                except sqlite3.OperationalError:
+                    pass
+                con.close()
+            except Exception:  # noqa: BLE001
+                continue
+    return out
+
+
+def sincronizar_cartoes(mon):
+    """Todo processo que o monitor acompanha vira um cartão (o licitante não precisa cadastrar)."""
+    existentes = {x["id"] for x in kanban.listar()}
+    for nome, procs in mon.items():
+        for (pr, po), m in procs.items():
+            if kanban.chave(nome, pr, po) not in existentes:
+                kanban.garantir(nome, pr, po, origem="monitor", usuario=login_atual())
+
+
+def resultado_monitor(m):
+    st = (m.get("situacao") or "").upper()
+    pos = {p for p in m.get("pos") or set() if p}
+    if re.search(r"FRACASS|DESERT|CANCEL|REVOG|ANUL|SUSPENS", st):
+        return "encerrado"
+    if re.search(r"HOMOLOG|ADJUDIC|ENCERRAD|CONCLU", st):
+        if 1 in pos:
+            return "ganhou"
+        return "perdeu" if pos else ""
+    return ""
+
+
+def info_cartao(card, mon, cache):
+    """Junta tudo o que o sistema sabe sobre esta licitação (para a etapa, o progresso e o siga-me)."""
+    nome = card.get("empresa", "")
+    if nome not in cache:
+        ctx = dados_doc(nome, nomes_empresas().get(nome, []))
+        certs = certidoes_empresa(nome)
+        cache[nome] = {"ctx": ctx, "dados_ok": not documentos.faltando(ctx), "certs": certs,
+                       "certidoes_ok": bool(certs) and not any(st == "vencida" for _, _, st, _, _ in certs)}
+    base = cache[nome]
+    np_ = _norm_proc(card.get("processo"))
+    prop = propostas.ler(card.get("proposta_id", "")) if card.get("proposta_id") else None
+    if not prop:
+        prop = next((p for p in propostas.listar() if p.get("empresa") == nome and _norm_proc(p.get("processo")) == np_ and np_), None)
+    m = (mon.get(nome) or {}).get((card.get("processo"), card.get("orgao")))
+    if not m and np_:
+        m = next((v for (pr, po), v in (mon.get(nome) or {}).items() if _norm_proc(pr) == np_), None)
+    contr = next((c for c in contratos.listar() if c.get("empresa") == nome and _norm_proc(c.get("processo")) == np_ and np_), None)
+    itens, total = propostas.calcular(prop) if prop else ([], 0)
+    conf = propostas.conferir(prop, base["ctx"], [(n, st, d) for _, n, st, d, _ in base["certs"]]) if prop else []
+    edital = card.get("edital_chave") or (prop or {}).get("edital_chave", "")
+    info = {"checks": card.get("checks") or {}, "edital": edital, "dados_ok": base["dados_ok"], "certidoes_ok": base["certidoes_ok"],
+            "proposta": prop, "proposta_ok": bool(itens) and all(i["_u"] > 0 for i in itens), "total": total,
+            "conferencia_ok": bool(prop) and not any(n == "erro" for n, _ in conf), "n_erros": sum(1 for n, _ in conf if n == "erro"),
+            "pacote": (prop or {}).get("pacote_gerado", ""), "no_monitor": bool(m), "monitor": m,
+            "resultado": card.get("resultado_manual") or (resultado_monitor(m) if m else ""), "contrato": contr}
+    auto = kanban.etapa_auto(info)
+    manual = card.get("etapa_manual") or ""
+    info["etapa"] = manual if manual and kanban.IDX.get(manual, 0) > kanban.IDX[auto] else auto
+    info["progresso"] = kanban.progresso(info)
+    info["proximo"] = next((t for k, t, feito, apl, _ in kanban.passos(info) if apl and not feito), "Tudo certo ✅")
+    return info
+
+
+def passos_conta():
+    """Primeiros passos da conta do licitante (barra de configuração)."""
+    lg = login_atual()
+    uc = usuarios.cfg(lg)
+    emps = nomes_empresas()
+    dados = [documentos.dados(n) for n in emps]
+    return [("Cadastrar a empresa (login da plataforma)", bool(emps), "/empresas"),
+            ("Dados da empresa para os documentos", bool(emps) and all(not documentos.faltando(d) for d in dados), "/documentos#dados"),
+            ("Logo para o papel timbrado", any(documentos.logo(n)[0] for n in emps), "/documentos#dados"),
+            ("Certidões cadastradas", any(certidoes_empresa(n) for n in emps), "/certidoes"),
+            ("Telegram ligado (alertas do pregoeiro)", bool(uc.get("tg_chat")), "/preferencias"),
+            ("Alarme no celular (ntfy)", bool(uc.get("ntfy")), "/preferencias"),
+            ("Primeira proposta montada", any(visivel(p.get("empresa"), p.get("usuario")) for p in propostas.listar()), "/propostas")]
+
+
+def barra_conta(compacta=False):
+    ps = passos_conta()
+    feitos = sum(1 for _, ok, _ in ps if ok)
+    pct = int(100 * feitos / len(ps))
+    if compacta and pct == 100:
+        return ""
+    prox = next(((t, u) for t, ok, u in ps if not ok), None)
+    itens = "".join(f'<li class="{"ok" if ok else ""}"><a href="{u}">{"✅" if ok else "⬜"} {e(t)}</a></li>' for t, ok, u in ps)
+    return (f'<div class="form conta-guia" style="max-width:none;margin-bottom:14px"><div class="linha" style="justify-content:space-between;gap:10px;flex-wrap:wrap">'
+            f'<b>🚀 Primeiros passos da sua conta – {feitos} de {len(ps)}</b>'
+            + (f'<a class="btn" href="{prox[1]}">Próximo: {e(prox[0])} →</a>' if prox else '<span class="tag ok">✅ Conta pronta</span>') +
+            f'</div><div class="pbar grande"><span style="width:{pct}%"></span></div>'
+            + ("" if compacta else f'<ul class="guia-lista">{itens}</ul>') + "</div>")
+
+
+ESTILO_KANBAN = """<style>.pbar{height:7px;background:var(--borda);border-radius:6px;overflow:hidden;margin:6px 0}.pbar span{display:block;height:100%;
+background:linear-gradient(90deg,#2f8a5b,#7fd3a5);border-radius:6px}.pbar.grande{height:12px;margin:10px 0}
+.kanban{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(215px,1fr);gap:10px;overflow-x:auto;padding-bottom:10px;align-items:start}
+.coluna{background:var(--card);border:1px solid var(--borda);border-radius:12px;padding:8px;min-height:120px}
+.coluna h4{margin:2px 4px 8px;font-size:14px;display:flex;justify-content:space-between}.coluna.sobre{outline:2px dashed var(--verde)}
+.kcard{background:var(--bg);border:1px solid var(--borda);border-left:4px solid var(--verde);border-radius:9px;padding:8px 9px;margin-bottom:8px;
+cursor:grab;font-size:13px}.kcard a{color:inherit;text-decoration:none}.kcard .t{font-weight:700}.kcard .s{color:var(--sub);font-size:12px}
+.kcard .prox{font-size:12px;margin-top:4px}.kcard.ganhou{border-left-color:#2e7d32}.kcard.perdeu{border-left-color:#9e9e9e;opacity:.8}
+.kcard.encerrado{border-left-color:#9e9e9e;opacity:.7}.kcard.urgente{border-left-color:#c62828}
+.guia-lista{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:4px 14px;padding:0;margin:6px 0 0;list-style:none}
+.guia-lista a{text-decoration:none;color:inherit}.guia-lista li.ok{color:var(--sub)}
+.siga{list-style:none;padding:0;margin:0}.siga li{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--borda)}
+.siga .n{flex:0 0 30px;height:30px;border-radius:50%;background:var(--borda);display:grid;place-items:center;font-weight:700}
+.siga li.feito .n{background:var(--verde);color:#fff}.siga li.atual{background:rgba(47,138,91,.08);border-radius:10px;padding:10px}
+.siga li.na{opacity:.45}.siga .acoes{margin:6px 0 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center}.siga .acoes .btn,.siga .acoes button{margin:0}.siga form{display:inline-flex;gap:6px;align-items:center;margin:0!important}.siga select.campo{margin:0}</style>"""
+
+
+def pg_licitacoes(q, aviso="", erro=False):
+    mon = dados_monitor()
+    sincronizar_cartoes(mon)
+    emp_f = q.get("emp", "")
+    cache, colunas = {}, {k: [] for k, _ in kanban.ETAPAS}
+    for card in kanban.listar():
+        if card.get("arquivado") or not visivel(card.get("empresa"), card.get("usuario")):
+            continue
+        if emp_f and card.get("empresa") != emp_f:
+            continue
+        info = info_cartao(card, mon, cache)
+        colunas[info["etapa"]].append((card, info))
+    hoje = date.today().isoformat()
+
+    def data_ord(ci):
+        card, info = ci
+        m = info.get("monitor") or {}
+        return card.get("fim") or (para_data(m.get("disputa")).isoformat() if m.get("disputa") and para_data(m.get("disputa")) else "") or card.get("criado", "")
+    html_cols = ""
+    for k, nome in kanban.ETAPAS:
+        lista = sorted(colunas[k], key=data_ord, reverse=k in ("resultado", "contrato", "enviada"))
+        cheia = len(lista)
+        if k in ("resultado", "enviada") and not q.get("todos") and cheia > 15:
+            lista = lista[:15]
+        cards = ""
+        for card, info in lista:
+            m = info.get("monitor") or {}
+            prazo = card.get("fim", "")[:10] or (m.get("disputa") or "")[:16]
+            urg = card.get("fim", "")[:10] and card["fim"][:10] <= (date.today() + timedelta(days=2)).isoformat() and k in ("interesse", "edital", "documentos", "proposta")
+            cls = info.get("resultado") or ("urgente" if urg else "")
+            sit = (m.get("situacao") or "").title()
+            res_txt = {"ganhou": "🏆 Ganhou", "perdeu": "Perdeu", "encerrado": "Encerrada"}.get(info.get("resultado"), "")
+            cards += (f'<div class="kcard {cls}" draggable="true" data-id="{e(card["id"])}"><a href="/licitacoes/{e(card["id"])}">'
+                      f'<div class="t">{e(card.get("processo") or card.get("titulo") or "Licitação")}</div>'
+                      f'<div class="s">{e((card.get("orgao") or "")[:60])}</div><div class="s">{e(card.get("empresa", ""))}'
+                      f'{" · " + e(sit) if sit else ""}{" · " + res_txt if res_txt else ""}</div>'
+                      + (f'<div class="s">⏰ {e(prazo)}</div>' if prazo else "") +
+                      f'<div class="pbar"><span style="width:{info["progresso"]}%"></span></div>'
+                      f'<div class="prox">{info["progresso"]}% · <b>{"Próximo: " if info["proximo"] != "Tudo certo ✅" else ""}{e(info["proximo"])}</b></div></a></div>')
+        mais = (f'<a class="sub" href="/licitacoes?todos=1{"&emp=" + urllib.parse.quote(emp_f) if emp_f else ""}">ver todas ({cheia})</a>'
+                if cheia > len(lista) else "")
+        html_cols += (f'<div class="coluna" data-etapa="{k}"><h4><span>{nome}</span><span class="sub">{cheia}</span></h4>{cards}{mais}</div>')
+    emps = nomes_empresas()
+    sel = ('<select class="campo" style="max-width:260px" onchange="location.href=\'/licitacoes?emp=\'+encodeURIComponent(this.value)">'
+           '<option value="">Todas as empresas</option>' +
+           "".join(f'<option value="{e(n)}" {"selected" if n == emp_f else ""}>{e(n)}</option>' for n in sorted(emps)) + "</select>")
+    sel_emp = "".join(f'<option value="{e(n)}">{e(n)}</option>' for n in sorted(emps))
+    corpo = f"""{ESTILO_KANBAN}<h2>🗂️ Minhas licitações</h2>
+<p class="sub">Cada licitação anda sozinha pelas etapas conforme você avança (edital, documentos, proposta, envio, resultado, contrato).
+Abra um cartão para ver o <b>siga-me</b> – o passo a passo com o que falta. Dá para arrastar o cartão para outra coluna.</p>
+{barra_conta()}
+<div class="acoes">{sel}<details style="display:inline-block"><summary class="btn sec" style="display:inline-block">➕ Nova licitação</summary>
+<form method="post" action="/licitacoes/novo" class="form" style="max-width:520px;margin-top:8px"><input type="hidden" name="csrf" value="{CSRF}">
+<label>Empresa</label><select class="campo" name="emp">{sel_emp}</select>
+<label>Nº do processo / edital</label><input class="campo" name="processo" required placeholder="ex.: Pregão 45/2026">
+<label>Órgão</label><input class="campo" name="orgao" required>
+<label>Data da disputa / fim das propostas</label><input class="campo" type="datetime-local" name="fim">
+<label>Link do edital <small>(opcional)</small></label><input class="campo" name="link" placeholder="https://…">
+<div class="acoes"><button>Criar</button></div></form></details>
+<span class="sub">Também dá para criar pelo botão “📌 Vou participar” nas Oportunidades.</span></div>
+<div class="kanban">{html_cols}</div>
+<script>
+let arrastando=null;
+document.querySelectorAll('.kcard').forEach(c=>{{c.addEventListener('dragstart',()=>{{arrastando=c.dataset.id;}});}});
+document.querySelectorAll('.coluna').forEach(col=>{{
+ col.addEventListener('dragover',ev=>{{ev.preventDefault();col.classList.add('sobre');}});
+ col.addEventListener('dragleave',()=>col.classList.remove('sobre'));
+ col.addEventListener('drop',ev=>{{ev.preventDefault();col.classList.remove('sobre');if(!arrastando)return;
+  fetch('/licitacoes/'+arrastando+'/mover',{{method:'POST',credentials:'same-origin',headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
+   body:'csrf={CSRF}&etapa='+col.dataset.etapa}}).then(()=>location.reload());}});}});
+</script>"""
+    return pagina("Minhas licitações", corpo, "/licitacoes", aviso, erro)
+
+
+def pg_licitacao(cid, aviso="", erro=False):
+    card = kanban.ler(cid)
+    mon = dados_monitor()
+    info = info_cartao(card, mon, {})
+    nome = card.get("empresa", "")
+    prop = info.get("proposta")
+    m = info.get("monitor") or {}
+    proc_par = f'{card.get("processo", "")}||{card.get("orgao", "")}'
+    q_emp = urllib.parse.quote(nome)
+    analisados = [a for a in analise.listar() if a.get("status") == "pronto" and ve_analise(a)]
+    sel_ed = ('<option value="">— escolha o edital analisado —</option>' + "".join(
+        f'<option value="{e(a["chave"])}" {"selected" if a["chave"] == info.get("edital") else ""}>{e((a.get("titulo") or a["chave"])[:100])}</option>' for a in analisados))
+
+    def marcar(chave_c, rotulo):
+        feito = (card.get("checks") or {}).get(chave_c)
+        return (f'<form method="post" action="/licitacoes/{cid}/marcar"><input type="hidden" name="csrf" value="{CSRF}">'
+                f'<input type="hidden" name="check" value="{chave_c}"><button class="sec">{"↩ Desmarcar" if feito else "✔ " + rotulo}</button></form>')
+    acoes = {
+        "edital": ((f'<a class="btn sec" href="/analise/{e(info["edital"])}">Abrir a análise</a>' if info.get("edital") else
+                    '<a class="btn sec" href="/editais">🤖 Analisar em Editais (IA)</a>' + (f' <a class="btn sec" href="{e(card["link"])}" target="_blank" rel="noopener">Abrir o edital</a>' if card.get("link") else "")) +
+                   f'<form method="post" action="/licitacoes/{cid}/edital"><input type="hidden" name="csrf" value="{CSRF}">'
+                   f'<select class="campo" name="edital" style="max-width:360px;width:auto">{sel_ed}</select><button class="sec">Ligar</button></form>' + marcar("edital", "Já li o edital")),
+        "dados": f'<a class="btn sec" href="/documentos?emp={q_emp}#dados">Preencher dados da empresa</a>',
+        "certidoes": f'<a class="btn sec" href="/certidoes?emp={q_emp}">Ver certidões</a>',
+        "declaracoes": f'<a class="btn sec" href="/documentos?emp={q_emp}&proc={urllib.parse.quote(proc_par)}">Gerar declarações</a>' + marcar("declaracoes", "Já gerei"),
+        "proposta": (f'<a class="btn sec" href="/propostas/{e(prop["id"])}">Abrir a proposta ({propostas.brl(info["total"])})</a>' if prop else
+                     f'<form method="post" action="/propostas/nova"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="emp" value="{e(nome)}">'
+                     f'<input type="hidden" name="processo" value="{e(card.get("processo", ""))}"><input type="hidden" name="orgao" value="{e(card.get("orgao", ""))}">'
+                     f'<input type="hidden" name="modalidade" value="Pregão Eletrônico"><button>💰 Criar a proposta</button></form>'),
+        "conferencia": (f'<a class="btn sec" href="/propostas/{e(prop["id"])}#conferencia">Ver a conferência'
+                        f'{" (" + str(info["n_erros"]) + " erro(s))" if info["n_erros"] else ""}</a>' if prop else ""),
+        "pacote": f'<a class="btn sec" href="/pacote?emp={q_emp}{"&proposta=" + prop["id"] if prop else ""}">📦 Gerar o pacote</a>' + marcar("pacote", "Já montei"),
+        "enviado": '<a class="btn sec" href="/assinatura">✍️ Como assinar</a>' + marcar("enviado", "Já enviei na plataforma"),
+        "disputa": (f'<a class="btn sec" href="/mensagens?empresa={e(m.get("eid", ""))}">💬 Mensagens do pregoeiro</a>'
+                    f'<a class="btn sec" href="/disputa">🎯 Disputa ao vivo</a>' if m else '<a class="btn sec" href="/empresas">Conferir empresa/plataforma no monitor</a>'),
+        "resultado": ((f'<a class="btn sec" href="/classificacao?' + urllib.parse.urlencode({"empresa": m.get("eid", ""), "processo": card.get("processo", ""), "promotor": card.get("orgao", "")}) + '">📊 Classificação</a>') if m else "") +
+                     f'<form method="post" action="/licitacoes/{cid}/resultado" class="linha" style="gap:6px;margin-top:6px"><input type="hidden" name="csrf" value="{CSRF}">'
+                     f'<select class="campo" name="resultado" style="max-width:220px"><option value="">automático (monitor)</option>'
+                     + "".join(f'<option value="{k}" {"selected" if card.get("resultado_manual") == k else ""}>{n}</option>' for k, n in (("ganhou", "Ganhamos"), ("perdeu", "Perdemos"), ("encerrado", "Encerrada sem vencedor")))
+                     + '</select><button class="sec">Salvar</button></form>',
+        "contrato": (f'<a class="btn sec" href="/contratos/{e(info["contrato"]["id"])}">💼 Abrir o contrato</a>' if info.get("contrato") else
+                     f'<form method="post" action="/contratos/novo"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="emp" value="{e(nome)}">'
+                     f'<input type="hidden" name="processo" value="{e(card.get("processo", ""))}"><input type="hidden" name="orgao" value="{e(card.get("orgao", ""))}">'
+                     f'<input type="hidden" name="valor" value="{e(propostas.brl(info["total"])[3:] if info.get("total") else "")}"><button>💼 Abrir o pós-venda</button></form>'),
+    }
+    lista, achou_atual = "", False
+    for i, (k, titulo, feito, apl, dica) in enumerate(kanban.passos(info), 1):
+        atual = apl and not feito and not achou_atual
+        achou_atual = achou_atual or atual
+        cls = "feito" if feito else ("atual" if atual else ("na" if not apl else ""))
+        lista += (f'<li class="{cls}"><div class="n">{"✓" if feito else i}</div><div style="flex:1"><b>{e(titulo)}</b>'
+                  f'{" <span class=tag>agora</span>" if atual else ""}{" <small class=sub>(não se aplica)</small>" if not apl else ""}'
+                  f'<div class="sub">{e(dica)}</div><div class="acoes">{acoes.get(k, "")}</div></div></li>')
+    etapa_nome = dict(kanban.ETAPAS).get(info["etapa"], "")
+    opts = "".join(f'<option value="{k}" {"selected" if k == card.get("etapa_manual") else ""}>{n}</option>' for k, n in kanban.ETAPAS)
+    corpo = f"""{ESTILO_KANBAN}<p><a href="/licitacoes">← Minhas licitações</a></p>
+<h2>{e(card.get("processo") or "Licitação")} <small class="sub">{e(card.get("orgao", ""))} · {e(nome)}</small></h2>
+<div class="form" style="max-width:none"><div class="linha" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+<b>{etapa_nome} · {info["progresso"]}% pronto</b><span class="sub">{("⏰ " + e(card.get("fim", "")[:16].replace("T", " "))) if card.get("fim") else (("⏰ disputa " + e(m.get("disputa", ""))) if m.get("disputa") else "")}
+{(" · situação: " + e(m.get("situacao", ""))) if m.get("situacao") else ""}</span></div>
+<div class="pbar grande"><span style="width:{info["progresso"]}%"></span></div>
+<p style="margin:4px 0"><b>Próximo passo:</b> {e(info["proximo"])}</p></div>
+<div class="form" style="max-width:none;margin-top:12px"><h3 style="margin-top:0">🧭 Siga-me – passo a passo</h3><ol class="siga">{lista}</ol></div>
+<div class="form" style="max-width:none;margin-top:12px"><h3 style="margin-top:0">Ajustes</h3>
+<form method="post" action="/licitacoes/{cid}/mover" class="linha" style="gap:6px"><input type="hidden" name="csrf" value="{CSRF}">
+<label style="margin:0">Mover para</label><select class="campo" name="etapa" style="max-width:240px"><option value="">automático</option>{opts}</select><button class="sec">Mover</button></form>
+<div class="acoes">{botao(f"/licitacoes/{cid}/arquivar", "Desarquivar" if card.get("arquivado") else "📦 Arquivar", "sec")}
+{botao(f"/licitacoes/{cid}/excluir", "🗑 Excluir cartão", "perigo", "Excluir este cartão? (a proposta, o contrato e o monitor não são apagados)") if card.get("origem") != "monitor" else ""}</div></div>"""
+    return pagina("Licitação", corpo, "/licitacoes", aviso, erro)
+
+
 def abas_doc(atual):
     return ('<div class="acoes" style="margin:6px 0 12px">'
             f'<a class="btn {"" if atual == "dec" else "sec"}" href="/documentos">📄 Declarações</a>'
@@ -4256,6 +4533,16 @@ if(min){{box.classList.add('min');document.getElementById('btMin').textContent='
 ROT_CHANCE = {"alta": ("🟢 Chance alta", "#2e7d32"), "media": ("🟡 Chance média", "#f9a825"), "baixa": ("🔴 Chance baixa", "#c62828")}
 
 
+def form_participar(r):
+    emp = next((n for n in (r.get("empresas") or []) if pode_empresa(n) and n in nomes_empresas()), "")
+    if not emp:
+        return ""
+    return (f'<form method="post" action="/licitacoes/novo"><input type="hidden" name="csrf" value="{CSRF}">'
+            f'<input type="hidden" name="emp" value="{e(emp)}"><input type="hidden" name="processo" value="{e((r.get("titulo") or "")[:120])}">'
+            f'<input type="hidden" name="orgao" value="{e((r.get("orgao") or "")[:200])}"><input type="hidden" name="link" value="{e(r.get("link") or "")}">'
+            f'<input type="hidden" name="fim" value="{e((r.get("fim") or "")[:16])}"><button class="sec">📌 Vou participar</button></form>')
+
+
 def chances_por_municipio(dados):
     """{municipio normalizado: registro do órgão com mais lotes} – para cruzar com as oportunidades."""
     out = {}
@@ -4435,7 +4722,7 @@ def pg_oportunidades(q, aviso=""):
 {botao_analisar(r.get('cnpj'), r.get('ano'), r.get('seq'), f"{r.get('orgao')} – {r.get('titulo')} – {r.get('municipio')}/{r.get('uf')}")}
 {f'<a class="btn sec" target="_blank" rel="noopener" href="{e(origem)}">Sistema de origem</a>' if origem.startswith("http") else ''}
 {botao_agendar(r.get('fim'), f"{r.get('titulo') or ''} – {r.get('municipio') or ''}/{r.get('uf') or ''}", r.get('orgao') or '', r.get('link') or '')}
-{acao_desc}</div></div>"""
+{form_participar(r)}{acao_desc}</div></div>"""
     nav = mais_cards(len(trecho))
     # perfil
     blocos = ""
@@ -5154,9 +5441,12 @@ class Painel(BaseHTTPRequestHandler):
             if (caminho.startswith(ROTAS_IA) and not caminho.endswith("/telegram") or ROTAS_IA_RE.fullmatch(caminho)) and not u.get("ia", True):
                 return self.negar("O seu usuário não tem permissão para usar os recursos com IA (que têm custo). Fale com o administrador.")
         if nomes_permitidos() is not None:
-            m = re.match(r"/(agenda|certidoes|pecas|propostas|contratos)/([0-9a-f]{12,14})(/|$)", caminho)
+            m = re.match(r"/(agenda|certidoes|pecas|propostas|contratos|licitacoes)/([0-9a-f]{12,14})(/|$)", caminho)
             if m:
-                if m.group(1) == "contratos":
+                if m.group(1) == "licitacoes":
+                    it = kanban.ler(m.group(2)) or {}
+                    dono, criador = it.get("empresa", ""), it.get("usuario")
+                elif m.group(1) == "contratos":
                     it = contratos.ler(m.group(2)) or {}
                     dono, criador = it.get("empresa", ""), it.get("usuario")
                 elif m.group(1) == "propostas":
@@ -5416,6 +5706,11 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_concorrentes(q))
             if p == "/chances":
                 return self.enviar(pg_chances(q))
+            if p == "/licitacoes":
+                return self.enviar(pg_licitacoes(q, AVISOS.get(q.get("ok", ""), "")))
+            m = re.fullmatch(r"/licitacoes/([0-9a-f]{12})", p)
+            if m and kanban.ler(m.group(1)):
+                return self.enviar(pg_licitacao(m.group(1), AVISOS.get(q.get("ok", ""), "")))
             if p == "/contratos":
                 return self.enviar(pg_contratos(q, AVISOS.get(q.get("ok", ""), "")))
             m = re.fullmatch(r"/contratos/([0-9a-f]{12})", p)
@@ -5656,6 +5951,10 @@ class Painel(BaseHTTPRequestHandler):
                 return self.redirecionar("/pacote")
             try:
                 dados, arquivo, avisos = gerar_pacote(campos, arqs[:15], listas.get("d", []), listas.get("cert", []))
+                _pp = propostas.ler(campos.get("proposta", "")) if re.fullmatch(r"[0-9a-f]{12}", campos.get("proposta", "")) else None
+                if _pp:   # o "siga-me" das licitações marca o pacote como feito
+                    _pp["pacote_gerado"] = datetime.now().strftime("%d/%m/%Y %H:%M")
+                    propostas.gravar(_pp["id"], _pp)
             except Exception as ex:  # noqa: BLE001
                 print("Pacote:", repr(ex)[:300], flush=True)
                 return self.enviar(pg_pacote({"emp": campos.get("emp", ""), "proposta": campos.get("proposta", "")},
@@ -6012,6 +6311,36 @@ class Painel(BaseHTTPRequestHandler):
                 pid = propostas.nova(nome, f.get("processo", "").strip()[:80] or proc, f.get("orgao", "").strip()[:200] or prom,
                                      f.get("modalidade", "").strip()[:80], login_atual())
                 return self.redirecionar(f"/propostas/{pid}")
+            if p == "/licitacoes/novo":
+                nome = f.get("emp", "")
+                if nome not in nomes_empresas() or not f.get("processo", "").strip():
+                    return self.redirecionar("/licitacoes")
+                cid = kanban.garantir(nome, f.get("processo", "").strip()[:120], f.get("orgao", "").strip()[:200], origem="manual",
+                                      usuario=login_atual(), link=f.get("link", "").strip()[:500] if f.get("link", "").startswith("http") else "",
+                                      fim=f.get("fim", "")[:16])
+                return self.redirecionar(f"/licitacoes/{cid}")
+            m = re.fullmatch(r"/licitacoes/([0-9a-f]{12})/(mover|marcar|edital|resultado|arquivar|excluir)", p)
+            if m and kanban.ler(m.group(1)):
+                cid, acao = m.groups()
+                card = kanban.ler(cid)
+                if acao == "excluir":
+                    kanban.excluir(cid)
+                    return self.redirecionar("/licitacoes?ok=feito")
+                if acao == "mover":
+                    card["etapa_manual"] = f.get("etapa", "") if f.get("etapa", "") in kanban.IDX else ""
+                elif acao == "marcar":
+                    ck = card.setdefault("checks", {})
+                    if f.get("check") in ("edital", "declaracoes", "pacote", "enviado"):
+                        ck[f["check"]] = not ck.get(f["check"])
+                elif acao == "edital":
+                    if f.get("edital") and ve_analise(analise.ler(f["edital"]) or {}):
+                        card["edital_chave"] = f["edital"]
+                elif acao == "resultado":
+                    card["resultado_manual"] = f.get("resultado", "") if f.get("resultado") in ("ganhou", "perdeu", "encerrado") else ""
+                elif acao == "arquivar":
+                    card["arquivado"] = not card.get("arquivado")
+                kanban.gravar(cid, card)
+                return self.redirecionar(f"/licitacoes/{cid}?ok=feito" if acao != "arquivar" else "/licitacoes?ok=feito")
             if p == "/contratos/novo":
                 nome = f.get("emp", "")
                 if nome not in nomes_empresas() or not f.get("processo", "").strip():
