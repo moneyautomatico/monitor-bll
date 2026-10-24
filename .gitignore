@@ -33,3 +33,5 @@ conversa_ia_*.json
 propostas.json
 backup_estado.json
 logos/
+contratos.json
+precos_cache.json

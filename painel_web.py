@@ -33,6 +33,7 @@ import urgencia
 import usuarios
 import buscas
 import concorrentes
+import contratos
 import copiloto
 import custos_ia
 import resumo
@@ -41,6 +42,7 @@ import geo
 import oportunidades
 import pecas
 import pacote
+import precos
 import propostas
 
 PASTA = Path(__file__).resolve().parent
@@ -749,7 +751,7 @@ mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.a
 
 ABAS = [("/", "Início"), ("/mensagens", "Mensagens"), ("/processos", "Processos"), ("/disputa", "🎯 Disputa"), ("/agenda", "Agenda"),
         ("/concorrentes", "Concorrentes"), ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais"),
-        ("/documentos", "Documentos"), ("/empresas", "Empresas"), ("/preferencias", "⚙️")]
+        ("/documentos", "Documentos"), ("/contratos", "💼 Contratos"), ("/empresas", "Empresas"), ("/preferencias", "⚙️")]
 
 
 PAPEL_NOME = usuarios.PAPEIS
@@ -899,7 +901,12 @@ O histórico e o login atuais são mantidos.</p>
     n_prazo_urg = sum(1 for x in _sts if x in ("atrasado", "hoje"))
     n_prazo_sem = sum(1 for x in _sts if x == "semana")
     n_cert = sum(1 for c in agenda.certidoes()["itens"].values() if agenda.status_cert(c)[0] in ("vence", "vencida") and visivel(c.get("empresa")))
-    kpis = f"""<div class="kpis">
+    _ct = [contratos.totais(c) for c in contratos.listar() if c.get("status") == "ativo" and visivel(c.get("empresa"), c.get("usuario"))]
+    atraso_rec, a_rec = sum(t["atrasado"] for t in _ct), sum(t["a_receber"] for t in _ct)
+    kpi_contr = (f'<a class="kpi" href="/contratos" style="text-decoration:none;color:inherit{";border-color:#c62828" if atraso_rec else ""}">'
+                 f'<div class="v">{contratos.brl(atraso_rec if atraso_rec else a_rec)}</div><div class="l">💼 '
+                 f'{"a receber EM ATRASO" if atraso_rec else "a receber dos contratos"}</div></a>') if _ct else ""
+    kpis = f"""<div class="kpis">{kpi_contr}
 {f'<a class="kpi" href="/consumo" style="text-decoration:none;color:inherit"><div class="v">{custos_ia.brl(custos_ia.resumo_mes(datetime.now().strftime("%Y-%m"))["total_brl"])}</div><div class="l">💳 IA neste mês</div></a>' if eh_admin() else ""}
 <a class="kpi" href="/agenda" style="text-decoration:none;color:inherit{';border-color:#c62828' if n_prazo_urg else ''}"><div class="v">{n_prazo_urg}</div><div class="l">📅 prazos atrasados ou para hoje · {n_prazo_sem} na semana</div></a>
 <a class="kpi" href="/certidoes" style="text-decoration:none;color:inherit{';border-color:#c62828' if n_cert else ''}"><div class="v">{n_cert}</div><div class="l">📑 certidões vencidas ou vencendo (15 dias)</div></a>
@@ -2033,6 +2040,27 @@ def pg_proposta(pid, aviso="", erro=False):
     sel_edital = ('<option value="">— edital já analisado em Editais (IA) —</option>' +
                   "".join(f'<option value="{e(a["chave"])}">{e((a.get("titulo") or a["chave"])[:110])}</option>' for a in analisados))
 
+    pr = (p.get("precos") or {}).get("itens") or {}
+
+    def dica_preco(it):
+        r = pr.get(chave_preco(it))
+        if not r:
+            return ""
+        rp, re_ = r.get("resumo_pago"), r.get("resumo_estimado")
+        if not rp and not re_:
+            return '<div class="ref">PNCP: nada parecido encontrado</div>'
+        base = rp or re_
+        amostras = "".join(f'<li>{propostas.brl(a["valor"])} – {e(a.get("orgao", "")[:45])}/{e(a.get("uf", ""))} {e(a.get("data", "")[8:10] + "/" + a.get("data", "")[5:7] + "/" + a.get("data", "")[:4])}'
+                           f'{" · " + e(a.get("fornecedor", "")[:35]) if a.get("fornecedor") else ""} · {e(a.get("unidade", ""))} '
+                           f'<a href="{e(a.get("link", ""))}" target="_blank" rel="noopener">ver</a></li>'
+                           for a in (r.get("amostras") or [])[:8])
+        rotulo = "pago" if rp else "estimado pelos órgãos"
+        return (f'<details class="dica"><summary>💡 {rotulo}: méd {propostas.brl(base["media"])} <small>({base["n"]})</small></summary>'
+                f'<div>mín {propostas.brl(base["min"])} · mediana {propostas.brl(base["mediana"])} · máx {propostas.brl(base["max"])}'
+                + (f'<br>estimado pelos órgãos: méd {propostas.brl(re_["media"])} ({re_["n"]})' if rp and re_ else "") +
+                f'<br><button type="button" class="sec mini-b" onclick="usar(this,{base["mediana"]:.2f})">usar a mediana</button>'
+                f'<ul>{amostras}</ul><small>Confira unidade e especificação antes de usar.</small></div></details>')
+
     def linha(i, it):
         ref = propostas.num(it.get("ref"))
         acima = ref and it["_u"] > ref
@@ -2043,7 +2071,7 @@ def pg_proposta(pid, aviso="", erro=False):
                 f'<td><input name="i_un" value="{e(it.get("unidade") or "")}" class="mini"></td>'
                 f'<td><input name="i_qtd" value="{e(str(it.get("qtd") or ""))}" class="num" oninput="calc()"></td>'
                 f'<td><input name="i_unit" value="{e(str(it.get("unit") or ""))}" class="num" oninput="calc()" placeholder="0,00">'
-                f'{f"<div class=ref>ref. órgão {propostas.brl(ref)}</div>" if ref else ""}<input type="hidden" name="i_ref" value="{e(str(it.get("ref") or ""))}"></td>'
+                f'{f"<div class=ref>ref. órgão {propostas.brl(ref)}</div>" if ref else ""}{dica_preco(it)}<input type="hidden" name="i_ref" value="{e(str(it.get("ref") or ""))}"></td>'
                 f'<td class="tot{" acima" if acima else ""}">{propostas.brl(it["_t"], False)}</td>'
                 f'<td><button type="button" class="sec mini-b" onclick="this.closest(\'tr\').remove();calc()" title="Remover">✕</button></td></tr>')
     linhas = "".join(linha(i, it) for i, it in enumerate(itens))
@@ -2069,6 +2097,9 @@ def pg_proposta(pid, aviso="", erro=False):
 font:inherit;font-size:13px;padding:5px 6px;border:1px solid var(--borda);border-radius:6px;background:var(--card);color:var(--txt)}}
 .tab-it .mini{{max-width:62px}}.tab-it .num{{text-align:right;max-width:110px}}.tab-it td.tot{{text-align:right;font-weight:700;white-space:nowrap;padding-top:9px}}
 .tab-it td.acima{{color:var(--erro)}}.tab-it .ref{{font-size:11px;color:var(--sub);text-align:right}}.mini-b{{padding:4px 8px}}
+details.dica{{font-size:11px;color:var(--sub);text-align:right;max-width:240px;margin-left:auto}}details.dica summary{{cursor:pointer;color:var(--verde)}}
+details.dica div{{text-align:left;background:var(--card);border:1px solid var(--borda);border-radius:8px;padding:6px 8px;margin-top:4px}}
+details.dica ul{{padding-left:14px;margin:4px 0}}
 .total-box{{font-size:20px;font-weight:800;text-align:right;margin:10px 4px}}.total-box small{{display:block;font-size:12px;font-weight:400;color:var(--sub)}}</style>
 <h2>📄 Documentos</h2>{abas_doc("pro")}
 <p><a href="/propostas">← Minhas propostas</a></p>
@@ -2115,7 +2146,9 @@ font:inherit;font-size:13px;padding:5px 6px;border:1px solid var(--borda);border
 <h3>Itens</h3>
 <div style="overflow-x:auto"><table class="tab-it"><thead><tr><th>Lote</th><th>Item</th><th style="min-width:260px">Descrição</th><th>Marca/modelo</th>
 <th>Unid.</th><th>Qtd.</th><th>Valor unit. (R$)</th><th>Total (R$)</th><th></th></tr></thead><tbody id="itens">{linhas}</tbody></table></div>
-<div class="acoes"><button type="button" class="sec" onclick="novaLinha()">+ Item</button></div>
+<div class="acoes"><button type="button" class="sec" onclick="novaLinha()">+ Item</button>
+<button type="submit" class="sec" form="fprecos" {"disabled" if (p.get("precos") or {}).get("status") == "gerando" or not itens else ""}>💡 Buscar preços pagos no PNCP</button></div>
+{status_precos(p)}
 <div class="total-box">Total: <span id="total">{propostas.brl(total)}</span><small id="ext">{e(propostas.extenso(total))}</small></div>
 <div class="duas"><div class="form" style="max-width:none"><h3 style="margin-top:0">Condições</h3>
 <label>Validade da proposta (dias)</label><input class="campo" name="validade" value="{e(c["validade"])}" style="max-width:120px">
@@ -2132,6 +2165,7 @@ font:inherit;font-size:13px;padding:5px 6px;border:1px solid var(--borda);border
 <button class="sec" name="depois" value="ver" {"disabled" if falta else ""}>💾 Salvar e visualizar / PDF</button>
 <button class="sec" name="depois" value="docx" {"disabled" if falta else ""}>💾 Salvar e baixar Word</button>
 <button class="sec" name="depois" value="pdf" {"disabled" if falta else ""}>💾 Salvar e baixar PDF</button></div></form>
+<form method="post" action="/propostas/{pid}/precos" id="fprecos"><input type="hidden" name="csrf" value="{CSRF}"></form>
 <div class="acoes" style="margin-top:14px">{botao(f"/propostas/{pid}/excluir", "🗑 Excluir proposta", "perigo", "Excluir esta proposta?")}</div>
 <p class="sub">Confira tudo com o edital antes de enviar. Valor em vermelho = acima do valor de referência do órgão.</p>
 <script>
@@ -2141,6 +2175,7 @@ function calc(){{let t=0;document.querySelectorAll('#itens tr').forEach(tr=>{{co
  u=n(tr.querySelector('[name=i_unit]').value),r=n(tr.querySelector('[name=i_ref]').value),x=Math.round(q*u*100)/100;t+=x;
  const c=tr.querySelector('td.tot');c.textContent=f(x);c.classList.toggle('acima',r>0&&u>r);}});
  document.getElementById('total').textContent='R$ '+f(t);document.getElementById('ext').textContent='(salve para ver o valor por extenso)';}}
+function usar(b,v){{const td=b.closest('td');td.querySelector('[name=i_unit]').value=v.toFixed(2).replace('.',',');calc();}}
 function novaLinha(){{const tb=document.getElementById('itens');const tr=document.createElement('tr');
  tr.innerHTML='<td><input name="i_lote" class="mini"></td><td><input name="i_item" class="mini" value="'+(tb.children.length+1)+'"></td><td><textarea name="i_desc" rows="2"></textarea></td>'+
  '<td><input name="i_marca"></td><td><input name="i_un" class="mini" value="UN"></td><td><input name="i_qtd" class="num" oninput="calc()"></td>'+
@@ -2151,6 +2186,55 @@ function novaLinha(){{const tb=document.getElementById('itens');const tr=documen
         p["visto_ia"] = ia.get("quando", "")
         propostas.gravar(pid, p)
     return pagina("Proposta comercial", corpo, "/documentos", aviso, erro)
+
+
+def chave_preco(it):
+    return buscas.norm(it.get("descricao") or "")[:160] + "|" + buscas.norm(it.get("unidade") or "")
+
+
+def status_precos(p):
+    st = p.get("precos") or {}
+    if st.get("status") == "gerando":
+        return (f'<div class="msg">💡 Buscando preços no PNCP… {e(st.get("progresso", ""))} (pode levar alguns minutos – a página '
+                'atualiza sozinha; pode continuar editando depois)</div><script>setTimeout(()=>location.reload(),10000)</script>')
+    if st.get("status") == "pronto":
+        n = sum(1 for r in (st.get("itens") or {}).values() if r.get("resumo_pago") or r.get("resumo_estimado"))
+        return (f'<p class="sub">💡 Preços do PNCP buscados em {e(st.get("quando", ""))}: referência para {n} de '
+                f'{len(st.get("itens") or {})} item(ns). Clique em “💡” embaixo do preço para ver os valores e usar.</p>')
+    return ""
+
+
+def buscar_precos(pid):
+    p = propostas.ler(pid) or {}
+    itens = [it for it in (p.get("itens") or []) if (it.get("descricao") or "").strip()][:80]
+    unicos = {}
+    for it in itens:
+        unicos.setdefault(chave_preco(it), it)
+    feitos, resultados = 0, {}
+
+    def um(par):
+        k, it = par
+        try:
+            r = precos.consultar(it.get("descricao", ""), it.get("unidade", ""))
+        except Exception as ex:  # noqa: BLE001
+            r = {"erro": str(ex)[:120]}
+        amostras = (r.get("pagos") or r.get("estimados") or [])
+        meio = len(amostras) // 2
+        return k, {"resumo_pago": r.get("resumo_pago"), "resumo_estimado": r.get("resumo_estimado"),
+                   "amostras": amostras[max(0, meio - 4):meio + 4]}
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(3) as ex:
+        for k, r in ex.map(um, unicos.items()):
+            resultados[k] = r
+            feitos += 1
+            if feitos % 3 == 0:
+                atual = propostas.ler(pid) or p
+                atual["precos"] = {"status": "gerando", "progresso": f"{feitos}/{len(unicos)}", "itens": resultados}
+                propostas.gravar(pid, atual)
+    atual = propostas.ler(pid) or p
+    atual["precos"] = {"status": "pronto", "itens": resultados, "quando": datetime.now().strftime("%d/%m/%Y %H:%M")}
+    propostas.gravar(pid, atual)
 
 
 def ler_itens_ia(pid, cfg, partes, usuario):
@@ -2427,6 +2511,171 @@ def gerar_pacote(campos, arqs, multi_d, multi_cert):
     dados, avisos = pacote.montar(secoes)
     arquivo = re.sub(r"[^\w.-]+", "_", f"Pacote_{processo or 'habilitacao'}_{ctx.get('razao', '')[:30]}").strip("_") + ".pdf"
     return dados, arquivo, avisos
+
+
+# ------------------------------------------------------------------ pós-venda: contratos
+COR_SIT = {"paga": "#2e7d32", "atrasada": "#c62828", "vence": "#e65100", "aberta": "#546e7a",
+           "entregue": "#2e7d32", "perto": "#e65100"}
+NOME_SIT = {"paga": "✅ paga", "atrasada": "❗ atrasada", "vence": "⏰ vence em breve", "aberta": "em aberto",
+            "entregue": "✅ entregue", "perto": "⏰ prazo perto"}
+
+
+def vencidos_monitor(nomes_ok):
+    """Processos em que estamos em 1º e a situação é de vitória (homologado/adjudicado) – sugestão de contrato."""
+    out = []
+    ja = {(c.get("empresa"), c.get("processo"), c.get("orgao")) for c in contratos.listar()}
+    for nome, ids in nomes_empresas().items():
+        for eid in ids:
+            db = EMPRESAS / eid / "bll_monitor.db"
+            if not db.exists():
+                continue
+            try:
+                con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+                sit = {(pr, po): s_ or "" for pr, po, s_ in con.execute("SELECT processo, promotor, situacao FROM processos")}
+                ganhos = {}
+                for pr, po, lote, desc, lance in con.execute(
+                        "SELECT processo, promotor, lote, descricao, nosso_lance FROM classificacao WHERE nossa_pos=1"):
+                    ganhos.setdefault((pr, po), []).append((lote, desc, lance))
+                con.close()
+            except Exception:  # noqa: BLE001
+                continue
+            for (pr, po), lotes in ganhos.items():
+                st = sit.get((pr, po), "").upper()
+                if (nome, pr, po) in ja or not re.search(r"HOMOLOG|ADJUDIC|CONTRAT|ATA", st):
+                    continue
+                out.append({"empresa": nome, "processo": pr, "orgao": po, "situacao": st, "lotes": lotes})
+    return out
+
+
+def pg_contratos(q, aviso="", erro=False):
+    emps = nomes_empresas()
+    lista = [c for c in contratos.listar() if visivel(c.get("empresa"), c.get("usuario"))]
+    ver_enc = q.get("ver") == "encerrados"
+    ativos = [c for c in lista if (c.get("status") != "ativo") == ver_enc]
+    tot = [contratos.totais(c) for c in lista if c.get("status") == "ativo"]
+    soma = lambda k: sum(t[k] for t in tot)  # noqa: E731
+    linhas = ""
+    for c in ativos:
+        t = contratos.totais(c)
+        pct = min(100, int(100 * t["recebido"] / t["contratado"])) if t["contratado"] else 0
+        alerta = " · ".join(x for x in [f'❗ {t["n_atrasadas"]} NF atrasada(s)' if t["n_atrasadas"] else "",
+                                        f'🚚 {t["entregas_atrasadas"]} entrega(s) atrasada(s)' if t["entregas_atrasadas"] else "",
+                                        f'⏰ {t["entregas_perto"]} entrega(s) perto do prazo' if t["entregas_perto"] else ""] if x)
+        linhas += (f'<tr><td><a href="/contratos/{e(c["id"])}"><b>{e(c.get("processo") or "sem nº")}</b></a>'
+                   f'{" · contrato " + e(c["numero"]) if c.get("numero") else ""}<div class="sub">{e(c.get("orgao", ""))}</div>'
+                   f'<div class="sub" style="color:var(--erro)">{e(alerta)}</div></td><td>{e(c.get("empresa", ""))}</td>'
+                   f'<td>{contratos.brl(t["contratado"])}</td><td class="ocultar">{contratos.brl(t["faturado"])}</td>'
+                   f'<td>{contratos.brl(t["recebido"])}<div class="barra-p"><span style="width:{pct}%"></span></div></td>'
+                   f'<td style="{"color:var(--erro);font-weight:700" if t["atrasado"] else ""}">{contratos.brl(t["a_receber"])}</td></tr>')
+    sug = vencidos_monitor(None)
+    sug = [x for x in sug if visivel(x["empresa"])]
+    sug_html = "".join(
+        f'<div class="card"><div class="nome">{e(x["processo"])} – {e(x["orgao"][:70])}</div><div class="sub">{e(x["empresa"])} · {e(x["situacao"])} · '
+        f'1º lugar em {len(x["lotes"])} lote(s): {e(", ".join("L" + str(lt) for lt, _, _ in x["lotes"][:8]))}</div>'
+        f'<form method="post" action="/contratos/novo" class="acoes"><input type="hidden" name="csrf" value="{CSRF}">'
+        f'<input type="hidden" name="emp" value="{e(x["empresa"])}"><input type="hidden" name="processo" value="{e(x["processo"])}">'
+        f'<input type="hidden" name="orgao" value="{e(x["orgao"])}"><input type="hidden" name="objeto" value="{e("; ".join((d or "")[:80] for _, d, _ in x["lotes"][:6]))}">'
+        f'<button>💼 Acompanhar este contrato</button></form></div>' for x in sug[:12])
+    sel_emp = "".join(f'<option value="{e(n)}">{e(n)}</option>' for n in sorted(emps))
+    corpo = f"""<style>.barra-p{{height:5px;background:var(--borda);border-radius:3px;margin-top:3px}}.barra-p span{{display:block;height:5px;background:var(--verde);border-radius:3px}}
+.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}@media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}</style>
+<h2>💼 Contratos – pós-venda</h2>
+<p class="sub">Depois de vencer: acompanhe empenhos, entregas, notas fiscais e pagamentos. Você recebe aviso no Telegram quando uma
+entrega está perto do prazo ou atrasada e quando um pagamento passa do vencimento.</p>
+<div class="kpis"><div class="kpi"><div class="v">{contratos.brl(soma("contratado"))}</div><div class="l">contratado ({len(tot)} ativo(s))</div></div>
+<div class="kpi"><div class="v">{contratos.brl(soma("recebido"))}</div><div class="l">já recebido</div></div>
+<div class="kpi"><div class="v">{contratos.brl(soma("a_receber"))}</div><div class="l">a receber (NF emitidas)</div></div>
+<div class="kpi" style="{"border-color:#c62828" if soma("atrasado") else ""}"><div class="v">{contratos.brl(soma("atrasado"))}</div><div class="l">❗ pagamentos atrasados</div></div>
+<div class="kpi"><div class="v">{contratos.brl(soma("saldo"))}</div><div class="l">saldo a faturar</div></div></div>
+{f'<h3>🏆 Vencidos pelo monitor – comece a acompanhar</h3><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">{sug_html}</div>' if sug_html else ''}
+<h3>{"Contratos encerrados" if ver_enc else "Contratos ativos"} <small class="sub"><a href="/contratos{"" if ver_enc else "?ver=encerrados"}">{"ver ativos" if ver_enc else "ver encerrados"}</a></small></h3>
+<table><tr><th>Processo / órgão</th><th>Empresa</th><th>Contratado</th><th class="ocultar">Faturado</th><th>Recebido</th><th>A receber</th></tr>
+{linhas or '<tr><td colspan="6">Nenhum contrato aqui.</td></tr>'}</table>
+<details class="op-perfil" style="margin-top:16px;border:1px solid var(--borda);border-radius:10px;background:var(--card)">
+<summary style="display:block;cursor:pointer;padding:10px 14px">➕ <b>Cadastrar contrato / ata manualmente</b></summary>
+<form method="post" action="/contratos/novo" style="padding:0 14px 12px"><input type="hidden" name="csrf" value="{CSRF}">
+<div class="duas"><div><label>Empresa</label><select class="campo" name="emp">{sel_emp}</select></div>
+<div><label>Nº do processo</label><input class="campo" name="processo" required></div>
+<div><label>Órgão</label><input class="campo" name="orgao" required></div>
+<div><label>Nº do contrato / ata <small>(opcional)</small></label><input class="campo" name="numero"></div>
+<div><label>Valor contratado (R$)</label><input class="campo" name="valor" placeholder="0,00"></div>
+<div><label>Fim da vigência</label><input class="campo" type="date" name="vigencia_fim"></div></div>
+<label>Objeto</label><input class="campo" name="objeto" style="max-width:100%">
+<div class="acoes"><button>Cadastrar</button></div></form></details>"""
+    return pagina("Contratos", corpo, "/contratos", aviso, erro)
+
+
+def pg_contrato(cid, aviso="", erro=False):
+    c = contratos.ler(cid)
+    t = contratos.totais(c)
+    hoje = date.today().isoformat()
+    emps = [(x.get("numero", ""), contratos.br(x.get("data")), contratos.brl(contratos.num(x.get("valor"))), x["id"]) for x in c.get("empenhos") or []]
+    l_emp = "".join(f'<tr><td>{e(n)}</td><td>{d}</td><td>{v}</td><td>{botao(f"/contratos/{cid}/remover/empenhos/{i}", "✕", "sec", "Remover este empenho?")}</td></tr>'
+                    for n, d, v, i in emps)
+    l_ent = ""
+    for x in c.get("entregas") or []:
+        xid = x["id"]
+        st = contratos.situacao_entrega(x)
+        acao = (botao(f"/contratos/{cid}/entregue/{x['id']}", "Marcar entregue") if st != "entregue" else
+                f'<span class="sub">em {contratos.br(x.get("entregue_em"))}</span>')
+        l_ent += (f'<tr><td>{e(x.get("descricao", ""))}</td><td>{contratos.br(x.get("prazo"))}</td>'
+                  f'<td><b style="color:{COR_SIT[st]}">{NOME_SIT[st]}</b></td><td><div class="acoes" style="margin:0">{acao}'
+                  f'{botao(f"/contratos/{cid}/remover/entregas/{xid}", "✕", "sec", "Remover esta entrega?")}</div></td></tr>')
+    l_nf = ""
+    for x in c.get("notas") or []:
+        xid = x["id"]
+        st = contratos.situacao_nota(x)
+        v = contratos.vencimento(x)
+        acao = (f'<form method="post" action="/contratos/{cid}/pagar/{e(x["id"])}" class="linha" style="gap:4px">'
+                f'<input type="hidden" name="csrf" value="{CSRF}"><input class="campo" type="date" name="pago_em" value="{hoje}" style="max-width:150px">'
+                f'<input class="campo" name="valor_pago" placeholder="valor recebido" style="max-width:120px"><button class="sec">Recebido</button></form>'
+                if st != "paga" else f'<span class="sub">recebido em {contratos.br(x.get("pago_em"))}'
+                                     f'{" · " + contratos.brl(contratos.num(x.get("valor_pago"))) if x.get("valor_pago") else ""}</span>')
+        l_nf += (f'<tr><td>{e(str(x.get("numero", "")))}</td><td>{contratos.br(x.get("emissao"))}</td>'
+                 f'<td>{contratos.brl(contratos.num(x.get("valor")))}</td><td>{v.strftime("%d/%m/%Y") if v else ""}</td>'
+                 f'<td><b style="color:{COR_SIT[st]}">{NOME_SIT[st]}</b></td><td>{acao}</td>'
+                 f'<td>{botao(f"/contratos/{cid}/remover/notas/{xid}", "✕", "sec", "Remover esta nota?")}</td></tr>')
+    corpo = f"""<style>.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}@media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}
+.mini-f{{display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end;margin-top:8px}}.mini-f .campo{{max-width:180px;margin:0}}</style>
+<p><a href="/contratos">← Contratos</a></p>
+<h2>💼 {e(c.get("processo") or "")} <small class="sub">{e(c.get("orgao", ""))} · {e(c.get("empresa", ""))}{" · ENCERRADO" if c.get("status") != "ativo" else ""}</small></h2>
+<div class="kpis"><div class="kpi"><div class="v">{contratos.brl(t["contratado"])}</div><div class="l">contratado</div></div>
+<div class="kpi"><div class="v">{contratos.brl(t["empenhado"])}</div><div class="l">empenhado</div></div>
+<div class="kpi"><div class="v">{contratos.brl(t["faturado"])}</div><div class="l">faturado (NF)</div></div>
+<div class="kpi"><div class="v">{contratos.brl(t["recebido"])}</div><div class="l">recebido</div></div>
+<div class="kpi" style="{"border-color:#c62828" if t["atrasado"] else ""}"><div class="v">{contratos.brl(t["a_receber"])}</div><div class="l">a receber{" · " + contratos.brl(t["atrasado"]) + " atrasado" if t["atrasado"] else ""}</div></div>
+<div class="kpi"><div class="v">{contratos.brl(t["saldo"])}</div><div class="l">saldo a faturar</div></div></div>
+<div class="form" style="max-width:none"><h3 style="margin-top:0">🧾 Notas fiscais e pagamentos</h3>
+<table><tr><th>NF</th><th>Emissão</th><th>Valor</th><th>Vencimento</th><th>Situação</th><th></th><th></th></tr>{l_nf or '<tr><td colspan="7">Nenhuma nota ainda.</td></tr>'}</table>
+<form method="post" action="/contratos/{cid}/nota" class="mini-f"><input type="hidden" name="csrf" value="{CSRF}">
+<div><label>Nº da NF</label><input class="campo" name="numero" required></div><div><label>Emissão</label><input class="campo" type="date" name="emissao" value="{hoje}" required></div>
+<div><label>Valor (R$)</label><input class="campo" name="valor" required placeholder="0,00"></div>
+<div><label>Prazo de pagamento (dias)</label><input class="campo" type="number" name="prazo_dias" value="30" min="0" max="365" style="max-width:110px"></div>
+<button>+ Nota fiscal</button></form>
+<p class="sub">Pela Lei 14.133 (art. 141), o órgão deve pagar em ordem cronológica; o prazo usual é de até 30 dias da nota atestada. Confira o contrato.</p></div>
+<div class="duas" style="margin-top:14px"><div class="form" style="max-width:none"><h3 style="margin-top:0">🚚 Entregas / ordens de fornecimento</h3>
+<table><tr><th>O quê</th><th>Prazo</th><th>Situação</th><th></th></tr>{l_ent or '<tr><td colspan="4">Nenhuma entrega cadastrada.</td></tr>'}</table>
+<form method="post" action="/contratos/{cid}/entrega" class="mini-f"><input type="hidden" name="csrf" value="{CSRF}">
+<div><label>O quê</label><input class="campo" name="descricao" required placeholder="ex.: OF 12 – 100 cx detergente"></div>
+<div><label>Prazo</label><input class="campo" type="date" name="prazo" required></div><button>+ Entrega</button></form>
+<p class="sub">Cada entrega vai também para a Agenda (com os avisos de prazo).</p></div>
+<div class="form" style="max-width:none"><h3 style="margin-top:0">📑 Empenhos</h3>
+<table><tr><th>Nº</th><th>Data</th><th>Valor</th><th></th></tr>{l_emp or '<tr><td colspan="4">Nenhum empenho.</td></tr>'}</table>
+<form method="post" action="/contratos/{cid}/empenho" class="mini-f"><input type="hidden" name="csrf" value="{CSRF}">
+<div><label>Nº do empenho</label><input class="campo" name="numero" required></div><div><label>Data</label><input class="campo" type="date" name="data" value="{hoje}"></div>
+<div><label>Valor (R$)</label><input class="campo" name="valor" placeholder="0,00"></div><button>+ Empenho</button></form></div></div>
+<div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">Dados do contrato</h3>
+<form method="post" action="/contratos/{cid}/salvar"><input type="hidden" name="csrf" value="{CSRF}">
+<div class="duas"><div><label>Nº do contrato / ata</label><input class="campo" name="numero" value="{e(c.get("numero", ""))}"></div>
+<div><label>Valor contratado (R$)</label><input class="campo" name="valor" value="{e(str(c.get("valor", "")))}"></div>
+<div><label>Fim da vigência</label><input class="campo" type="date" name="vigencia_fim" value="{e(c.get("vigencia_fim", ""))}"></div>
+<div><label>Órgão</label><input class="campo" name="orgao" value="{e(c.get("orgao", ""))}"></div></div>
+<label>Objeto</label><input class="campo" name="objeto" value="{e(c.get("objeto", ""))}" style="max-width:100%">
+<label>Observações <small>(fiscal do contrato, contato, endereço de entrega…)</small></label><textarea class="campo" name="obs" rows="3" style="max-width:100%">{e(c.get("obs", ""))}</textarea>
+<div class="acoes"><button>Salvar</button></div></form>
+<div class="acoes">{botao(f"/contratos/{cid}/encerrar", "Reabrir contrato" if c.get("status") != "ativo" else "Encerrar contrato", "sec")}
+{botao(f"/contratos/{cid}/excluir", "🗑 Excluir", "perigo", "Excluir este contrato e todo o histórico dele?")}</div></div>"""
+    return pagina("Contrato", corpo, "/contratos", aviso, erro)
 
 
 def abas_doc(atual):
@@ -2883,6 +3132,7 @@ def pg_concorrentes(q):
         for p in dados["perdas"][:40] if p["gap"] > 0)
     plats = " · ".join(f"{k}: {v[1]}/{v[0]}" for k, v in sorted(r["por_plat"].items()))
     corpo = f"""<h2>🥊 Inteligência de concorrentes</h2>
+<div class="acoes" style="margin:0 0 8px"><a class="btn" href="/chances{('?emp=' + urllib.parse.quote(emp)) if emp else ''}">📈 Chance de vitória por órgão – onde vale entrar</a></div>
 <p class="sub">Feito com as classificações que o monitor já leu (BLL, BNC, Portal de Compras). Mostra quem disputa com vocês,
 quem fica à frente e por quanto. Quanto mais processos lidos, mais confiável.</p>
 <div class="acoes">{sel}</div>
@@ -4002,6 +4252,68 @@ if(min){{box.classList.add('min');document.getElementById('btMin').textContent='
 </script>"""
 
 
+# ------------------------------------------------------------------ chance de vitória
+ROT_CHANCE = {"alta": ("🟢 Chance alta", "#2e7d32"), "media": ("🟡 Chance média", "#f9a825"), "baixa": ("🔴 Chance baixa", "#c62828")}
+
+
+def chances_por_municipio(dados):
+    """{municipio normalizado: registro do órgão com mais lotes} – para cruzar com as oportunidades."""
+    out = {}
+    for o in dados.get("orgaos") or []:
+        mun = buscas.norm(oportunidades.municipio_do_orgao(o["orgao"]))
+        if mun and (mun not in out or o["lotes"] > out[mun]["lotes"]):
+            out[mun] = o
+    return out
+
+
+def explicar_chance(o, taxa_geral):
+    partes = [f"Vencemos {o['ganhos']} de {o['lotes']} lote(s) disputado(s) aqui"]
+    if o["segundos"]:
+        partes.append(f"{o['segundos']} vez(es) em 2º")
+    if o.get("gap_medio") is not None and o["lotes"] > o["ganhos"]:
+        partes.append(f"quando perdemos, o 1º ficou em média {o['gap_medio']:.1f}% abaixo do nosso lance")
+    if o["fortes"]:
+        partes.append("concorrentes fortes aqui: " + ", ".join(f"{c[0][:30]} ({c[2]} vitória(s))" for c in o["fortes"]))
+    if o["pouco"]:
+        partes.append(f"pouco histórico – estimativa puxada pela nossa média geral ({taxa_geral * 100:.0f}% de vitórias)")
+    return "; ".join(partes) + "."
+
+
+def pg_chances(q):
+    emp = q.get("emp", "")
+    if emp and not pode_empresa(emp):
+        emp = ""
+    dados = concorrentes.analisar(emp, nomes_permitidos())
+    r = dados["resumo"]
+    sel = ('<select class="campo" style="max-width:280px" onchange="location.href=\'/chances?emp=\'+encodeURIComponent(this.value)">'
+           '<option value="">Todas as nossas empresas</option>' +
+           "".join(f'<option value="{e(n)}" {"selected" if n == emp else ""}>{e(n)}</option>' for n in dados["empresas"] if pode_empresa(n)) + "</select>")
+    busca = buscas.norm(q.get("q", ""))
+    linhas = ""
+    for o in dados["orgaos"]:
+        if busca and busca not in buscas.norm(o["orgao"]):
+            continue
+        rot, cor = ROT_CHANCE[o["nivel"]]
+        gap_txt = "" if o["gap_medio"] is None else f"{o['gap_medio']:.1f}%"
+        concs = ", ".join(f"{e(c[0][:28])} <small>({c[1]}× · {c[2]} vit.)</small>" for c in o["concorrentes"][:3]) or "—"
+        linhas += (f'<tr><td><b>{e(o["orgao"])}</b><div class="sub">{e(explicar_chance(o, r["taxa_geral"]))}</div></td>'
+                   f'<td style="white-space:nowrap"><b style="color:{cor}">{rot}</b><div class="sub">{o["chance"] * 100:.0f}%'
+                   f'{" · pouco histórico" if o["pouco"] else ""}</div></td>'
+                   f'<td>{o["ganhos"]}/{o["lotes"]}</td>'
+                   f'<td class="ocultar">{gap_txt}</td>'
+                   f'<td class="ocultar">{concs}</td></tr>')
+    corpo = f"""<h2>📈 Chance de vitória por órgão</h2>
+<p class="sub">Calculada com o histórico que o monitor já leu (classificação dos lotes em que suas empresas disputaram): quantas vezes
+vencemos em cada órgão, por quanto perdemos e quem costuma aparecer lá. Com pouco histórico, a estimativa puxa para a sua média geral
+({r["taxa_geral"] * 100:.0f}% de vitórias em {r["lotes"]} lote(s)). As oportunidades do PNCP também mostram essa chance quando o município bate.</p>
+<form class="acoes" method="get" action="/chances">{sel}<input class="campo" name="q" value="{e(q.get("q", ""))}" placeholder="Filtrar órgão…" style="max-width:260px">
+<input type="hidden" name="emp" value="{e(emp)}"><button class="sec">Filtrar</button><a class="btn sec" href="/concorrentes">Concorrentes</a></form>
+<table><tr><th>Órgão</th><th>Chance</th><th>Vencemos</th><th class="ocultar">Perdemos por (média)</th><th class="ocultar">Quem costuma aparecer</th></tr>
+{linhas or '<tr><td colspan="5">Ainda não há lotes disputados com classificação lida.</td></tr>'}</table>
+<p class="sub">É uma estimativa estatística, não uma garantia: preço, documentação e quem decide entrar mudam o resultado.</p>"""
+    return pagina("Chance de vitória", corpo, "/concorrentes")
+
+
 def pg_oportunidades(q, aviso=""):
     d = oport_visiveis(oportunidades.ler())
     cfg = d["cfg"]
@@ -4091,8 +4403,18 @@ def pg_oportunidades(q, aviso=""):
                    if cidade_f else "")
     mapa = html_mapa(lista, sedes, base, raio, link, ROT_NIVEL)
     cards = ""
+    try:
+        _dc = concorrentes.analisar("", nomes_permitidos())
+        mapa_chance, taxa_g = chances_por_municipio(_dc), _dc["resumo"]["taxa_geral"]
+    except Exception:  # noqa: BLE001
+        mapa_chance, taxa_g = {}, 0
     for n_card, r in enumerate(trecho):
         rot, cor = ROT_NIVEL.get(r.get("nivel"), ROT_NIVEL["baixo"])
+        och = mapa_chance.get(buscas.norm(r.get("municipio") or ""))
+        selo_chance = (f'<div class="sub" style="margin-top:4px" title="{e(explicar_chance(och, taxa_g))}">'
+                       f'<b style="color:{ROT_CHANCE[och["nivel"]][1]}">{ROT_CHANCE[och["nivel"]][0]}</b> neste município · '
+                       f'vencemos {och["ganhos"]} de {och["lotes"]} em {e(och["orgao"][:40])}'
+                       f'{" · fortes aqui: " + e(", ".join(c[0][:22] for c in och["fortes"][:2])) if och["fortes"] else ""}</div>') if och else ""
         nova = r.get("achada_em", "")[:10] == hoje
         acao_desc = (botao(f"/oportunidades/{r['id']}/voltar", "Restaurar", "sec") if r.get("descartado")
                      else botao(f"/oportunidades/{r['id']}/descartar", "Descartar", "sec"))
@@ -4105,7 +4427,7 @@ def pg_oportunidades(q, aviso=""):
 {f" · 📍 <b>{round(r['_km'])} km</b> de {e(base)}" if r.get('_km') is not None else ''}</div>
 <p style="margin:8px 0;font-size:14px">{e(r.get('objeto') or '')}</p>
 <div class="sub">Combina com: <b>{e(', '.join(r.get('termos') or []))}</b>{(' · ' + e(r['motivo'])) if r.get('motivo') else ''}</div>
-<div class="sub">Perfil de: {e(', '.join(r.get('empresas') or []))}</div>
+<div class="sub">Perfil de: {e(', '.join(r.get('empresas') or []))}</div>{selo_chance}
 <div class="sub" style="margin-top:4px">Valor estimado: <b>{e(buscas.moeda(r.get('valor')))}</b>
 {f" · Propostas até: <b>{e(buscas.data_br(r.get('fim')))}</b>" if r.get('fim') else ''}</div>
 <div class="acoes"><a class="btn" target="_blank" rel="noopener" href="{e(r.get('link') or '')}">Ver edital (PNCP)</a>
@@ -4832,9 +5154,12 @@ class Painel(BaseHTTPRequestHandler):
             if (caminho.startswith(ROTAS_IA) and not caminho.endswith("/telegram") or ROTAS_IA_RE.fullmatch(caminho)) and not u.get("ia", True):
                 return self.negar("O seu usuário não tem permissão para usar os recursos com IA (que têm custo). Fale com o administrador.")
         if nomes_permitidos() is not None:
-            m = re.match(r"/(agenda|certidoes|pecas|propostas)/([0-9a-f]{12,14})(/|$)", caminho)
+            m = re.match(r"/(agenda|certidoes|pecas|propostas|contratos)/([0-9a-f]{12,14})(/|$)", caminho)
             if m:
-                if m.group(1) == "propostas":
+                if m.group(1) == "contratos":
+                    it = contratos.ler(m.group(2)) or {}
+                    dono, criador = it.get("empresa", ""), it.get("usuario")
+                elif m.group(1) == "propostas":
                     it = propostas.ler(m.group(2)) or {}
                     dono, criador = it.get("empresa", ""), it.get("usuario")
                 elif m.group(1) == "agenda":
@@ -5089,6 +5414,13 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_disputa(q, AVISOS.get(q.get("ok", ""), "")))
             if p == "/concorrentes":
                 return self.enviar(pg_concorrentes(q))
+            if p == "/chances":
+                return self.enviar(pg_chances(q))
+            if p == "/contratos":
+                return self.enviar(pg_contratos(q, AVISOS.get(q.get("ok", ""), "")))
+            m = re.fullmatch(r"/contratos/([0-9a-f]{12})", p)
+            if m and contratos.ler(m.group(1)):
+                return self.enviar(pg_contrato(m.group(1), AVISOS.get(q.get("ok", ""), "")))
             if p == "/agenda":
                 return self.enviar(pg_agenda(q, AVISOS.get(q.get("ok", ""), "")))
             if p == "/certidoes":
@@ -5680,6 +6012,74 @@ class Painel(BaseHTTPRequestHandler):
                 pid = propostas.nova(nome, f.get("processo", "").strip()[:80] or proc, f.get("orgao", "").strip()[:200] or prom,
                                      f.get("modalidade", "").strip()[:80], login_atual())
                 return self.redirecionar(f"/propostas/{pid}")
+            if p == "/contratos/novo":
+                nome = f.get("emp", "")
+                if nome not in nomes_empresas() or not f.get("processo", "").strip():
+                    return self.redirecionar("/contratos")
+                cid = contratos.novo({"empresa": nome, "usuario": login_atual(), "processo": f.get("processo", "").strip()[:80],
+                                      "orgao": f.get("orgao", "").strip()[:200], "numero": f.get("numero", "").strip()[:60],
+                                      "valor": f.get("valor", "").strip()[:30], "vigencia_fim": f.get("vigencia_fim", "")[:10],
+                                      "objeto": f.get("objeto", "").strip()[:600]})
+                return self.redirecionar(f"/contratos/{cid}")
+            m = re.fullmatch(r"/contratos/([0-9a-f]{12})/(salvar|empenho|entrega|nota|encerrar|excluir|entregue|pagar|remover)(?:/(\w+))?(?:/(\w+))?", p)
+            if m and contratos.ler(m.group(1)):
+                cid, acao, a1, a2 = m.groups()
+                c = contratos.ler(cid)
+                if acao == "excluir":
+                    for en in c.get("entregas") or []:
+                        if en.get("agenda"):
+                            agenda.excluir(en["agenda"])
+                    contratos.excluir(cid)
+                    return self.redirecionar("/contratos?ok=feito")
+                if acao == "salvar":
+                    for k, lim in (("numero", 60), ("valor", 30), ("vigencia_fim", 10), ("orgao", 200), ("objeto", 600), ("obs", 3000)):
+                        c[k] = f.get(k, "").strip()[:lim]
+                elif acao == "encerrar":
+                    c["status"] = "encerrado" if c.get("status") == "ativo" else "ativo"
+                elif acao == "empenho":
+                    c.setdefault("empenhos", []).append({"id": contratos.novo_id(), "numero": f.get("numero", "")[:60],
+                                                          "data": f.get("data", "")[:10], "valor": f.get("valor", "")[:30]})
+                elif acao == "entrega":
+                    try:
+                        prazo = datetime.strptime(f.get("prazo", "")[:10], "%Y-%m-%d")
+                    except ValueError:
+                        return self.enviar(pg_contrato(cid, "Data de prazo inválida.", True))
+                    desc = f.get("descricao", "").strip()[:200] or "Entrega"
+                    pid_ag = agenda.adicionar(f"Entrega – {desc}", prazo.replace(hour=23, minute=59), c.get("empresa", ""),
+                                              processo=c.get("processo", ""), promotor=c.get("orgao", ""), origem="contrato",
+                                              extra={"criado_por": login_atual()})
+                    c.setdefault("entregas", []).append({"id": contratos.novo_id(), "descricao": desc, "prazo": prazo.date().isoformat(),
+                                                          "agenda": pid_ag})
+                elif acao == "nota":
+                    c.setdefault("notas", []).append({"id": contratos.novo_id(), "numero": f.get("numero", "")[:40],
+                                                       "emissao": f.get("emissao", "")[:10], "valor": f.get("valor", "")[:30],
+                                                       "prazo_dias": re.sub(r"\D", "", f.get("prazo_dias", "30"))[:3] or "30"})
+                elif acao == "entregue":
+                    for en in c.get("entregas") or []:
+                        if en["id"] == a1:
+                            en["entregue_em"] = date.today().isoformat()
+                            if en.get("agenda"):
+                                agenda.alterar(en["agenda"], status="feito")
+                elif acao == "pagar":
+                    for n in c.get("notas") or []:
+                        if n["id"] == a1:
+                            n["pago_em"] = f.get("pago_em", "")[:10] or date.today().isoformat()
+                            n["valor_pago"] = f.get("valor_pago", "").strip()[:30]
+                elif acao == "remover" and a1 in ("empenhos", "entregas", "notas"):
+                    for x in c.get(a1) or []:
+                        if x["id"] == a2 and x.get("agenda"):
+                            agenda.excluir(x["agenda"])
+                    c[a1] = [x for x in c.get(a1) or [] if x["id"] != a2]
+                contratos.gravar(cid, c)
+                return self.redirecionar(f"/contratos/{cid}?ok=feito")
+            m = re.fullmatch(r"/propostas/([0-9a-f]{12})/precos", p)
+            if m and propostas.ler(m.group(1)):
+                prop = propostas.ler(m.group(1))
+                if (prop.get("precos") or {}).get("status") != "gerando":
+                    prop["precos"] = {"status": "gerando", "progresso": "0/…", "itens": (prop.get("precos") or {}).get("itens") or {}}
+                    propostas.gravar(m.group(1), prop)
+                    threading.Thread(target=buscar_precos, args=(m.group(1),), daemon=True).start()
+                return self.redirecionar(f"/propostas/{m.group(1)}")
             m = re.fullmatch(r"/propostas/([0-9a-f]{12})/(salvar|importar|excluir)", p)
             if m and propostas.ler(m.group(1)):
                 pid, acao = m.groups()
@@ -5972,6 +6372,7 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
 if __name__ == "__main__":
     print(f"Painel em http://{HOST}:{PORTA}")
     migrar_donos()
+    threading.Thread(target=contratos.ciclo, args=(lambda txt, emp: telegram_geral(txt, empresas=[emp]),), daemon=True).start()
     for _lg, _u in usuarios.carregar().items():   # liberação de empresas de outro usuário não existe mais
         if _u.get("empresas"):
             usuarios.atualizar(_lg, empresas=[])

@@ -71,6 +71,8 @@ def analisar(empresa="", permitidos=None):
     resumo = {"lotes": 0, "ganhos": 0, "segundos": 0, "gaps": [], "desclass": 0, "por_plat": defaultdict(lambda: [0, 0])}
     perdas = []
     vistos = set()
+    orgs = defaultdict(lambda: {"lotes": 0, "ganhos": 0, "segundos": 0, "gaps": [], "conc": defaultdict(lambda: ["", 0, 0]),
+                                "ultimo": "", "empresas": set()})
     for eid, emp in proprias.items():
         if empresa and emp["nome"] != empresa:
             continue
@@ -107,8 +109,22 @@ def analisar(empresa="", permitidos=None):
                 resumo["segundos"] += 1
             if nos.get("excluido") or not nos.get("pos"):
                 resumo["desclass"] += 1
+            o = orgs[prom]
+            o["lotes"] += 1
+            o["ganhos"] += nos.get("pos") == 1
+            o["segundos"] += nos.get("pos") == 2
+            o["ultimo"] = max(o["ultimo"], _data_iso(quando))
+            o["empresas"].add(emp["nome"])
+            for x in rank:
+                if x is nos or any(_eh(x, oo) for oo in todos_apelidos):
+                    continue
+                cc = o["conc"][chave_nome(x.get("nome"))]
+                cc[0] = cc[0] or x.get("nome", "")
+                cc[1] += 1
+                cc[2] += x.get("pos") == 1
             lider = next((x for x in rank if x.get("pos") == 1), None)
             if lider and lider is not nos and nos.get("valor") and lider.get("valor"):
+                o["gaps"].append((nos["valor"] - lider["valor"]) / lider["valor"] * 100)
                 gap = (nos["valor"] - lider["valor"]) / lider["valor"] * 100
                 resumo["gaps"].append(gap)
                 perdas.append({"processo": proc, "orgao": prom, "lote": lote, "desc": desc or "", "nossa_pos": nos.get("pos"),
@@ -149,4 +165,18 @@ def analisar(empresa="", permitidos=None):
     resumo["gap_medio"] = sum(gaps) / len(gaps) if gaps else None
     resumo["perto"] = sum(1 for g in gaps if 0 < g <= 3)   # perdidos por até 3%
     perdas.sort(key=lambda p: p["gap"])
-    return {"resumo": resumo, "concorrentes": lista, "perdas": perdas, "empresas": sorted({e["nome"] for e in proprias.values()})}
+    taxa_geral = resumo["ganhos"] / resumo["lotes"] if resumo["lotes"] else 0.3
+    orgaos = []
+    for prom, o in orgs.items():
+        n, w = o["lotes"], o["ganhos"]
+        chance = (w + 2 * taxa_geral) / (n + 2)   # suavizado: com pouco histórico, puxa para a média geral
+        concs = sorted(([nm, ap, vt] for nm, ap, vt in o["conc"].values()), key=lambda t: (-t[2], -t[1]))
+        fortes = [c for c in concs if c[2] >= 2 or (c[1] >= 2 and c[2] / c[1] >= 0.5)]
+        orgaos.append({"orgao": prom, "lotes": n, "ganhos": w, "segundos": o["segundos"], "chance": chance,
+                       "nivel": "alta" if chance >= 0.5 else "media" if chance >= 0.25 else "baixa",
+                       "pouco": n < 3, "gap_medio": (sum(o["gaps"]) / len(o["gaps"])) if o["gaps"] else None,
+                       "concorrentes": concs[:5], "fortes": fortes[:3], "ultimo": o["ultimo"], "empresas": sorted(o["empresas"])})
+    orgaos.sort(key=lambda x: (-x["chance"], -x["lotes"]))
+    resumo["taxa_geral"] = taxa_geral
+    return {"resumo": resumo, "concorrentes": lista, "perdas": perdas, "orgaos": orgaos,
+            "empresas": sorted({e["nome"] for e in proprias.values()})}
