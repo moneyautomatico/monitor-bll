@@ -37,3 +37,6 @@ contratos.json
 precos_cache.json
 kanban.json
 kanban_anexos/
+atestados.json
+atestados_match.json
+atestados/

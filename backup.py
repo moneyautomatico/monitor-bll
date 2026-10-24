@@ -27,7 +27,7 @@ DIR = PASTA / "backups"
 GUARDAR = 7
 ARQUIVOS_SOLTOS = ["config.env", "buscas_salvas.json", "buscas_vistos.json", "analise_instrucoes.txt",
                    "analise_empresa.txt", "urgente_palavras.txt", "vigia_estado.json", "oportunidades.json", "dados_empresas.json", "prazos.json", "certidoes.json", "pisos.json",
-                   "usuarios.json", "auditoria.jsonl", "propostas.json", "contratos.json", "kanban.json"]
+                   "usuarios.json", "auditoria.jsonl", "propostas.json", "contratos.json", "kanban.json", "atestados.json", "atestados_match.json"]
 
 
 def _copia_sqlite(origem, destino):
@@ -69,6 +69,10 @@ def gerar():
         if cert.exists():
             for f in cert.glob("*/*"):
                 tar.add(f, arcname=f"certidoes/{f.parent.name}/{f.name}")
+        ates = PASTA / "atestados"   # arquivos dos atestados de capacidade técnica
+        if ates.exists():
+            for f in ates.glob("*/*"):
+                tar.add(f, arcname=f"atestados/{f.parent.name}/{f.name}")
         anx = PASTA / "kanban_anexos"   # anexos dos cartões das licitações
         if anx.exists():
             for f in anx.glob("*/*"):

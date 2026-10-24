@@ -18,6 +18,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import statistics
 import tempfile
 import unicodedata
 import mimetypes
@@ -41,7 +42,9 @@ import custos_ia
 import resumo
 import documentos
 import geo
+import atestados
 import kanban
+import resultados
 import oportunidades
 import pecas
 import pacote
@@ -133,7 +136,7 @@ DONO_PADRAO = next((k for k, v in usuarios.carregar().items() if v.get("criado_p
 analise.GLOBAIS.add(DONO_PADRAO)
 ROTAS_ADM_LAYOUT = ("/admin", "/empresas", "/config", "/preferencias")   # abas mostradas no layout da Área do administrador
 ROTAS_IA = ("/analise", "/pecas/gerar", "/pecas/declaracoes", "/pergunte/enviar", "/pergunte/estado")
-ROTAS_IA_RE = re.compile(r"/pecas/[0-9a-f]{14}/refazer|/propostas/[0-9a-f]{12}/(ia|conferir)")
+ROTAS_IA_RE = re.compile(r"/pecas/[0-9a-f]{14}/refazer|/propostas/[0-9a-f]{12}/(ia|conferir)|/atestados/[0-9a-f]{12}/ler|/atestados/conferir")
 
 
 def empresa_liberada(valor):
@@ -1637,7 +1640,8 @@ def pg_classificacao(q):
                    f'<table><tr><th>Pos.</th><th>Empresa</th><th>Melhor lance</th><th class="ocultar">Lances</th></tr>'
                    f'{linhas or "<tr><td colspan=4>Sem lances registrados.</td></tr>"}</table>')
     corpo = (f'<h2>Classificação – {e(proc)}</h2><p class="sub">{e(nome)} · {e(prom)}</p>'
-             f'<p><a class="btn sec" href="/processos?empresa={e(eid)}">← Processos</a></p>'
+             f'<p><a class="btn sec" href="/processos?empresa={e(eid)}">← Processos</a> '
+             f'<a class="btn" href="/resultado?{e(urllib.parse.urlencode({"empresa": eid, "processo": proc, "promotor": prom}))}">🔎 Por que perdi? (análise lote a lote)</a></p>'
              + (blocos or '<div class="msg">Ainda não li a classificação deste processo. Ela aparece depois do próximo ciclo do monitor '
                 '(só para processos que já tiveram disputa).</div>') +
              '<p class="sub">Calculada pelos “Registros da sessão do lote”: menor lance de cada empresa, '
@@ -2044,6 +2048,26 @@ def pg_proposta(pid, aviso="", erro=False):
                   "".join(f'<option value="{e(a["chave"])}">{e((a.get("titulo") or a["chave"])[:110])}</option>' for a in analisados))
 
     pr = (p.get("precos") or {}).get("itens") or {}
+    try:
+        hist = resultados.carregar_historico(dbs_usuario())
+    except Exception:  # noqa: BLE001
+        hist = []
+
+    def dica_hist(it):
+        sem = resultados.semelhantes(hist, it.get("descricao") or "") if hist else []
+        if not sem:
+            return ""
+        med = statistics.median(h["venc"] for h in sem)
+        nossos = [h["nosso"] for h in sem if h["nosso"]]
+        li = ""
+        for h in sem:
+            seu = (propostas.brl(h["nosso"]) + (f' ({h["pos"]}º)' if h["pos"] else "")) if h["nosso"] else "—"
+            li += (f'<li>{propostas.brl(h["venc"])} – {e(h["venc_nome"][:30])} · seu lance {seu} · {e(h["processo"])} '
+                   f'{e(h["orgao"][:30])}</li>')
+        return (f'<details class="dica"><summary>🏁 suas disputas: vencedor med {propostas.brl(med)} <small>({len(sem)})</small></summary>'
+                f'<div>{("seu lance med " + propostas.brl(statistics.median(nossos)) + "<br>") if nossos else ""}'
+                f'<button type="button" class="sec mini-b" onclick="usar(this,{med:.2f})">usar a mediana dos vencedores</button>'
+                f'<ul>{li}</ul><small>Lances das disputas que o monitor leu (podem ser do lote inteiro – confira a unidade).</small></div></details>')
 
     def dica_preco(it):
         r = pr.get(chave_preco(it))
@@ -2074,7 +2098,7 @@ def pg_proposta(pid, aviso="", erro=False):
                 f'<td><input name="i_un" value="{e(it.get("unidade") or "")}" class="mini"></td>'
                 f'<td><input name="i_qtd" value="{e(str(it.get("qtd") or ""))}" class="num" oninput="calc()"></td>'
                 f'<td><input name="i_unit" value="{e(str(it.get("unit") or ""))}" class="num" oninput="calc()" placeholder="0,00">'
-                f'{f"<div class=ref>ref. órgão {propostas.brl(ref)}</div>" if ref else ""}{dica_preco(it)}<input type="hidden" name="i_ref" value="{e(str(it.get("ref") or ""))}"></td>'
+                f'{f"<div class=ref>ref. órgão {propostas.brl(ref)}</div>" if ref else ""}{dica_preco(it)}{dica_hist(it)}<input type="hidden" name="i_ref" value="{e(str(it.get("ref") or ""))}"></td>'
                 f'<td class="tot{" acima" if acima else ""}">{propostas.brl(it["_t"], False)}</td>'
                 f'<td><button type="button" class="sec mini-b" onclick="this.closest(\'tr\').remove();calc()" title="Remover">✕</button></td></tr>')
     linhas = "".join(linha(i, it) for i, it in enumerate(itens))
@@ -2421,6 +2445,14 @@ def pg_pacote(q, aviso="", erro=False):
         f'{ {"ok": "✅", "vence": "⚠️", "vencida": "❌", "sem": "•"}.get(st, "")} {e(n)}'
         f'{"" if arq else " <small>(sem PDF anexado)</small>"}{TAG_VENCIDA if st == "vencida" else ""}</label>'
         for cid, n, st, dias, arq in certs) or '<p class="sub">Nenhuma certidão cadastrada. Cadastre em <a href="/certidoes">Certidões</a>.</p>'
+    ed_rec = (prop_q or {}).get("edital_chave") or q.get("edital", "")
+    rec = set(atestados.recomendados(ed_rec, nome)) if ed_rec else set()
+    caixas_at = "".join(
+        f'<label class="dec"><input type="checkbox" name="at" value="{e(a["id"])}" {"checked" if a["id"] in rec else ""}> '
+        f'📜 {e(a.get("contratante") or "Atestado")}{" <span class=tag>recomendado</span>" if a["id"] in rec else ""}'
+        f'<small class="sub"> {e((a.get("objeto") or "")[:60])}</small></label>'
+        for a in atestados.listar(nome) if atestados.arquivo(a["id"])) or \
+        '<p class="sub">Nenhum atestado com arquivo. Cadastre em <a href="/atestados">Atestados</a>.</p>'
     caixas_dec = "".join(f'<label class="dec"><input type="checkbox" name="d" value="{i}" {"checked" if i in documentos.PADRAO else ""}'
                          f'{" disabled" if i == "meepp" and ctx.get("porte") not in ("ME", "EPP") else ""}> {e(t)}</label>'
                          for i, t, _ in documentos.DECLARACOES)
@@ -2442,16 +2474,18 @@ arquivos (contrato social, atestados…), com papel timbrado, marcadores e “P�
 <div class="duas"><div><h3>Declarações</h3>{caixas_dec}
 <label class="dec" style="margin-top:8px"><input type="checkbox" name="unificada" value="1"> Juntar numa “Declaração unificada”</label></div>
 <div><h3>Certidões</h3>{caixas_cert}
+<h3>Atestados de capacidade técnica</h3>{caixas_at}
+{('<p class="sub">Marcados os recomendados pela IA para este edital.</p>') if rec else (f'<p class="sub"><a href="/atestados?emp={urllib.parse.quote(nome)}' + (f'&edital={e(ed_rec)}' if ed_rec else '') + '">🔎 Ver quais atendem o edital</a></p>')}
 <h3>Outros documentos <small class="sub">(PDF, PNG ou JPG – contrato social, atestados, balanço…)</small></h3>
 <input type="file" name="extra" accept=".pdf,.png,.jpg,.jpeg" multiple>
 <p class="sub">Entram no fim, na ordem em que você escolher os arquivos. Use o nome do arquivo para identificar (ex.: “Atestado de capacidade técnica.pdf”).</p></div></div>
 <div class="acoes"><button {"disabled" if documentos.faltando(ctx) else ""}>📦 Gerar o pacote em PDF</button></div>
-<p class="sub">Ordem: capa → proposta → declarações → certidões → outros. Leva de 10 a 40 segundos.</p></form>
+<p class="sub">Ordem: capa → proposta → declarações → certidões → atestados → outros. Leva de 10 a 40 segundos.</p></form>
 <div style="margin-top:14px">{GUIA_ASSINATURA}</div>"""
     return pagina("Pacote de habilitação", corpo, "/documentos", aviso, erro)
 
 
-def gerar_pacote(campos, arqs, multi_d, multi_cert):
+def gerar_pacote(campos, arqs, multi_d, multi_cert, multi_at=()):
     """Monta o pacote. Devolve (bytes, nome_arquivo, avisos)."""
     emps = nomes_empresas()
     nome = campos.get("emp", "")
@@ -2482,6 +2516,13 @@ def gerar_pacote(campos, arqs, multi_d, multi_cert):
             dados = a.read_bytes()
             ext = a.suffix.lower().lstrip(".")
             secoes.append((certs[cid], dados if ext == "pdf" else pacote.pdf_da_imagem(dados, "png" if ext == "png" else "jpg")))
+    for aid in multi_at:
+        a = atestados.ler(aid)
+        p_at = atestados.arquivo(aid) if a and a.get("empresa") == nome else None
+        if p_at:
+            dados = p_at.read_bytes()
+            secoes.append((atestados.titulo(a), dados if dados[:4] == b"%PDF" else
+                           pacote.pdf_da_imagem(dados, "png" if p_at.suffix.lower() == ".png" else "jpg")))
     for n, dados in arqs:
         if not dados:
             continue
@@ -3114,11 +3155,14 @@ def pg_licitacao(cid, aviso="", erro=False):
                      f'<input type="hidden" name="modalidade" value="Pregão Eletrônico"><button>💰 Criar a proposta</button></form>'),
         "conferencia": (f'<a class="btn sec" href="/propostas/{e(prop["id"])}#conferencia">Ver a conferência'
                         f'{" (" + str(info["n_erros"]) + " erro(s))" if info["n_erros"] else ""}</a>' if prop else ""),
-        "pacote": f'<a class="btn sec" href="/pacote?emp={q_emp}{"&proposta=" + prop["id"] if prop else ""}">📦 Gerar o pacote</a>' + marcar("pacote", "Já montei"),
+        "pacote": (f'<a class="btn sec" href="/pacote?emp={q_emp}{"&proposta=" + prop["id"] if prop else ""}">📦 Gerar o pacote</a>'
+                   f'<a class="btn sec" href="/atestados?emp={q_emp}{"&edital=" + e(info["edital"]) if info.get("edital") else ""}">📜 Atestados para este edital</a>'
+                   + marcar("pacote", "Já montei")),
         "enviado": '<a class="btn sec" href="/assinatura">✍️ Como assinar</a>' + marcar("enviado", "Já enviei na plataforma"),
         "disputa": (f'<a class="btn sec" href="/mensagens?empresa={e(m.get("eid", ""))}">💬 Mensagens do pregoeiro</a>'
                     f'<a class="btn sec" href="/disputa">🎯 Disputa ao vivo</a>' if m else '<a class="btn sec" href="/empresas">Conferir empresa/plataforma no monitor</a>'),
-        "resultado": ((f'<a class="btn sec" href="/classificacao?' + urllib.parse.urlencode({"empresa": m.get("eid", ""), "processo": card.get("processo", ""), "promotor": card.get("orgao", "")}) + '">📊 Classificação</a>') if m else "") +
+        "resultado": ((f'<a class="btn sec" href="/classificacao?' + urllib.parse.urlencode({"empresa": m.get("eid", ""), "processo": card.get("processo", ""), "promotor": card.get("orgao", "")}) + '">📊 Classificação</a>'
+                       f'<a class="btn{"" if info.get("resultado") == "perdeu" else " sec"}" href="/resultado?' + urllib.parse.urlencode({"empresa": m.get("eid", ""), "processo": card.get("processo", ""), "promotor": card.get("orgao", "")}) + '">🔎 Por que perdi?</a>') if m else "") +
                      f'<form method="post" action="/licitacoes/{cid}/resultado" class="linha" style="gap:6px;margin-top:6px"><input type="hidden" name="csrf" value="{CSRF}">'
                      f'<select class="campo" name="resultado" style="max-width:220px"><option value="">automático (monitor)</option>'
                      + "".join(f'<option value="{k}" {"selected" if card.get("resultado_manual") == k else ""}>{n}</option>' for k, n in (("ganhou", "Ganhamos"), ("perdeu", "Perdemos"), ("encerrado", "Encerrada sem vencedor")))
@@ -3382,6 +3426,211 @@ def relatorio_mensal():
         time.sleep(1800)
 
 
+# ------------------------------------------------------------------ "por que perdi?"
+def dbs_usuario():
+    return [(n, EMPRESAS / eid / "bll_monitor.db") for n, ids in nomes_empresas().items() for eid in ids
+            if (EMPRESAS / eid / "bll_monitor.db").exists()]
+
+
+def pg_resultado(q):
+    eid, proc, prom = q.get("empresa", ""), q.get("processo", ""), q.get("promotor", "")
+    if not (EMPRESAS / f"{eid}.env").exists():
+        return pagina("Por que perdi?", "<h2>Empresa não encontrada</h2>", "/licitacoes")
+    cfg_emp = ler_env(EMPRESAS / f"{eid}.env")
+    nome = (cfg_emp.get("EMPRESA_NOME") or eid).upper().strip()
+    porte = documentos.dados(nome).get("porte", "")
+    a = resultados.analisar(resultados.ler_lotes(EMPRESAS / eid / "bll_monitor.db", proc, prom), porte)
+    r = a["resumo"]
+    brl = propostas.brl
+    prop = next((p for p in propostas.listar() if p.get("empresa") == nome and _norm_proc(p.get("processo")) == _norm_proc(proc)
+                 and _norm_proc(proc) and visivel(p.get("empresa"), p.get("usuario"))), None)
+    inicial = {}
+    if prop:
+        for it in propostas.calcular(prop)[0]:
+            for k in (str(it.get("lote") or "").strip(), str(it.get("item") or "").strip()):
+                n = re.sub(r"\D", "", k).lstrip("0")
+                if n and n not in inicial:
+                    inicial[n] = it
+    cor = {"ganhou": ("ok", "🏆 Ganhou"), "por um triz": ("erro", "🤏 Por um triz"), "perto": ("aviso", "📉 Perto"),
+           "longe": ("parado", "🔎 Longe"), "desclassificado": ("erro", "❌ Desclassificado"), "sem lance": ("parado", "Sem lance")}
+    linhas = ""
+    for x in a["lotes"]:
+        cl, rot = cor.get(x["sit"], ("", x["sit"]))
+        gap = "" if x["gap"] is None or x["sit"] in ("ganhou", "desclassificado") else f'+{x["gap"]:.1f}%'.replace(".", ",")
+        dif = "" if not x["dif"] or x["sit"] in ("ganhou", "desclassificado") else brl(x["dif"])
+        it0 = inicial.get(re.sub(r"\D", "", str(x["lote"])).lstrip("0"))
+        ini = f'<div class="sub">proposta inicial: {brl(it0["_u"])} un.</div>' if it0 and it0.get("_u") else ""
+        venc = (f'{e(x["vencedor"][:50])}<div class="sub">{e(x["venc_tipo"])}{" · marca " + e(x["venc_marca"]) if x["venc_marca"] else ""}'
+                f'{" · ⚖️ pode ter coberto (empate ficto)" if x["ficto"] else ""}</div>') if x["sit"] != "ganhou" else (
+            f'<span class="sub">2º: {e(x["segundo"][:40])} {brl(x["seg_valor"]) if x["seg_valor"] else ""}</span>' if x["segundo"] else "—")
+        linhas += (f'<tr><td><b>{e(nlote(x["lote"]))}</b></td><td>{e(x["descricao"][:110])}</td>'
+                   f'<td><span class="tag {cl}">{rot}</span><div class="sub">{(str(x["pos"]) + "º de " + str(x["participantes"])) if x["pos"] else ""}</div></td>'
+                   f'<td class="num">{brl(x["nosso"]) if x["nosso"] else "—"}{ini}</td><td>{venc}</td>'
+                   f'<td class="num">{brl(x["venc_valor"]) if x["venc_valor"] and x["sit"] != "ganhou" else ""}</td>'
+                   f'<td class="num"><b>{gap}</b><div class="sub">{dif}</div></td></tr>')
+    gap_med = ("+" + f'{r["gap_mediano"]:.1f}%'.replace(".", ",")) if r["gap_mediano"] is not None else "—"
+    kp = '<div class="kpis">' + "".join(f'<div class="kpi"><div class="v">{v}</div><div class="l">{t}</div></div>' for v, t in (
+        (r["disputados"], "lotes com lance"), (r["ganhos"], "em 1º lugar"), (r["perdidos"], "perdidos"),
+        (r["triz"] + r["perto"], "perdidos por até 5%"), (gap_med, "diferença mediana"))) + "</div>"
+    dic = "".join(f"<li>{d}</li>" for d in a["dicas"])
+    corpo = f"""<h2>🔎 Por que perdi? – {e(proc)}</h2><p class="sub">{e(nome)} · {e(prom)}</p>
+<p><a class="btn sec" href="/classificacao?{e(urllib.parse.urlencode({"empresa": eid, "processo": proc, "promotor": prom}))}">📊 Classificação completa</a>
+{f'<a class="btn sec" href="/propostas/{e(prop["id"])}">💰 Proposta</a>' if prop else ""}</p>
+{kp if a["lotes"] else ""}
+<div class="form" style="max-width:none;margin:12px 0"><h3 style="margin-top:0">💡 O que dá para aprender</h3><ul style="line-height:1.6;margin:0;padding-left:20px">{dic}</ul></div>
+{('<table><tr><th>Lote</th><th>Descrição</th><th>Resultado</th><th class="num">Seu lance</th><th>Vencedor</th><th class="num">Lance vencedor</th><th class="num">Diferença</th></tr>' + linhas + '</table>') if linhas else '<div class="msg">Ainda não há classificação lida deste processo. Ela aparece depois que o monitor lê a disputa (ou envie o PDF do ranking em Processos).</div>'}
+<p class="sub">Valores como a plataforma mostra (unitário ou do lote, conforme o edital). O resultado de cada lote também alimenta a dica
+“🏁 suas disputas” no preço das próximas propostas.</p>"""
+    return pagina("Por que perdi?", corpo, "/licitacoes")
+
+
+# ------------------------------------------------------------------ biblioteca de atestados
+def ler_atestado_ia(aid, cfg, usuario):
+    a = atestados.ler(aid) or {}
+    try:
+        api = cfg.get("GEMINI_API_KEY", "")
+        if not api:
+            raise RuntimeError("Falta a chave do Gemini (Configurações → Inteligência artificial).")
+        p = atestados.arquivo(aid)
+        if not p:
+            raise RuntimeError("Este atestado não tem arquivo.")
+        dados = p.read_bytes()
+        if dados[:4] != b"%PDF":   # foto do atestado: vira PDF (a IA lê a imagem da página)
+            dados = pacote.pdf_da_imagem(dados, "png" if p.suffix.lower() == ".png" else "jpg")
+        partes = [("pdf", p.stem + ".pdf", dados)]
+        custos_ia.contexto("atestado_ler", a.get("empresa", ""), "", usuario)
+        md, _, _ = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes, atestados.PROMPT_LER, prazo=240)
+        r = propostas.extrair_json(md)
+        novos = {k: str(r.get(k) or "")[:1500] for k in ("contratante", "cnpj_contratante", "objeto", "periodo_ini", "periodo_fim", "valor", "emissao")}
+        novos["itens"] = atestados.itens_txt(r.get("itens"))[:4000]
+        atual = atestados.ler(aid) or {}
+        # não apaga o que o usuário já preencheu à mão
+        atestados.atualizar(aid, {**{k: v for k, v in novos.items() if v and not atual.get(k)}, "leitura_ia": "pronto",
+                                  "leitura_erro": ""})
+    except Exception as ex:  # noqa: BLE001
+        atestados.atualizar(aid, {"leitura_ia": "erro", "leitura_erro": str(ex)[:300]})
+
+
+def conferir_atestados_ia(edital, empresa, cfg, usuario):
+    try:
+        api = cfg.get("GEMINI_API_KEY", "")
+        if not api:
+            raise RuntimeError("Falta a chave do Gemini (Configurações → Inteligência artificial).")
+        lista = atestados.listar(empresa)
+        if not lista:
+            raise RuntimeError("Cadastre pelo menos um atestado desta empresa.")
+        partes, _ = pecas.partes_edital(edital)
+        if not partes:
+            raise RuntimeError("Não achei os arquivos deste edital. Analise o edital em Editais (IA) de novo.")
+        custos_ia.contexto("atestados", empresa, (analise.ler(edital) or {}).get("titulo", "")[:80], usuario)
+        md, _, _ = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(),
+                                  partes + [("txt", "ATESTADOS DA EMPRESA", atestados.texto_para_ia(lista))],
+                                  atestados.PROMPT_MATCH, prazo=600)
+        r = propostas.extrair_json(md)
+        ids = {a["id"] for a in lista}
+        r["recomendados"] = [x for x in r.get("recomendados") or [] if x in ids]
+        atestados.gravar_match(edital, empresa, {"status": "pronto", "resultado": r, "custo": custos_ia.ultimo(),
+                                                 "quando": datetime.now().strftime("%d/%m/%Y %H:%M")})
+    except Exception as ex:  # noqa: BLE001
+        atestados.gravar_match(edital, empresa, {"status": "erro", "erro": str(ex)[:300]})
+
+
+def html_match_atestados(edital, empresa):
+    m = atestados.match(edital, empresa)
+    if not m:
+        return ""
+    if m.get("status") == "gerando":
+        return '<div class="msg">🤖 Lendo o edital e comparando com os atestados… (1 a 3 minutos)</div><script>setTimeout(()=>location.reload(),8000)</script>'
+    if m.get("status") == "erro":
+        return f'<div class="msg erro">{e(m.get("erro", ""))}</div>'
+    r = m.get("resultado") or {}
+    nomes = {a["id"]: a.get("contratante") or "atestado" for a in atestados.listar(empresa)}
+    cor = {"sim": ("ok", "✅ atende"), "parcial": ("aviso", "🟠 parcial"), "nao": ("erro", "❌ não atende")}
+    linhas = ""
+    for x in r.get("exigencias") or []:
+        cl, rot = cor.get(str(x.get("atendida", "")).lower(), ("parado", e(str(x.get("atendida", "")))))
+        quais = ", ".join(e(nomes.get(i, i)) for i in x.get("atestados") or []) or "—"
+        linhas += (f'<tr><td>{e(x.get("texto", ""))}{("<div class=sub>mínimo: " + e(x["minimo"]) + "</div>") if x.get("minimo") else ""}</td>'
+                   f'<td><span class="tag {cl}">{rot}</span></td><td>{quais}<div class="sub">{e(x.get("comentario", ""))}</div></td></tr>')
+    rec = "".join(f'<li>📜 <b>{e(nomes.get(i, i))}</b></li>' for i in r.get("recomendados") or [])
+    q_emp = urllib.parse.quote(empresa)
+    return (f'<h3 style="margin-bottom:4px">Resultado <small class="sub">({e(m.get("quando", ""))})</small></h3>'
+            + (f'<table><tr><th>Exigência do edital</th><th>Situação</th><th>Atestados que servem</th></tr>{linhas}</table>' if linhas else "")
+            + (f'<p><b>Use no pacote:</b></p><ul>{rec}</ul>' if rec else "")
+            + (f'<div class="msg erro">Falta: {e(r["faltando"])}</div>' if r.get("faltando") else "")
+            + (f'<p class="sub">⚠️ {e(r["observacoes"])}</p>' if r.get("observacoes") else "")
+            + (f'<a class="btn" href="/pacote?emp={q_emp}&edital={e(edital)}">📦 Montar o pacote com os recomendados</a>' if rec else "")
+            + '<p class="sub">Confira sempre no edital – a IA ajuda, mas a responsabilidade pelos documentos é da empresa.</p>')
+
+
+def pg_atestados(q, aviso="", erro=False):
+    emps = sorted(nomes_empresas())
+    if not emps:
+        return pagina("Atestados", f"<h2>📄 Documentos</h2>{abas_doc('ate')}<p>Cadastre uma empresa primeiro.</p>", "/documentos")
+    emp_f = q.get("emp", "") if q.get("emp", "") in emps else ""
+    emp_m = emp_f or emps[0]
+    analisados = [a for a in analise.listar() if a.get("status") == "pronto" and ve_analise(a)]
+    edital = q.get("edital", "") if any(a["chave"] == q.get("edital", "") for a in analisados) else ""
+    sel_ed = ('<option value="">— escolha o edital analisado em Editais (IA) —</option>' + "".join(
+        f'<option value="{e(a["chave"])}" {"selected" if a["chave"] == edital else ""}>{e((a.get("titulo") or a["chave"])[:110])}</option>'
+        for a in analisados))
+    opc = lambda sel: "".join(f'<option value="{e(n)}" {"selected" if n == sel else ""}>{e(n)}</option>' for n in emps)  # noqa: E731
+    blocos = ""
+    for nome in [n for n in emps if not emp_f or n == emp_f]:
+        cards = ""
+        for a in atestados.listar(nome):
+            aid = a["id"]
+            lendo = a.get("leitura_ia") == "lendo"
+            arq = f'<a href="/atestados/{aid}/arquivo" target="_blank">📄 arquivo</a>' if atestados.arquivo(aid) else '<span class="sub">sem arquivo</span>'
+            itens = e(a.get("itens", "")).replace("\n", "<br>")
+            periodo = " a ".join(_dt_br(x) for x in (a.get("periodo_ini"), a.get("periodo_fim")) if x)
+            form = (f'<details><summary class="sub" style="cursor:pointer">✎ editar</summary>'
+                    f'<form method="post" action="/atestados/salvar" enctype="multipart/form-data" style="margin-top:6px">'
+                    f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="aid" value="{aid}"><input type="hidden" name="empresa" value="{e(nome)}">'
+                    f'<label>Contratante (quem emitiu)</label><input class="campo" name="contratante" value="{e(a.get("contratante", ""))}">'
+                    f'<label>Objeto</label><input class="campo" name="objeto" value="{e(a.get("objeto", ""))}">'
+                    f'<label>Itens e quantidades <small>(um por linha)</small></label><textarea class="campo" name="itens" rows="4">{e(a.get("itens", ""))}</textarea>'
+                    f'<div class="linha" style="gap:8px;flex-wrap:wrap"><div><label>Início</label><input class="campo" type="date" name="periodo_ini" value="{e(a.get("periodo_ini", "")[:10])}"></div>'
+                    f'<div><label>Fim</label><input class="campo" type="date" name="periodo_fim" value="{e(a.get("periodo_fim", "")[:10])}"></div>'
+                    f'<div><label>Valor</label><input class="campo" name="valor" value="{e(a.get("valor", ""))}"></div></div>'
+                    f'<label>Trocar arquivo</label><input type="file" name="arquivo" accept=".pdf,.png,.jpg,.jpeg">'
+                    f'<div class="acoes"><button>Salvar</button></div></form></details>')
+            ia = ("" if not atestados.arquivo(aid) else
+                  '<span class="sub">🤖 lendo…</span><script>setTimeout(()=>location.reload(),8000)</script>' if lendo else
+                  botao(f"/atestados/{aid}/ler", "🤖 Ler os dados com IA", "sec"))
+            cards += (f'<div class="form" style="max-width:none;margin:0 0 10px"><div class="linha" style="justify-content:space-between;gap:8px;flex-wrap:wrap">'
+                      f'<b>📜 {e(a.get("contratante") or "Atestado (sem contratante)")}</b><span class="sub">{arq}</span></div>'
+                      f'<div>{e(a.get("objeto", "")) or "<span class=sub>objeto não informado</span>"}</div>'
+                      + (f'<div class="sub" style="margin-top:4px">{itens}</div>' if itens else "")
+                      + f'<div class="sub">{("período " + periodo) if periodo else ""}{(" · valor " + e(a["valor"])) if a.get("valor") else ""}</div>'
+                      + (f'<div class="msg erro">{e(a.get("leitura_erro", ""))}</div>' if a.get("leitura_ia") == "erro" else "")
+                      + f'<div class="acoes">{ia}{botao(f"/atestados/{aid}/excluir", "🗑", "sec", "Apagar este atestado?")}</div>{form}</div>')
+        blocos += (f'<h3>{e(nome)} <small class="sub">({len(atestados.listar(nome))})</small></h3>'
+                   + (cards or '<p class="sub">Nenhum atestado cadastrado.</p>'))
+    sel_filtro = ('<select class="campo" style="max-width:260px" onchange="location.href=\'/atestados?emp=\'+encodeURIComponent(this.value)">'
+                  '<option value="">Todas as empresas</option>' + opc(emp_f) + "</select>")
+    corpo = f"""<h2>📄 Documentos</h2>{abas_doc("ate")}
+<p class="sub">Cadastre os <b>atestados de capacidade técnica</b> uma vez: o arquivo e o que foi fornecido (itens e quantidades) para quem.
+Depois, para cada edital, a IA lê a qualificação técnica exigida e diz <b>quais atestados atendem</b> – e eles entram no pacote de habilitação.</p>
+<div class="form" style="max-width:none;margin-bottom:12px"><h3 style="margin-top:0">🔎 Quais atestados atendem este edital?</h3>
+<form method="post" action="/atestados/conferir" class="linha" style="gap:8px;flex-wrap:wrap;align-items:flex-end"><input type="hidden" name="csrf" value="{CSRF}">
+<div style="flex:2;min-width:260px"><label>Edital</label><select class="campo" name="edital" required>{sel_ed}</select></div>
+<div style="flex:1;min-width:200px"><label>Empresa</label><select class="campo" name="empresa">{opc(emp_m)}</select></div>
+<button>🤖 Comparar com IA</button></form>{aviso_custo("atestados")}
+{html_match_atestados(edital, emp_m) if edital else '<p class="sub">Ainda não analisou o edital? Faça em <a href="/editais">Editais (IA)</a> – o arquivo do edital é reaproveitado aqui.</p>'}</div>
+<details class="form" style="max-width:none;margin-bottom:12px" {"open" if not atestados.listar() else ""}><summary><b>➕ Adicionar atestado</b></summary>
+<form method="post" action="/atestados/salvar" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{CSRF}">
+<div class="linha" style="gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label>Empresa</label><select class="campo" name="empresa">{opc(emp_m)}</select></div>
+<div style="flex:1;min-width:220px"><label>Arquivo do atestado (PDF ou foto)</label><input type="file" name="arquivo" accept=".pdf,.png,.jpg,.jpeg" required></div></div>
+<label>Contratante <small>(quem emitiu – vazio = a IA lê)</small></label><input class="campo" name="contratante">
+<label>Objeto <small>(opcional)</small></label><input class="campo" name="objeto">
+<label>Itens e quantidades <small>(opcional, um por linha – ex.: “Papel A4 – 2.000 resmas”)</small></label><textarea class="campo" name="itens" rows="3"></textarea>
+<label class="ck"><input type="checkbox" name="ler_ia" value="1" checked> Ler os dados do atestado com IA (preenche o que ficou vazio – custo pequeno)</label>
+<div class="acoes"><button>Salvar atestado</button></div></form></details>
+<div class="acoes">{sel_filtro}</div>{blocos}"""
+    return pagina("Atestados", corpo, "/documentos", aviso, erro)
+
+
 def abas_doc(atual):
     return ('<div class="acoes" style="margin:6px 0 12px">'
             f'<a class="btn {"" if atual == "dec" else "sec"}" href="/documentos">📄 Declarações</a>'
@@ -3389,7 +3638,8 @@ def abas_doc(atual):
             f'<a class="btn {"" if atual == "pac" else "sec"}" href="/pacote">📦 Pacote de habilitação</a>'
             f'<a class="btn {"" if atual == "ass" else "sec"}" href="/assinatura">✍️ Como assinar</a>'
             f'<a class="btn {"" if atual == "pec" else "sec"}" href="/pecas">⚖️ Peças com IA (recurso, contrarrazões…)</a>'
-            f'<a class="btn {"" if atual == "cer" else "sec"}" href="/certidoes">📑 Certidões</a></div>')
+            f'<a class="btn {"" if atual == "cer" else "sec"}" href="/certidoes">📑 Certidões</a>'
+            f'<a class="btn {"" if atual == "ate" else "sec"}" href="/atestados">📜 Atestados</a></div>')
 
 
 def pg_pecas(q, aviso=""):
@@ -5927,9 +6177,11 @@ class Painel(BaseHTTPRequestHandler):
             if (caminho.startswith(ROTAS_IA) and not caminho.endswith("/telegram") or ROTAS_IA_RE.fullmatch(caminho)) and not u.get("ia", True):
                 return self.negar("O seu usuário não tem permissão para usar os recursos com IA (que têm custo). Fale com o administrador.")
         if nomes_permitidos() is not None:
-            m = re.match(r"/(agenda|certidoes|pecas|propostas|contratos|licitacoes)/([0-9a-f]{12,14})(/|$)", caminho)
+            m = re.match(r"/(agenda|certidoes|pecas|propostas|contratos|licitacoes|atestados)/([0-9a-f]{12,14})(/|$)", caminho)
             if m:
-                if m.group(1) == "licitacoes":
+                if m.group(1) == "atestados":
+                    dono, criador = (atestados.ler(m.group(2)) or {}).get("empresa", ""), "?"
+                elif m.group(1) == "licitacoes":
                     it = kanban.ler(m.group(2)) or {}
                     dono, criador = it.get("empresa", ""), it.get("usuario")
                 elif m.group(1) == "contratos":
@@ -6194,6 +6446,18 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_chances(q))
             if p == "/licitacoes":
                 return self.enviar(pg_licitacoes(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/atestados":
+                return self.enviar(pg_atestados(q, AVISOS.get(q.get("ok", ""), "")))
+            m = re.fullmatch(r"/atestados/([0-9a-f]{12})/arquivo", p)
+            if m:
+                arq_a = atestados.arquivo(m.group(1))
+                if not arq_a:
+                    return self.enviar(pagina("Atestado", "<h2>Arquivo não encontrado</h2>", "/atestados"), 404)
+                tipo_a = mimetypes.guess_type(arq_a.name)[0] or "application/octet-stream"
+                nome_h = re.sub(r"[^A-Za-z0-9._ -]", "_", unicodedata.normalize("NFKD", arq_a.name).encode("ascii", "ignore").decode()) or "atestado"
+                return self.baixar(arq_a.read_bytes(), nome_h, tipo_a, na_tela=True)
+            if p == "/resultado":
+                return self.enviar(pg_resultado(q))
             if p == "/relatorio":
                 return self.enviar(pg_relatorio(q, {"enviado": "📨 Relatório enviado no seu Telegram."}.get(q.get("ok", ""), "")))
             if p == "/relatorio/pdf":
@@ -6365,6 +6629,31 @@ class Painel(BaseHTTPRequestHandler):
                                           '<p><a class="btn sec" href="/processos">Voltar</a></p>', "/processos"))
             return self.redirecionar("/classificacao?" + urllib.parse.urlencode(
                 {"empresa": eid, "processo": chave[0], "promotor": chave[1]}))
+        if self.path.rstrip("/") == "/atestados/salvar":
+            if tam > 20 * 1024 * 1024:
+                return self.enviar(pg_atestados({}, "Arquivo grande demais (máx. 20 MB).", True), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            aid = campos.get("aid", "") if re.fullmatch(r"[0-9a-f]{12}", campos.get("aid", "")) else ""
+            if not self.permitido(f"/atestados/{aid}" if aid else "/atestados/salvar", campos):
+                return
+            nome = campos.get("empresa", "")
+            if nome not in nomes_empresas() or (aid and (atestados.ler(aid) or {}).get("empresa") != nome):
+                return self.redirecionar("/atestados")
+            arq = next(((n, d) for n, d in arqs if d), None)
+            if arq and arq[1][:4] != b"%PDF" and not arq[0].lower().endswith((".png", ".jpg", ".jpeg")):
+                return self.enviar(pg_atestados({"emp": nome}, "Envie um PDF, PNG ou JPG.", True))
+            dados_a = {k: campos.get(k, "").strip() for k in atestados.CAMPOS if k in campos}
+            dados_a["empresa"] = nome
+            aid = atestados.salvar(aid, dados_a, arq)
+            self.auditar("salvou atestado", f"{nome} {aid}")
+            if campos.get("ler_ia") == "1" and arq:
+                u_ia = usuario_atual() or {}
+                if u_ia.get("ia", True) and u_ia.get("papel") != "leitura":
+                    atestados.atualizar(aid, {"leitura_ia": "lendo"})
+                    threading.Thread(target=ler_atestado_ia, args=(aid, cfg_ia(), login_atual()), daemon=True).start()
+            return self.redirecionar("/atestados?" + urllib.parse.urlencode({"emp": nome}))
         if self.path.rstrip("/") == "/certidoes/lote":
             if tam > 40 * 1024 * 1024:
                 return self.enviar(pg_certidoes({}, "Arquivos grandes demais (máx. 40 MB por envio)."), 413)
@@ -6495,7 +6784,7 @@ class Painel(BaseHTTPRequestHandler):
             if campos.get("emp", "") not in nomes_empresas():
                 return self.redirecionar("/pacote")
             try:
-                dados, arquivo, avisos = gerar_pacote(campos, arqs[:15], listas.get("d", []), listas.get("cert", []))
+                dados, arquivo, avisos = gerar_pacote(campos, arqs[:15], listas.get("d", []), listas.get("cert", []), listas.get("at", []))
                 _pp = propostas.ler(campos.get("proposta", "")) if re.fullmatch(r"[0-9a-f]{12}", campos.get("proposta", "")) else None
                 if _pp:   # o "siga-me" das licitações marca o pacote como feito
                     _pp["pacote_gerado"] = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -6872,6 +7161,26 @@ class Painel(BaseHTTPRequestHandler):
                 pid = propostas.nova(nome, f.get("processo", "").strip()[:80] or proc, f.get("orgao", "").strip()[:200] or prom,
                                      f.get("modalidade", "").strip()[:80], login_atual())
                 return self.redirecionar(f"/propostas/{pid}")
+            m = re.fullmatch(r"/atestados/([0-9a-f]{12})/(ler|excluir)", p)
+            if m and atestados.ler(m.group(1)):
+                aid, acao = m.groups()
+                emp_a = atestados.ler(aid).get("empresa", "")
+                if acao == "excluir":
+                    atestados.excluir(aid)
+                    self.auditar("apagou atestado", f"{emp_a} {aid}")
+                else:
+                    atestados.atualizar(aid, {"leitura_ia": "lendo"})
+                    threading.Thread(target=ler_atestado_ia, args=(aid, cfg_ia(), login_atual()), daemon=True).start()
+                return self.redirecionar("/atestados?" + urllib.parse.urlencode({"emp": emp_a}))
+            if p == "/atestados/conferir":
+                ed, emp_a = f.get("edital", ""), f.get("empresa", "")
+                if emp_a not in nomes_empresas() or not analise.ler(ed) or not ve_analise(analise.ler(ed)):
+                    return self.redirecionar("/atestados")
+                if not atestados.listar(emp_a):
+                    return self.enviar(pg_atestados({"emp": emp_a, "edital": ed}, "Cadastre pelo menos um atestado desta empresa primeiro.", True))
+                atestados.gravar_match(ed, emp_a, {"status": "gerando"})
+                threading.Thread(target=conferir_atestados_ia, args=(ed, emp_a, cfg_ia(), login_atual()), daemon=True).start()
+                return self.redirecionar("/atestados?" + urllib.parse.urlencode({"emp": emp_a, "edital": ed}))
             if p == "/relatorio/enviar":
                 q_r = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
                 q_r.update({k: f[k] for k in ("mes", "emp") if k in f})

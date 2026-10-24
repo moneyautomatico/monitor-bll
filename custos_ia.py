@@ -23,6 +23,8 @@ RECURSOS = {
     "proposta": ("💰 Proposta: itens lidos do edital", 0.30),
     "conferencia": ("✅ Conferência da proposta com o edital", 0.30),
     "pergunta": ("💬 Pergunte ao Licitatudo (por pergunta)", 0.20),
+    "atestado_ler": ("📜 Atestado: ler os dados do arquivo", 0.05),
+    "atestados": ("📜 Atestados que atendem o edital", 0.30),
 }
 
 
