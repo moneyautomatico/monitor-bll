@@ -69,6 +69,10 @@ def gerar():
         if cert.exists():
             for f in cert.glob("*/*"):
                 tar.add(f, arcname=f"certidoes/{f.parent.name}/{f.name}")
+        anx = PASTA / "kanban_anexos"   # anexos dos cartões das licitações
+        if anx.exists():
+            for f in anx.glob("*/*"):
+                tar.add(f, arcname=f"kanban_anexos/{f.parent.name}/{f.name}")
         an = PASTA / "analises"
         if an.exists():
             for j in an.glob("*.json"):

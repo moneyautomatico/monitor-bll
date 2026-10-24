@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import agenda
+import kanban
 import oportunidades
 import urgencia
 
@@ -60,6 +61,37 @@ def montar(agora=None, permitidos=None, login=""):
         partes.append("\n".join(linhas))
     else:
         partes.append("\n📅 Nenhum prazo para hoje ou amanhã.")
+
+    # ---- licitações (kanban): disputas de hoje/amanhã e tarefas da equipe, por responsável
+    try:
+        grupos = {}
+        dia_h, dia_a = agora.date().isoformat(), (agora.date() + timedelta(days=1)).isoformat()
+        for c in kanban.listar():
+            if c.get("arquivado") or not ok(c.get("empresa"), c.get("usuario", "")):
+                continue
+            proc = e(c.get("processo") or "Licitação")
+            resp = (c.get("responsavel") or "").strip() or "Sem responsável"
+            ab = c.get("abertura") or ""
+            if ab[:10] in (dia_h, dia_a) and c.get("resultado", "") == "":
+                falta = c.get("progresso", 0)
+                prox = c.get("proximo", "")
+                grupos.setdefault(resp, []).append(
+                    f"🏁 {'Hoje' if ab[:10] == dia_h else 'Amanhã'} {ab[11:16]} – disputa {proc} <i>({e(c.get('empresa', ''))})</i> · {falta}% pronto"
+                    + (f" – falta: {e(prox)}" if falta < 100 and prox else ""))
+            for t in c.get("tarefas") or []:
+                if t.get("feito") or not t.get("prazo") or t["prazo"] > dia_h:
+                    continue
+                quem = (t.get("resp") or "").strip() or resp
+                grupos.setdefault(quem, []).append(
+                    f"{'❗ Atrasada' if t['prazo'] < dia_h else '🔴 Hoje'} – {e(t.get('texto', ''))} <i>({proc})</i>")
+        if grupos:
+            linhas = ["\n🗂️ <b>Licitações – o que vence hoje</b>"]
+            for quem in sorted(grupos, key=lambda x: (x == "Sem responsável", x.lower())):
+                linhas.append(f"👤 <b>{e(quem)}</b>")
+                linhas += [f"   {x}" for x in grupos[quem][:10]]
+            partes.append("\n".join(linhas))
+    except Exception as ex:  # noqa: BLE001
+        print("resumo kanban:", ex, flush=True)
 
     # ---- certidões
     cert = []

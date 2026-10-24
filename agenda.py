@@ -83,6 +83,17 @@ def somar_dias_uteis(inicio, n):
     return datetime.combine(d, datetime.max.time()).replace(microsecond=0, second=0)
 
 
+def subtrair_dias_uteis(fim, n):
+    """N dias úteis ANTES da data (ex.: impugnação até 3 dias úteis antes da abertura); termina às 23:59 desse dia."""
+    d = fim.date() if isinstance(fim, datetime) else fim
+    contados = 0
+    while contados < n:
+        d -= timedelta(days=1)
+        if dia_util(d):
+            contados += 1
+    return datetime.combine(d, datetime.max.time()).replace(microsecond=0, second=0)
+
+
 # ================================================================== detecção de prazos nas mensagens
 NUMS = {"um": 1, "uma": 1, "dois": 2, "duas": 2, "tres": 3, "quatro": 4, "cinco": 5, "seis": 6, "sete": 7, "oito": 8,
         "nove": 9, "dez": 10, "doze": 12, "quinze": 15, "vinte": 20, "trinta": 30, "quarenta e oito": 48, "vinte e quatro": 24}
@@ -219,6 +230,44 @@ def excluir(pid):
         d = prazos()
         d["itens"].pop(pid, None)
         _gravar(ARQ_PRAZOS, d)
+
+
+def sincronizar_cartao(cartao, itens, base):
+    """Prazos legais de um cartão de licitação na agenda: cria, move (se a data mudou) e remove os que não valem mais.
+    itens = [(tipo, titulo, quando)]; base = empresa, processo, promotor, criado_por."""
+    with TRAVA:
+        d = prazos()
+        meus = {it.get("legal"): pid for pid, it in d["itens"].items() if it.get("cartao") == cartao and it.get("legal")}
+        mudou = False
+        querer = {t for t, _, _ in itens}
+        for tipo, pid in meus.items():
+            if tipo not in querer:
+                d["itens"].pop(pid, None)
+                mudou = True
+        for tipo, titulo, quando in itens:
+            q = quando.strftime("%Y-%m-%dT%H:%M")
+            titulo = f"{titulo} – {base.get('processo', '')}"[:160]
+            pid = meus.get(tipo)
+            if pid and pid in d["itens"]:
+                it = d["itens"][pid]
+                if it.get("quando") != q or it.get("titulo") != titulo:
+                    if it.get("quando") != q:
+                        it["avisos"], it["status"] = [], "aberto"
+                    it["quando"], it["titulo"] = q, titulo
+                    mudou = True
+                continue
+            if quando < datetime.now():   # não cria aviso de prazo que já passou
+                continue
+            pid = _id("legal", cartao, tipo)
+            d["itens"][pid] = {"titulo": titulo, "quando": q, "empresa": base.get("empresa", ""), "eid": "",
+                               "processo": base.get("processo", ""), "promotor": base.get("promotor", ""),
+                               "obs": base.get("obs", {}).get(tipo, "")[:1500] if isinstance(base.get("obs"), dict) else "",
+                               "origem": "legal", "status": "aberto", "avisos": [], "cartao": cartao, "legal": tipo,
+                               "criado_por": base.get("criado_por", ""), "criado": datetime.now().strftime("%Y-%m-%dT%H:%M")}
+            mudou = True
+        if mudou:
+            _gravar(ARQ_PRAZOS, d)
+        return mudou
 
 
 def _chave_dup(it):
@@ -488,6 +537,34 @@ def ler_pdf_certidao(dados):
     return out
 
 
+VALIDADE_PADRAO = {"federal": 180, "fgts": 30, "trabalhista": 180}   # dias, quando o PDF não traz a validade
+
+
+def validade_estimada(tipo, emissao):
+    """Validade usual da certidão (CND federal 180 dias, CRF-FGTS 30, CNDT 180) a partir da emissão (ou de hoje)."""
+    if tipo not in VALIDADE_PADRAO:
+        return ""
+    try:
+        base = date.fromisoformat(emissao) if emissao else date.today()
+    except ValueError:
+        base = date.today()
+    return (base + timedelta(days=VALIDADE_PADRAO[tipo])).isoformat()
+
+
+def link_emissao(tipo, uf="", cidade=""):
+    """(url, rótulo) para emitir a certidão. Federal/FGTS/CNDT: site oficial; as outras dependem do estado/cidade –
+    abre a busca já com o estado/cidade para achar o site oficial."""
+    oficial = {k: u for k, _, u in TIPOS_CERT if u}
+    if tipo in oficial:
+        return oficial[tipo], "emitir no site oficial"
+    termos = {"estadual": f"certidão negativa de débitos estaduais SEFAZ {uf}",
+              "municipal": f"certidão negativa de débitos municipais prefeitura {cidade} {uf}",
+              "falencia": f"certidão negativa de falência e recuperação judicial Tribunal de Justiça {uf}"}.get(tipo)
+    if not termos or not (uf or cidade):
+        return "", ""
+    return "https://www.google.com/search?q=" + urllib.parse.quote(termos.strip()), "achar o site oficial"
+
+
 def pacote_zip(empresa):
     """ZIP com todas as certidões VÁLIDAS (com PDF) da empresa – para a habilitação."""
     buf = io.BytesIO()
@@ -609,7 +686,9 @@ def avisar_certidoes(enviar):
         else:
             msg = (f"📑 <b>Certidão vence {'HOJE' if dias == 0 else f'em {dias} dia(s)'}</b>: {h.escape(nome)}\n"
                    f"{h.escape(c.get('empresa', ''))} – validade {date.fromisoformat(c['validade']):%d/%m/%Y}")
-        _enviar_rota(enviar, {}, c.get("empresa", ""), "", msg + "\nRenove e anexe a nova no painel → Documentos → Certidões.")
+        url, _ = link_emissao(c.get("tipo"))
+        msg += f'\n🔗 Emitir: {url}' if url else ""
+        _enviar_rota(enviar, {}, c.get("empresa", ""), "", msg + "\nDepois envie o PDF no painel → Documentos → Certidões (ele lê a validade sozinho).")
     if mudou:
         with TRAVA:
             atual = certidoes()

@@ -18,7 +18,9 @@ import sqlite3
 import subprocess
 import threading
 import time
+import tempfile
 import unicodedata
+import mimetypes
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
@@ -2580,7 +2582,7 @@ def pg_contratos(q, aviso="", erro=False):
     sel_emp = "".join(f'<option value="{e(n)}">{e(n)}</option>' for n in sorted(emps))
     corpo = f"""<style>.barra-p{{height:5px;background:var(--borda);border-radius:3px;margin-top:3px}}.barra-p span{{display:block;height:5px;background:var(--verde);border-radius:3px}}
 .duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}@media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}</style>
-<h2>💼 Contratos – pós-venda</h2>
+<div class="linha" style="justify-content:space-between;flex-wrap:wrap;gap:8px"><h2 style="margin:0">💼 Contratos – pós-venda</h2><a class="btn sec" href="/relatorio">📈 Relatório do mês</a></div>
 <p class="sub">Depois de vencer: acompanhe empenhos, entregas, notas fiscais e pagamentos. Você recebe aviso no Telegram quando uma
 entrega está perto do prazo ou atrasada e quando um pagamento passa do vencimento.</p>
 <div class="kpis"><div class="kpi"><div class="v">{contratos.brl(soma("contratado"))}</div><div class="l">contratado ({len(tot)} ativo(s))</div></div>
@@ -2730,6 +2732,18 @@ def resultado_monitor(m):
     return ""
 
 
+def abertura_cartao(card, m):
+    """Data/hora da abertura (disputa): a informada no cartão ou a lida pelo monitor."""
+    f = card.get("fim") or ""
+    for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(f[:16] if "T" in f else f[:10], fmt)
+        except ValueError:
+            pass
+    d = para_data((m or {}).get("disputa") or "")
+    return d if d != datetime.min else None
+
+
 def info_cartao(card, mon, cache):
     """Junta tudo o que o sistema sabe sobre esta licitação (para a etapa, o progresso e o siga-me)."""
     nome = card.get("empresa", "")
@@ -2750,10 +2764,16 @@ def info_cartao(card, mon, cache):
     itens, total = propostas.calcular(prop) if prop else ([], 0)
     conf = propostas.conferir(prop, base["ctx"], [(n, st, d) for _, n, st, d, _ in base["certs"]]) if prop else []
     edital = card.get("edital_chave") or (prop or {}).get("edital_chave", "")
-    info = {"checks": card.get("checks") or {}, "edital": edital, "dados_ok": base["dados_ok"], "certidoes_ok": base["certidoes_ok"],
+    abertura = abertura_cartao(card, m)
+    hoje = date.today()
+    # certidão que ainda vale hoje mas vence ANTES da abertura também é problema
+    venc_antes = [n for _, n, st, d, _ in base["certs"] if d is not None and st != "vencida" and abertura and abertura.date() > hoje
+                  and hoje + timedelta(days=d) < abertura.date()]
+    info = {"checks": card.get("checks") or {}, "edital": edital, "dados_ok": base["dados_ok"],
+            "certidoes_ok": base["certidoes_ok"] and not venc_antes, "cert_antes": venc_antes,
             "proposta": prop, "proposta_ok": bool(itens) and all(i["_u"] > 0 for i in itens), "total": total,
             "conferencia_ok": bool(prop) and not any(n == "erro" for n, _ in conf), "n_erros": sum(1 for n, _ in conf if n == "erro"),
-            "pacote": (prop or {}).get("pacote_gerado", ""), "no_monitor": bool(m), "monitor": m,
+            "pacote": (prop or {}).get("pacote_gerado", ""), "no_monitor": bool(m), "monitor": m, "abertura": abertura,
             "resultado": card.get("resultado_manual") or (resultado_monitor(m) if m else ""), "contrato": contr}
     auto = kanban.etapa_auto(info)
     manual = card.get("etapa_manual") or ""
@@ -2761,6 +2781,66 @@ def info_cartao(card, mon, cache):
     info["progresso"] = kanban.progresso(info)
     info["proximo"] = next((t for k, t, feito, apl, _ in kanban.passos(info) if apl and not feito), "Tudo certo ✅")
     return info
+
+
+def processar_cartao(card, info):
+    """Guarda um retrato do cartão (para o resumo diário e o relatório) e põe os prazos legais na agenda."""
+    ab = info.get("abertura")
+    snap = {"abertura": ab.strftime("%Y-%m-%dT%H:%M") if ab else "", "progresso": info["progresso"], "proximo": info["proximo"],
+            "etapa": info["etapa"], "resultado": info.get("resultado") or "",
+            "valor": round(float(info.get("total") or 0), 2)}
+    if info.get("resultado") in ("ganhou", "perdeu") and not card.get("resultado_em"):
+        snap["resultado_em"] = date.today().isoformat()   # data de referência dos prazos de recurso (editável)
+    legais = kanban.prazos_legais({**card, **snap}, ab, info.get("resultado"), agenda.subtrair_dias_uteis, agenda.somar_dias_uteis)
+    info["legais"] = legais
+    itens = [(t, ti, q) for t, ti, q, _, na in legais if na]
+    sig = hashlib.sha1(repr([(t, ti, q.isoformat()) for t, ti, q in itens]).encode()).hexdigest()[:12]
+    if card.get("legais_sig") != sig:
+        agenda.sincronizar_cartao(card["id"], itens, {"empresa": card.get("empresa", ""), "processo": card.get("processo", ""),
+                                                      "promotor": card.get("orgao", ""), "criado_por": card.get("usuario") or login_atual(),
+                                                      "obs": {t: ex for t, _, _, ex, _ in legais}})
+        snap["legais_sig"] = sig
+    if any(card.get(k) != v for k, v in snap.items()):
+        kanban.atualizar(card["id"], lambda c: c.update(snap))
+        card.update(snap)
+
+
+def cartoes_visiveis(emp_f="", processar=True):
+    """[(cartão, info)] das licitações do usuário (não arquivadas)."""
+    mon = dados_monitor()
+    sincronizar_cartoes(mon)
+    cache, out = {}, []
+    for card in kanban.listar():
+        if card.get("arquivado") or not visivel(card.get("empresa"), card.get("usuario")):
+            continue
+        if emp_f and card.get("empresa") != emp_f:
+            continue
+        info = info_cartao(card, mon, cache)
+        if processar:
+            try:
+                processar_cartao(card, info)
+            except Exception as ex:  # noqa: BLE001
+                print("kanban: não processei", card.get("id"), ex, flush=True)
+        out.append((card, info))
+    return out
+
+
+def kanban_ciclo():
+    """A cada 30 min, para cada usuário: cria os cartões novos do monitor, atualiza o retrato e os prazos legais
+    (assim o resumo diário e os avisos funcionam mesmo sem ninguém abrir o painel)."""
+    time.sleep(240)
+    while True:
+        for lg in list(usuarios.carregar()):
+            u = usuarios.obter(lg)
+            if not u or not u.get("ativo", True) or u["papel"] == "admin":
+                continue
+            _REQ.user, _REQ.perm, _REQ.admin = u, None, False
+            try:
+                cartoes_visiveis()
+            except Exception as ex:  # noqa: BLE001
+                print("Erro no kanban de", lg, ex, flush=True)
+        _REQ.user = None
+        time.sleep(1800)
 
 
 def passos_conta():
@@ -2810,24 +2890,36 @@ cursor:grab;font-size:13px}.kcard a{color:inherit;text-decoration:none}.kcard .t
 .siga li.na{opacity:.45}.siga .acoes{margin:6px 0 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center}.siga .acoes .btn,.siga .acoes button{margin:0}.siga form{display:inline-flex;gap:6px;align-items:center;margin:0!important}.siga select.campo{margin:0}</style>"""
 
 
+def _dt_hora(q):
+    return q.strftime("%d/%m/%Y") + ("" if (q.hour, q.minute) == (23, 59) else q.strftime(" %H:%M"))
+
+
+def nomes_equipe(cartoes=None):
+    """Nomes já usados como responsável (para sugerir no campo)."""
+    nomes = set()
+    for c in cartoes if cartoes is not None else [c for c in kanban.listar() if visivel(c.get("empresa"), c.get("usuario"))]:
+        if (c.get("responsavel") or "").strip():
+            nomes.add(c["responsavel"].strip())
+        for t in c.get("tarefas") or []:
+            if (t.get("resp") or "").strip():
+                nomes.add(t["resp"].strip())
+    return sorted(nomes, key=str.lower)
+
+
 def pg_licitacoes(q, aviso="", erro=False):
-    mon = dados_monitor()
-    sincronizar_cartoes(mon)
-    emp_f = q.get("emp", "")
-    cache, colunas = {}, {k: [] for k, _ in kanban.ETAPAS}
-    for card in kanban.listar():
-        if card.get("arquivado") or not visivel(card.get("empresa"), card.get("usuario")):
+    emp_f, resp_f = q.get("emp", ""), q.get("resp", "")
+    todos_c = cartoes_visiveis(emp_f)
+    colunas = {k: [] for k, _ in kanban.ETAPAS}
+    for card, info in todos_c:
+        if resp_f and (card.get("responsavel") or "").strip() != resp_f and \
+                not any((t.get("resp") or "").strip() == resp_f and not t.get("feito") for t in card.get("tarefas") or []):
             continue
-        if emp_f and card.get("empresa") != emp_f:
-            continue
-        info = info_cartao(card, mon, cache)
         colunas[info["etapa"]].append((card, info))
     hoje = date.today().isoformat()
 
     def data_ord(ci):
         card, info = ci
-        m = info.get("monitor") or {}
-        return card.get("fim") or (para_data(m.get("disputa")).isoformat() if m.get("disputa") and para_data(m.get("disputa")) else "") or card.get("criado", "")
+        return card.get("abertura") or card.get("criado", "")
     html_cols = ""
     for k, nome in kanban.ETAPAS:
         lista = sorted(colunas[k], key=data_ord, reverse=k in ("resultado", "contrato", "enviada"))
@@ -2837,36 +2929,57 @@ def pg_licitacoes(q, aviso="", erro=False):
         cards = ""
         for card, info in lista:
             m = info.get("monitor") or {}
-            prazo = card.get("fim", "")[:10] or (m.get("disputa") or "")[:16]
-            urg = card.get("fim", "")[:10] and card["fim"][:10] <= (date.today() + timedelta(days=2)).isoformat() and k in ("interesse", "edital", "documentos", "proposta")
+            ab = info.get("abertura")
+            urg = ab and ab.date().isoformat() <= (date.today() + timedelta(days=2)).isoformat() and ab.date().isoformat() >= hoje \
+                and k in ("interesse", "edital", "documentos", "proposta")
             cls = info.get("resultado") or ("urgente" if urg else "")
             sit = (m.get("situacao") or "").title()
             res_txt = {"ganhou": "🏆 Ganhou", "perdeu": "Perdeu", "encerrado": "Encerrada"}.get(info.get("resultado"), "")
+            tar = card.get("tarefas") or []
+            feitas = sum(1 for t in tar if t.get("feito"))
+            atrasada = any(not t.get("feito") and t.get("prazo") and t["prazo"] < hoje for t in tar)
+            selos = " ".join(x for x in (
+                f'👤 {e(card["responsavel"])}' if card.get("responsavel") else "",
+                f'<span style="{"color:#c62828;font-weight:700" if atrasada else ""}">☑ {feitas}/{len(tar)}</span>' if tar else "",
+                f'💬 {len(card.get("comentarios") or [])}' if card.get("comentarios") else "",
+                f'📎 {len(card.get("anexos") or [])}' if card.get("anexos") else "") if x)
             cards += (f'<div class="kcard {cls}" draggable="true" data-id="{e(card["id"])}"><a href="/licitacoes/{e(card["id"])}">'
                       f'<div class="t">{e(card.get("processo") or card.get("titulo") or "Licitação")}</div>'
                       f'<div class="s">{e((card.get("orgao") or "")[:60])}</div><div class="s">{e(card.get("empresa", ""))}'
                       f'{" · " + e(sit) if sit else ""}{" · " + res_txt if res_txt else ""}</div>'
-                      + (f'<div class="s">⏰ {e(prazo)}</div>' if prazo else "") +
+                      + (f'<div class="s">⏰ {_dt_hora(ab)}</div>' if ab else "")
+                      + (f'<div class="s">{selos}</div>' if selos else "") +
                       f'<div class="pbar"><span style="width:{info["progresso"]}%"></span></div>'
                       f'<div class="prox">{info["progresso"]}% · <b>{"Próximo: " if info["proximo"] != "Tudo certo ✅" else ""}{e(info["proximo"])}</b></div></a></div>')
-        mais = (f'<a class="sub" href="/licitacoes?todos=1{"&emp=" + urllib.parse.quote(emp_f) if emp_f else ""}">ver todas ({cheia})</a>'
+        mais = (f'<a class="sub" href="/licitacoes?' + urllib.parse.urlencode({"todos": 1, "emp": emp_f, "resp": resp_f}) + f'">ver todas ({cheia})</a>'
                 if cheia > len(lista) else "")
         html_cols += (f'<div class="coluna" data-etapa="{k}"><h4><span>{nome}</span><span class="sub">{cheia}</span></h4>{cards}{mais}</div>')
     emps = nomes_empresas()
-    sel = ('<select class="campo" style="max-width:260px" onchange="location.href=\'/licitacoes?emp=\'+encodeURIComponent(this.value)">'
-           '<option value="">Todas as empresas</option>' +
-           "".join(f'<option value="{e(n)}" {"selected" if n == emp_f else ""}>{e(n)}</option>' for n in sorted(emps)) + "</select>")
+    equipe = nomes_equipe([c for c, _ in todos_c])
+
+    def url_f(**kw):
+        base = {"emp": emp_f, "resp": resp_f}
+        base.update(kw)
+        return "/licitacoes?" + urllib.parse.urlencode({k: v for k, v in base.items() if v})
+    sel = ('<select class="campo" style="max-width:240px" onchange="location.href=this.value">'
+           f'<option value="{e(url_f(emp=""))}">Todas as empresas</option>' +
+           "".join(f'<option value="{e(url_f(emp=n))}" {"selected" if n == emp_f else ""}>{e(n)}</option>' for n in sorted(emps)) + "</select>")
+    sel_resp = ('<select class="campo" style="max-width:220px" onchange="location.href=this.value">'
+                f'<option value="{e(url_f(resp=""))}">Toda a equipe</option>' +
+                "".join(f'<option value="{e(url_f(resp=n))}" {"selected" if n == resp_f else ""}>👤 {e(n)}</option>' for n in equipe) + "</select>") if equipe else ""
     sel_emp = "".join(f'<option value="{e(n)}">{e(n)}</option>' for n in sorted(emps))
-    corpo = f"""{ESTILO_KANBAN}<h2>🗂️ Minhas licitações</h2>
+    corpo = f"""{ESTILO_KANBAN}<div class="linha" style="justify-content:space-between;flex-wrap:wrap;gap:8px"><h2 style="margin:0">🗂️ Minhas licitações</h2>
+<a class="btn sec" href="/relatorio">📈 Relatório do mês</a></div>
 <p class="sub">Cada licitação anda sozinha pelas etapas conforme você avança (edital, documentos, proposta, envio, resultado, contrato).
-Abra um cartão para ver o <b>siga-me</b> – o passo a passo com o que falta. Dá para arrastar o cartão para outra coluna.</p>
+Abra um cartão para ver o <b>siga-me</b>, os <b>prazos legais</b> e a <b>equipe</b> (responsável, tarefas, comentários e anexos).
+Dá para arrastar o cartão para outra coluna.</p>
 {barra_conta()}
-<div class="acoes">{sel}<details style="display:inline-block"><summary class="btn sec" style="display:inline-block">➕ Nova licitação</summary>
+<div class="acoes">{sel}{sel_resp}<details style="display:inline-block"><summary class="btn sec" style="display:inline-block">➕ Nova licitação</summary>
 <form method="post" action="/licitacoes/novo" class="form" style="max-width:520px;margin-top:8px"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Empresa</label><select class="campo" name="emp">{sel_emp}</select>
 <label>Nº do processo / edital</label><input class="campo" name="processo" required placeholder="ex.: Pregão 45/2026">
 <label>Órgão</label><input class="campo" name="orgao" required>
-<label>Data da disputa / fim das propostas</label><input class="campo" type="datetime-local" name="fim">
+<label>Data da disputa / abertura</label><input class="campo" type="datetime-local" name="fim">
 <label>Link do edital <small>(opcional)</small></label><input class="campo" name="link" placeholder="https://…">
 <div class="acoes"><button>Criar</button></div></form></details>
 <span class="sub">Também dá para criar pelo botão “📌 Vou participar” nas Oportunidades.</span></div>
@@ -2884,10 +2997,95 @@ document.querySelectorAll('.coluna').forEach(col=>{{
     return pagina("Minhas licitações", corpo, "/licitacoes", aviso, erro)
 
 
+def _tam_txt(n):
+    return f"{n / 1024 / 1024:.1f} MB" if n > 1024 * 1024 else f"{max(1, n // 1024)} KB"
+
+
+def html_prazos_legais(card, info):
+    cid = card["id"]
+    agora = datetime.now()
+    linhas = ""
+    for tipo, titulo, quando, expl, na in info.get("legais") or []:
+        passou = quando < agora
+        st = ('<span class="tag parado">passou</span>' if passou else
+              f'<span class="tag {"erro" if quando - agora < timedelta(days=2) else "aviso" if quando - agora < timedelta(days=5) else "ok"}">'
+              f'{agenda.falta_txt(quando, agora)}</span>')
+        linhas += (f'<tr><td><b>{e(titulo)}</b><div class="sub">{e(expl)}</div></td><td><b>{_dt_hora(quando)}</b></td><td>{st}</td>'
+                   f'<td>{"🔔 na agenda" if na and not passou else "—"}</td></tr>')
+    if not linhas:
+        linhas = '<tr><td colspan="4" class="sub">Informe a data da abertura no cartão (ou deixe o monitor achar) para calcular os prazos.</td></tr>'
+    ck = lambda k, padrao=False: "checked" if card.get(k, padrao) else ""   # noqa: E731
+    return f"""<div class="form" style="max-width:none;margin-top:12px" id="prazos"><h3 style="margin-top:0">⚖️ Prazos legais</h3>
+<p class="sub">Calculados em <b>dias úteis</b> (sem fins de semana e feriados nacionais – feriado estadual/municipal não entra; confira sempre no edital).
+A <b>intenção de recurso</b> é manifestada <b>na própria sessão</b>, logo depois do resultado – fique de olho no chat.</p>
+<table><tr><th>Prazo</th><th>Até</th><th>Situação</th><th>Aviso</th></tr>{linhas}</table>
+<form method="post" action="/licitacoes/{cid}/legais" style="margin-top:10px"><input type="hidden" name="csrf" value="{CSRF}">
+<label class="ck"><input type="checkbox" name="avisar_legais" value="1" {ck("avisar_legais", True)}> Avisar no Telegram a impugnação e a abertura desta licitação</label>
+<div class="linha" style="gap:12px;flex-wrap:wrap;align-items:flex-end">
+<div><label>Data da ata / do resultado (habilitação)</label><input class="campo" type="date" name="resultado_em" value="{e(card.get("resultado_em", ""))}" style="max-width:200px"></div>
+<label class="ck"><input type="checkbox" name="recorrer" value="1" {ck("recorrer")}> Vamos recorrer – avisar o prazo das razões</label>
+<div><label>Outro licitante recorreu – data da divulgação</label><input class="campo" type="date" name="recurso_em" value="{e(card.get("recurso_em", ""))}" style="max-width:200px"></div>
+</div>
+<label class="ck"><input type="checkbox" name="me_restricao" value="1" {ck("me_restricao")}> Somos ME/EPP e a certidão fiscal tem restrição (prazo de regularização de 5 dias úteis se vencermos)</label>
+<div class="acoes"><button class="sec">Salvar prazos</button></div></form></div>"""
+
+
+def html_equipe(card):
+    cid = card["id"]
+    lg = login_atual()
+    hoje = date.today().isoformat()
+    equipe = nomes_equipe()
+    dl = '<datalist id="equipe">' + "".join(f'<option value="{e(n)}">' for n in equipe) + "</datalist>"
+    tarefas = ""
+    for t in sorted(card.get("tarefas") or [], key=lambda t: (t.get("feito", False), t.get("prazo") or "9999")):
+        u_t = f"/licitacoes/{cid}/tarefa/{t['id']}"
+        venc = t.get("prazo") and not t.get("feito") and t["prazo"] <= hoje
+        tarefas += (f'<li style="display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--borda)">'
+                    f'{botao(u_t + "/feito", "✅" if t.get("feito") else "⬜", "sec")}'
+                    f'<span style="flex:1;{"text-decoration:line-through;color:var(--sub)" if t.get("feito") else ""}">{e(t.get("texto", ""))}'
+                    f'<span class="sub"> · {("👤 " + e(t["resp"])) if t.get("resp") else "sem responsável"}'
+                    + (f' · <span style="{"color:#c62828;font-weight:700" if venc else ""}">até {_dt_br(t["prazo"])}</span>' if t.get("prazo") else "")
+                    + f'</span></span>{botao(u_t + "/excluir", "🗑", "sec")}</li>')
+    coments = ""
+    for c in card.get("comentarios") or []:
+        apagar = botao(f"/licitacoes/{cid}/comentario/{c['id']}/excluir", "🗑", "sec") if c.get("autor") == lg else ""
+        coments += (f'<div style="padding:8px 0;border-bottom:1px solid var(--borda)"><div class="sub"><b>{e(c.get("nome") or c.get("autor", ""))}</b> · '
+                    f'{e(c.get("quando", "").replace("T", " "))} {apagar}</div><div style="white-space:pre-wrap">{e(c.get("texto", ""))}</div></div>')
+    anexos = ""
+    for a in card.get("anexos") or []:
+        u_a = f"/licitacoes/{cid}/anexo/{a['id']}"
+        anexos += (f'<li style="display:flex;gap:8px;align-items:center;padding:4px 0"><a href="{u_a}" style="flex:1">📎 {e(a["nome"])}</a>'
+                   f'<span class="sub">{_tam_txt(a.get("tam", 0))} · {e(a.get("por", ""))}</span>{botao(u_a + "/excluir", "🗑", "sec", "Apagar este anexo?")}</li>')
+    return f"""<div class="form" style="max-width:none;margin-top:12px" id="equipe-bloco"><h3 style="margin-top:0">👥 Equipe</h3>{dl}
+<form method="post" action="/licitacoes/{cid}/responsavel" class="linha" style="gap:6px;align-items:center;flex-wrap:wrap"><input type="hidden" name="csrf" value="{CSRF}">
+<label style="margin:0">Responsável pela licitação</label><input class="campo" name="responsavel" list="equipe" value="{e(card.get("responsavel", ""))}" placeholder="nome da pessoa" style="max-width:260px;margin:0">
+<button class="sec">Salvar</button></form>
+<p class="sub" style="margin:6px 0 0">O resumo diário (⚙️ Configurações) lista, por pessoa, as tarefas que vencem no dia e as disputas de hoje e amanhã.
+Dica: ligue o bot num <b>grupo do Telegram</b> da equipe para todos receberem.</p>
+<div style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:22px"><div>
+<h4 style="margin:6px 0">☑ Tarefas</h4><ul style="list-style:none;padding:0;margin:0">{tarefas or '<li class="sub">Nenhuma tarefa ainda.</li>'}</ul>
+<form method="post" action="/licitacoes/{cid}/tarefa" class="linha" style="gap:6px;flex-wrap:wrap;margin-top:8px"><input type="hidden" name="csrf" value="{CSRF}">
+<input class="campo" name="texto" required placeholder="ex.: pedir atestado ao cliente X" style="flex:2;min-width:200px;margin:0">
+<input class="campo" name="resp" list="equipe" placeholder="quem" style="flex:1;min-width:120px;margin:0">
+<input class="campo" type="date" name="prazo" style="max-width:160px;margin:0"><button class="sec">➕ Adicionar</button></form>
+<h4 style="margin:16px 0 6px">📎 Anexos</h4><ul style="list-style:none;padding:0;margin:0">{anexos or '<li class="sub">Nenhum anexo.</li>'}</ul>
+<form method="post" action="/licitacoes/{cid}/anexo" enctype="multipart/form-data" class="linha" style="gap:6px;flex-wrap:wrap;margin-top:6px">
+<input type="hidden" name="csrf" value="{CSRF}"><input type="file" name="arquivo" multiple required><button class="sec">⬆ Enviar</button></form>
+<p class="sub">Até 20 MB por envio (edital, planilhas, atestados, prints…).</p>
+</div><div>
+<h4 style="margin:6px 0">💬 Comentários</h4>{coments or '<p class="sub">Nenhum comentário ainda.</p>'}
+<form method="post" action="/licitacoes/{cid}/comentar" style="margin-top:8px"><input type="hidden" name="csrf" value="{CSRF}">
+<input class="campo" name="nome" list="equipe" placeholder="seu nome (opcional)" value="{e(card.get("_ultimo_nome", ""))}" style="display:block;max-width:240px">
+<textarea class="campo" name="texto" rows="3" required style="display:block;width:100%;box-sizing:border-box" placeholder="Escreva um recado para a equipe…"></textarea>
+<div class="acoes"><button class="sec">Comentar</button></div></form>
+</div></div></div>"""
+
+
 def pg_licitacao(cid, aviso="", erro=False):
     card = kanban.ler(cid)
     mon = dados_monitor()
     info = info_cartao(card, mon, {})
+    processar_cartao(card, info)
     nome = card.get("empresa", "")
     prop = info.get("proposta")
     m = info.get("monitor") or {}
@@ -2907,7 +3105,8 @@ def pg_licitacao(cid, aviso="", erro=False):
                    f'<form method="post" action="/licitacoes/{cid}/edital"><input type="hidden" name="csrf" value="{CSRF}">'
                    f'<select class="campo" name="edital" style="max-width:360px;width:auto">{sel_ed}</select><button class="sec">Ligar</button></form>' + marcar("edital", "Já li o edital")),
         "dados": f'<a class="btn sec" href="/documentos?emp={q_emp}#dados">Preencher dados da empresa</a>',
-        "certidoes": f'<a class="btn sec" href="/certidoes?emp={q_emp}">Ver certidões</a>',
+        "certidoes": f'<a class="btn sec" href="/certidoes?emp={q_emp}">Ver certidões</a>' + (
+            f'<span class="tag erro">⚠️ vence(m) antes da abertura: {e(", ".join(info["cert_antes"]))}</span>' if info.get("cert_antes") else ""),
         "declaracoes": f'<a class="btn sec" href="/documentos?emp={q_emp}&proc={urllib.parse.quote(proc_par)}">Gerar declarações</a>' + marcar("declaracoes", "Já gerei"),
         "proposta": (f'<a class="btn sec" href="/propostas/{e(prop["id"])}">Abrir a proposta ({propostas.brl(info["total"])})</a>' if prop else
                      f'<form method="post" action="/propostas/nova"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="emp" value="{e(nome)}">'
@@ -2942,17 +3141,245 @@ def pg_licitacao(cid, aviso="", erro=False):
     corpo = f"""{ESTILO_KANBAN}<p><a href="/licitacoes">← Minhas licitações</a></p>
 <h2>{e(card.get("processo") or "Licitação")} <small class="sub">{e(card.get("orgao", ""))} · {e(nome)}</small></h2>
 <div class="form" style="max-width:none"><div class="linha" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
-<b>{etapa_nome} · {info["progresso"]}% pronto</b><span class="sub">{("⏰ " + e(card.get("fim", "")[:16].replace("T", " "))) if card.get("fim") else (("⏰ disputa " + e(m.get("disputa", ""))) if m.get("disputa") else "")}
+<b>{etapa_nome} · {info["progresso"]}% pronto</b><span class="sub">{("⏰ abertura " + _dt_hora(info["abertura"])) if info.get("abertura") else ""}{(" · 👤 " + e(card["responsavel"])) if card.get("responsavel") else ""}
 {(" · situação: " + e(m.get("situacao", ""))) if m.get("situacao") else ""}</span></div>
 <div class="pbar grande"><span style="width:{info["progresso"]}%"></span></div>
 <p style="margin:4px 0"><b>Próximo passo:</b> {e(info["proximo"])}</p></div>
 <div class="form" style="max-width:none;margin-top:12px"><h3 style="margin-top:0">🧭 Siga-me – passo a passo</h3><ol class="siga">{lista}</ol></div>
+{html_prazos_legais(card, info)}
+{html_equipe(card)}
 <div class="form" style="max-width:none;margin-top:12px"><h3 style="margin-top:0">Ajustes</h3>
 <form method="post" action="/licitacoes/{cid}/mover" class="linha" style="gap:6px"><input type="hidden" name="csrf" value="{CSRF}">
 <label style="margin:0">Mover para</label><select class="campo" name="etapa" style="max-width:240px"><option value="">automático</option>{opts}</select><button class="sec">Mover</button></form>
 <div class="acoes">{botao(f"/licitacoes/{cid}/arquivar", "Desarquivar" if card.get("arquivado") else "📦 Arquivar", "sec")}
 {botao(f"/licitacoes/{cid}/excluir", "🗑 Excluir cartão", "perigo", "Excluir este cartão? (a proposta, o contrato e o monitor não são apagados)") if card.get("origem") != "monitor" else ""}</div></div>"""
     return pagina("Licitação", corpo, "/licitacoes", aviso, erro)
+
+
+# ------------------------------------------------------------------ relatório mensal
+MESES_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+
+
+def _mes_valido(mes):
+    if re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", mes or ""):
+        return mes
+    return date.today().strftime("%Y-%m")
+
+
+def _mes_anterior(mes, n=1):
+    a, m = int(mes[:4]), int(mes[5:])
+    m -= n
+    while m < 1:
+        m += 12
+        a -= 1
+    return f"{a:04d}-{m:02d}"
+
+
+def nome_mes(mes):
+    return f"{MESES_PT[int(mes[5:]) - 1]} de {mes[:4]}"
+
+
+def dados_relatorio(mes, emp_f=""):
+    """Números do mês das empresas do usuário: licitações, resultado, valores ganhos, faturado e recebido."""
+    cards = cartoes_visiveis(emp_f)
+    meses = [_mes_anterior(mes, i) for i in range(5, -1, -1)]
+    hist = {m: {"disputadas": 0, "ganhas": 0, "recebido": 0.0} for m in meses}
+    lic, por_emp = [], {}
+
+    def pe(nome):
+        return por_emp.setdefault(nome, {"disputadas": 0, "ganhas": 0, "perdidas": 0, "valor_ganho": 0.0, "recebido": 0.0, "faturado": 0.0})
+    for card, info in cards:
+        ab = info.get("abertura")
+        if not ab:
+            continue
+        m_ab = ab.strftime("%Y-%m")
+        if m_ab in hist:
+            hist[m_ab]["disputadas"] += 1
+            hist[m_ab]["ganhas"] += info.get("resultado") == "ganhou"
+        if m_ab != mes:
+            continue
+        valor = 0.0
+        if info.get("resultado") == "ganhou":
+            valor = contratos.num((info.get("contrato") or {}).get("valor")) or float(info.get("total") or 0)
+        lic.append({"processo": card.get("processo", ""), "orgao": card.get("orgao", ""), "empresa": card.get("empresa", ""),
+                    "data": ab, "resultado": info.get("resultado") or "", "valor": valor, "progresso": info["progresso"],
+                    "resp": card.get("responsavel", "")})
+        p = pe(card.get("empresa", ""))
+        p["disputadas"] += 1
+        p["ganhas"] += info.get("resultado") == "ganhou"
+        p["perdidas"] += info.get("resultado") == "perdeu"
+        p["valor_ganho"] += valor
+    fat = rec = a_receber = atrasado = 0.0
+    n_atras = 0
+    novos_contr = []
+    for c in contratos.listar():
+        if not visivel(c.get("empresa"), c.get("usuario")) or (emp_f and c.get("empresa") != emp_f):
+            continue
+        if (c.get("criado") or "")[:7] == mes:
+            novos_contr.append(c)
+        for n in c.get("notas") or []:
+            v = contratos.num(n.get("valor"))
+            if (n.get("emissao") or "")[:7] == mes:
+                fat += v
+                pe(c.get("empresa", ""))["faturado"] += v
+            if n.get("pago_em"):
+                vp = contratos.num(n.get("valor_pago")) or v
+                if n["pago_em"][:7] == mes:
+                    rec += vp
+                    pe(c.get("empresa", ""))["recebido"] += vp
+                if n["pago_em"][:7] in hist:
+                    hist[n["pago_em"][:7]]["recebido"] += vp
+        t = contratos.totais(c)
+        if c.get("status") == "ativo":
+            a_receber += t["a_receber"]
+            atrasado += t["atrasado"]
+            n_atras += t["n_atrasadas"]
+    props = [p for p in propostas.listar() if visivel(p.get("empresa"), p.get("usuario")) and (not emp_f or p.get("empresa") == emp_f)
+             and (p.get("criado") or "")[:7] == mes]
+    prox = _mes_anterior(mes, -1)
+    certs = []
+    for c in agenda.certidoes()["itens"].values():
+        if not pode_empresa(c.get("empresa")) or (emp_f and c.get("empresa") != emp_f):
+            continue
+        if (c.get("validade") or "")[:7] in (mes, prox) and c["validade"] >= date.today().isoformat():
+            certs.append((c["validade"], agenda.NOME_CERT.get(c.get("tipo"), "Certidão"), c.get("empresa", "")))
+    ganhas = sum(1 for x in lic if x["resultado"] == "ganhou")
+    perdidas = sum(1 for x in lic if x["resultado"] == "perdeu")
+    return {"mes": mes, "emp": emp_f, "lic": sorted(lic, key=lambda x: x["data"]), "ganhas": ganhas, "perdidas": perdidas,
+            "encerradas": sum(1 for x in lic if x["resultado"] == "encerrado"), "andamento": sum(1 for x in lic if not x["resultado"]),
+            "taxa": (100 * ganhas / (ganhas + perdidas)) if ganhas + perdidas else None,
+            "valor_ganho": sum(x["valor"] for x in lic), "faturado": fat, "recebido": rec, "a_receber": a_receber,
+            "atrasado": atrasado, "n_atrasadas": n_atras, "novos_contratos": novos_contr, "propostas": len(props),
+            "certidoes": sorted(certs), "hist": [(m, hist[m]) for m in meses], "por_emp": por_emp}
+
+
+CSS_RELATORIO = """.rel{background:#fff;color:#1d2b24;font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:0 auto;padding:28px 32px;
+border-radius:12px;border:1px solid #dfe5e1}.rel h1{font-size:22px;margin:0}.rel h2{font-size:15px;margin:22px 0 8px;color:#1f5c3f;
+border-bottom:2px solid #e3ece6;padding-bottom:4px}.rel .sub{color:#5d6b63;font-size:12px}
+.rel .kp{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}.rel .kp div{background:#f4f8f5;border-radius:10px;padding:10px 12px}
+.rel .kp b{display:block;font-size:20px;margin-top:2px}.rel .kp span{font-size:11px;color:#5d6b63;text-transform:uppercase;letter-spacing:.3px}
+.rel table{width:100%;border-collapse:collapse;font-size:12px}.rel th{text-align:left;background:#f4f8f5;padding:6px;font-weight:700}
+.rel td{padding:6px;border-bottom:1px solid #edf1ee;vertical-align:top}.rel .num{text-align:right;white-space:nowrap}
+.rel .graf{display:grid;grid-template-columns:1fr 1fr;gap:18px}.rel .barras{display:flex;align-items:flex-end;gap:8px;height:120px;
+border-bottom:1px solid #c9d4cd;padding:0 4px}.rel .barras div{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
+.rel .barras i{display:block;width:70%;background:#2f8a5b;border-radius:4px 4px 0 0;min-height:2px}.rel .barras small{font-size:10px;color:#1d2b24;margin-bottom:2px}
+.rel .meses{display:flex;gap:8px;padding:3px 4px 0}.rel .meses span{flex:1;text-align:center;font-size:10px;color:#5d6b63}
+.rel ul{font-size:13px;margin:0;padding-left:20px}.rel li{margin:3px 0}.rel .ok{color:#2e7d32;font-weight:700}.rel .ruim{color:#c62828;font-weight:700}
+@media(max-width:700px){.rel{padding:16px}.rel .kp{grid-template-columns:1fr 1fr}.rel .graf{grid-template-columns:1fr}}"""
+
+
+def _barras(titulo, valores, fmt):
+    mx = max([v for _, v in valores] + [0]) or 1
+    cols = "".join(f'<div title="{nome_mes(m)}: {fmt(v)}"><small>{fmt(v) if v else ""}</small><i style="height:{max(2, int(100 * v / mx))}%"></i></div>'
+                   for m, v in valores)
+    meses = "".join(f'<span>{MESES_PT[int(m[5:]) - 1][:3]}</span>' for m, _ in valores)
+    return f'<div><div class="sub" style="font-weight:700;margin-bottom:6px">{titulo}</div><div class="barras">{cols}</div><div class="meses">{meses}</div></div>'
+
+
+def html_relatorio(d):
+    brl = contratos.brl
+    taxa = "—" if d["taxa"] is None else f'{d["taxa"]:.0f}%'
+    res_nome = {"ganhou": '<span class="ok">🏆 Ganhou</span>', "perdeu": "Perdeu", "encerrado": "Encerrada", "": "Em andamento"}
+    linhas = "".join(
+        f'<tr><td>{x["data"]:%d/%m}</td><td><b>{e(x["processo"])}</b><div class="sub">{e(x["orgao"][:70])}</div></td><td>{e(x["empresa"])}</td>'
+        f'<td>{res_nome.get(x["resultado"], "")}</td><td class="num">{brl(x["valor"]) if x["valor"] else "—"}</td></tr>'
+        for x in d["lic"]) or '<tr><td colspan="5" class="sub">Nenhuma licitação com disputa neste mês.</td></tr>'
+    emp_l = "".join(
+        f'<tr><td><b>{e(n)}</b></td><td class="num">{p["disputadas"]}</td><td class="num">{p["ganhas"]}</td><td class="num">{p["perdidas"]}</td>'
+        f'<td class="num">{brl(p["valor_ganho"])}</td><td class="num">{brl(p["faturado"])}</td><td class="num">{brl(p["recebido"])}</td></tr>'
+        for n, p in sorted(d["por_emp"].items()))
+    contr = "".join(f'<li>{e(c.get("processo", ""))} – {e((c.get("orgao") or "")[:60])} <span class="sub">({e(c.get("empresa", ""))})</span>'
+                    f' · {brl(contratos.num(c.get("valor")))}</li>' for c in d["novos_contratos"])
+    certs = "".join(f'<li>{_dt_br(v)} – {e(n)} <span class="sub">({e(emp)})</span></li>' for v, n, emp in d["certidoes"][:15])
+    graf = (_barras("Licitações disputadas", [(m, h["disputadas"]) for m, h in d["hist"]], lambda v: str(int(v)))
+            + _barras("Recebido", [(m, h["recebido"]) for m, h in d["hist"]], lambda v: brl(v).replace("R$ ", "")))
+    return f"""<div class="rel"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+<div><h1>Relatório de licitações</h1><div class="sub">{nome_mes(d["mes"]).capitalize()} · {e(d["emp"] or "todas as empresas")}</div></div>
+<div class="sub">Gerado em {datetime.now():%d/%m/%Y %H:%M} · Licitatudo</div></div>
+<div class="kp"><div><span>Disputadas</span><b>{len(d["lic"])}</b></div><div><span>Ganhas</span><b>{d["ganhas"]}</b></div>
+<div><span>Taxa de vitória</span><b>{taxa}</b></div><div><span>Valor ganho</span><b>{brl(d["valor_ganho"])}</b></div>
+<div><span>Faturado no mês</span><b>{brl(d["faturado"])}</b></div><div><span>Recebido no mês</span><b>{brl(d["recebido"])}</b></div>
+<div><span>A receber (total)</span><b>{brl(d["a_receber"])}</b></div><div><span>Em atraso</span><b class="{"ruim" if d["atrasado"] else ""}">{brl(d["atrasado"])}</b></div></div>
+<p class="sub" style="margin-top:8px">{d["perdidas"]} perdida(s) · {d["encerradas"]} encerrada(s) sem vencedor · {d["andamento"]} ainda sem resultado ·
+{d["propostas"]} proposta(s) montada(s) no mês{f' · <b class="ruim">{d["n_atrasadas"]} nota(s) com pagamento atrasado</b>' if d["n_atrasadas"] else ""}.
+A taxa de vitória considera só as licitações com resultado (ganhas ÷ ganhas + perdidas).</p>
+<h2>Últimos 6 meses</h2><div class="graf">{graf}</div>
+<h2>Licitações do mês</h2><table><tr><th>Data</th><th>Processo / órgão</th><th>Empresa</th><th>Resultado</th><th class="num">Valor ganho</th></tr>{linhas}</table>
+{f'<h2>Por empresa</h2><table><tr><th>Empresa</th><th class="num">Disputadas</th><th class="num">Ganhas</th><th class="num">Perdidas</th><th class="num">Valor ganho</th><th class="num">Faturado</th><th class="num">Recebido</th></tr>{emp_l}</table>' if len(d["por_emp"]) > 1 else ""}
+{f'<h2>Contratos novos</h2><ul>{contr}</ul>' if contr else ""}
+{f'<h2>Certidões que vencem até o fim do próximo mês</h2><ul>{certs}</ul>' if certs else ""}
+<p class="sub" style="margin-top:20px">Valores: contrato cadastrado ou, sem contrato, o total da proposta. Recebido/faturado: notas fiscais lançadas em Contratos.</p></div>"""
+
+
+def pdf_relatorio(d):
+    html_doc = (f'<!doctype html><html><head><meta charset="utf-8"><style>@page{{size:A4;margin:12mm}}body{{margin:0}}'
+                f'{CSS_RELATORIO}.rel{{border:0;padding:0;max-width:none}}</style></head><body>{html_relatorio(d)}</body></html>')
+    return pacote.pdf_do_html(html_doc, "Relatório de licitações – " + nome_mes(d["mes"]))
+
+
+def pg_relatorio(q, aviso="", erro=False):
+    mes = _mes_valido(q.get("mes", ""))
+    emps = sorted(nomes_empresas())
+    emp_f = q.get("emp", "") if q.get("emp", "") in emps else ""
+    d = dados_relatorio(mes, emp_f)
+    opc_m = "".join(f'<option value="{m}" {"selected" if m == mes else ""}>{nome_mes(m)}</option>'
+                    for m in [_mes_anterior(date.today().strftime("%Y-%m"), i) for i in range(0, 13)])
+    opc_e = '<option value="">Todas as empresas</option>' + "".join(f'<option value="{e(n)}" {"selected" if n == emp_f else ""}>{e(n)}</option>' for n in emps)
+    qs = urllib.parse.urlencode({"mes": mes, "emp": emp_f})
+    uc = usuarios.cfg(login_atual())
+    corpo = f"""<style>{CSS_RELATORIO}</style><h2>📈 Relatório do mês</h2>
+<form method="get" action="/relatorio" class="acoes" style="align-items:center"><select class="campo" name="mes" style="max-width:220px">{opc_m}</select>
+<select class="campo" name="emp" style="max-width:260px">{opc_e}</select><button class="sec">Ver</button>
+<a class="btn" href="/relatorio/pdf?{qs}">⬇ Baixar PDF</a>
+<button class="sec" formmethod="post" formaction="/relatorio/enviar?{qs}" name="csrf" value="{CSRF}" {"" if uc.get("tg_chat") else "disabled title='Conecte o seu Telegram em ⚙️'"}>📨 Mandar no meu Telegram</button></form>
+<p class="sub">No dia 1º de cada mês o PDF do mês anterior chega sozinho no seu Telegram (dá para desligar em ⚙️ → Resumo diário).</p>
+{html_relatorio(d)}"""
+    return pagina("Relatório", corpo, "/licitacoes", aviso, erro)
+
+
+def enviar_relatorio_tg(login, mes, emp_f=""):
+    """Gera o PDF e manda no Telegram do usuário (usa o contexto do usuário já definido em _REQ)."""
+    uc = usuarios.cfg(login)
+    tok = uc.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
+    if not (tok and uc.get("tg_chat")):
+        return False, "Conecte o seu bot do Telegram em ⚙️ primeiro."
+    d = dados_relatorio(mes, emp_f)
+    pdf = pdf_relatorio(d)
+    with tempfile.TemporaryDirectory() as tmp:
+        arq = Path(tmp) / f"relatorio-licitacoes-{mes}.pdf"
+        arq.write_bytes(pdf)
+        taxa = "—" if d["taxa"] is None else f'{d["taxa"]:.0f}%'
+        backup.enviar_telegram(tok, uc["tg_chat"], arq,
+                               f"📈 Relatório de {nome_mes(mes)}: {len(d['lic'])} disputada(s), {d['ganhas']} ganha(s) ({taxa}), "
+                               f"recebido {contratos.brl(d['recebido'])}.")
+    return True, ""
+
+
+def relatorio_mensal():
+    """No dia 1º (a partir das 8h) manda o relatório do mês anterior para cada usuário que tem Telegram."""
+    time.sleep(300)
+    while True:
+        try:
+            agora = datetime.now()
+            if agora.day <= 3 and agora.hour >= 8:
+                mes = _mes_anterior(agora.strftime("%Y-%m"))
+                for lg in list(usuarios.carregar()):
+                    u = usuarios.obter(lg)
+                    c = (u or {}).get("cfg") or {}
+                    if not u or not u.get("ativo", True) or u["papel"] == "admin" or not c.get("tg_chat") \
+                            or not c.get("relatorio_mensal", True) or c.get("relatorio_ultimo") == mes:
+                        continue
+                    _REQ.user, _REQ.perm, _REQ.admin = u, None, False
+                    try:
+                        if nomes_empresas():
+                            enviar_relatorio_tg(lg, mes)
+                        usuarios.salvar_cfg(lg, {"relatorio_ultimo": mes})
+                    except Exception as ex:  # noqa: BLE001
+                        print("Relatório mensal de", lg, ex, flush=True)
+                _REQ.user = None
+        except Exception as ex:  # noqa: BLE001
+            print("Erro no relatório mensal:", ex, flush=True)
+        time.sleep(1800)
 
 
 def abas_doc(atual):
@@ -3215,6 +3642,56 @@ def _dt_br(iso):
         return "—"
 
 
+def uf_cidade(nome):
+    cid_uf = (documentos.dados(nome).get("cidade") or "").strip()
+    cidade, _, uf = cid_uf.rpartition("/")
+    if not cidade:
+        cidade, uf = cid_uf, ""
+    return uf.strip().upper()[:2], cidade.strip()
+
+
+def link_cert(tipo, nome):
+    uf, cidade = uf_cidade(nome)
+    return agenda.link_emissao(tipo, uf, cidade)
+
+
+def html_renovar(emps, dados, hoje):
+    """O que renovar agora (vencida, vence em até 15 dias ou essencial que falta), com o link de emissão e o CNPJ à mão."""
+    linhas = []
+    for nome in emps:
+        cnpj = documentos.dados(nome).get("cnpj", "")
+        minhas = [c for c in dados.values() if c.get("empresa") == nome]
+        validas = {c.get("tipo") for c in minhas if agenda.status_cert(c, hoje)[0] in ("ok", "vence", "sem")}
+        por_tipo = {}
+        for c in minhas:
+            st, dias = agenda.status_cert(c, hoje)
+            if c.get("tipo") in validas and st == "vencida":
+                continue   # já tem outra válida do mesmo tipo
+            if st in ("vencida", "vence"):
+                por_tipo[c.get("tipo")] = (dias if dias is not None else 0, st)
+        for k in ESSENCIAIS:
+            if k not in validas and k not in por_tipo:
+                por_tipo[k] = (-9999, "falta")
+        for tipo, (dias, st) in por_tipo.items():
+            linhas.append((dias, nome, tipo, st, cnpj))
+    if not linhas:
+        return ('<div class="form" style="max-width:none;margin:10px 0"><b>🔁 Renovação</b> <span class="tag ok">✅ tudo em dia</span> '
+                '<span class="sub">Nenhuma certidão essencial vencida, faltando ou vencendo nos próximos 15 dias.</span></div>')
+    itens = ""
+    for dias, nome, tipo, st, cnpj in sorted(linhas)[:40]:
+        url, rot = link_cert(tipo, nome)
+        sit = {"falta": '<span class="tag erro">não cadastrada</span>', "vencida": '<span class="tag erro">vencida</span>'}.get(
+            st, f'<span class="tag aviso">vence {"hoje" if dias == 0 else f"em {dias} dia(s)"}</span>')
+        itens += (f'<tr><td><b>{e(agenda.NOME_CERT.get(tipo, tipo or ""))}</b><div class="sub">{e(nome)}</div></td><td>{sit}</td><td>'
+                  + (f'<a class="btn sec" href="{e(url)}" target="_blank" rel="noopener">🔗 {e(rot)}</a> ' if url else '<span class="sub">informe a cidade/UF nos dados da empresa</span> ')
+                  + (f'<button type="button" class="sec" onclick="navigator.clipboard.writeText(\'{e(re.sub(r"[^0-9]", "", cnpj))}\');this.textContent=\'✅ CNPJ copiado\'">📋 Copiar CNPJ</button>' if cnpj else "")
+                  + '</td></tr>')
+    return f"""<div class="form" style="max-width:none;margin:10px 0"><h3 style="margin-top:0">🔁 Renovar agora ({len(linhas)})</h3>
+<p class="sub">1) Abra o site oficial e cole o CNPJ · 2) emita e baixe o PDF · 3) envie em <b>“Enviar várias de uma vez”</b> abaixo – o sistema descobre o tipo,
+lê a validade e troca a antiga sozinho. Os sites dos órgãos têm captcha: a emissão é feita por você.</p>
+<table><tr><th>Certidão</th><th>Situação</th><th>Emitir</th></tr>{itens}</table></div>"""
+
+
 def pg_certidoes(q, aviso=""):
     emps = sorted(nomes_empresas())
     dados = agenda.certidoes()["itens"]
@@ -3232,7 +3709,8 @@ def pg_certidoes(q, aviso=""):
             cor, rot = COR_CERT[st]
             prazo = "" if dias is None else f"{-dias} dia(s) atrás" if dias < 0 else "hoje" if dias == 0 else f"{dias} dia(s)"
             arq = f'<a href="/certidoes/{cid}/arquivo" target="_blank">📄 PDF</a>' if agenda.arquivo_cert(cid) else '<span class="sub">sem PDF</span>'
-            emitir = f' · <a href="{e(links[c.get("tipo")])}" target="_blank" rel="noopener">emitir nova</a>' if c.get("tipo") in links else ""
+            u_em, _ = link_cert(c.get("tipo"), nome)
+            emitir = f' · <a href="{e(u_em)}" target="_blank" rel="noopener">emitir nova</a>' if u_em else ""
             editar = (f'<details><summary class="sub" style="cursor:pointer">✎ editar / trocar PDF</summary>'
                       f'<form method="post" action="/certidoes/salvar" enctype="multipart/form-data" class="linha" style="gap:6px;flex-wrap:wrap;margin-top:6px">'
                       f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="cid" value="{cid}"><input type="hidden" name="empresa" value="{e(nome)}">'
@@ -3266,10 +3744,17 @@ def pg_certidoes(q, aviso=""):
                "".join(f'<option value="{e(n)}" {"selected" if n == emp_f else ""}>{e(n)}</option>' for n in emps) + "</select>")
     corpo = f"""<h2>📄 Documentos</h2>{abas_doc("cer")}
 <p class="sub">Guarde as certidões de cada empresa com a validade. O sistema avisa no Telegram 15, 7, 3 e 1 dia antes de vencer
-e quando vence. Ao enviar o PDF, ele tenta ler sozinho o tipo, o número e as datas – confira depois de salvar.
+e quando vence (com o link para emitir). Ao enviar o PDF, ele lê sozinho o tipo, o número e as datas – confira depois de salvar.
 As certidões são emitidas por você nos sites oficiais (eles têm captcha).</p>
 <div class="acoes">{sel_emp}</div>
-<details class="form" style="max-width:none;margin:10px 0" open><summary><b>➕ Adicionar certidão</b></summary>
+{html_renovar([n for n in emps if not emp_f or n == emp_f], dados, hoje)}
+<details class="form" style="max-width:none;margin:10px 0" open><summary><b>⬆ Enviar várias de uma vez</b> <small class="sub">(renovação rápida)</small></summary>
+<form method="post" action="/certidoes/lote" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{CSRF}">
+<div class="linha" style="gap:8px;flex-wrap:wrap;align-items:flex-end"><div style="min-width:220px"><label>Empresa</label><select class="campo" name="empresa">{opc_emp}</select></div>
+<div style="flex:1;min-width:220px"><label>PDFs das certidões <small>(pode selecionar vários)</small></label><input type="file" name="arquivo" accept=".pdf" multiple required></div>
+<button>Enviar e ler</button></div>
+<p class="sub">Para cada PDF: descobre o tipo, o número e a validade (se o PDF não trouxer a validade, usa a usual: CND federal e CNDT 180 dias, FGTS 30 dias – marcada como estimada) e substitui a certidão antiga do mesmo tipo.</p></form></details>
+<details class="form" style="max-width:none;margin:10px 0"><summary><b>➕ Adicionar uma certidão (com mais detalhes)</b></summary>
 <form method="post" action="/certidoes/salvar" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{CSRF}">
 <div class="linha" style="gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label>Empresa</label><select class="campo" name="empresa">{opc_emp}</select></div>
 <div style="flex:1;min-width:220px"><label>PDF da certidão <small>(lê as datas sozinho)</small></label><input type="file" name="arquivo" accept=".pdf"></div></div>
@@ -3994,6 +4479,7 @@ No celular, este link já abre o app: <a href="ntfy://ntfy.sh/{e(topico)}">ntfy:
 <p class="sub">Um resumo por dia no seu Telegram, só com as suas empresas: prazos, certidões vencendo e o que mudou nos processos.</p>
 <form method="post" action="/preferencias/resumo"><input type="hidden" name="csrf" value="{CSRF}">
 <label class="ck"><input type="checkbox" name="ativo" value="1" {"checked" if uc.get("resumo_ativo") else ""}> Receber o resumo diário</label>
+<label class="ck"><input type="checkbox" name="relatorio" value="1" {"checked" if uc.get("relatorio_mensal", True) else ""}> Receber no dia 1º o <a href="/relatorio">relatório do mês</a> em PDF</label>
 <label>Hora <small>(0 a 23)</small></label><input class="campo" type="number" min="0" max="23" name="hora" value="{e(str(uc.get("resumo_hora", 7)))}" style="max-width:120px">
 <div class="acoes"><button>Salvar</button><button class="sec" name="acao" value="agora">📨 Enviar agora</button></div></form></div>
 <div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">🤖 Inteligência artificial</h3>
@@ -5708,6 +6194,24 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_chances(q))
             if p == "/licitacoes":
                 return self.enviar(pg_licitacoes(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/relatorio":
+                return self.enviar(pg_relatorio(q, {"enviado": "📨 Relatório enviado no seu Telegram."}.get(q.get("ok", ""), "")))
+            if p == "/relatorio/pdf":
+                mes = _mes_valido(q.get("mes", ""))
+                emp_r = q.get("emp", "") if q.get("emp", "") in nomes_empresas() else ""
+                try:
+                    pdf = pdf_relatorio(dados_relatorio(mes, emp_r))
+                except Exception as ex:  # noqa: BLE001
+                    return self.enviar(pg_relatorio(q, f"Não consegui gerar o PDF: {e(str(ex)[:200])}", True))
+                return self.baixar(pdf, f"relatorio-licitacoes-{mes}.pdf", "application/pdf")
+            m = re.fullmatch(r"/licitacoes/([0-9a-f]{12})/anexo/([0-9a-f]{8})", p)
+            if m:
+                arq_a, nome_a = kanban.arquivo_anexo(*m.groups())
+                if not arq_a:
+                    return self.enviar(pagina("Anexo", "<h2>Anexo não encontrado</h2>", "/licitacoes"), 404)
+                nome_h = re.sub(r"[^A-Za-z0-9._ -]", "_", unicodedata.normalize("NFKD", nome_a).encode("ascii", "ignore").decode()) or "anexo"
+                tipo_a = mimetypes.guess_type(nome_a)[0] or "application/octet-stream"
+                return self.baixar(arq_a.read_bytes(), nome_h, tipo_a, na_tela=tipo_a in ("application/pdf", "image/png", "image/jpeg"))
             m = re.fullmatch(r"/licitacoes/([0-9a-f]{12})", p)
             if m and kanban.ler(m.group(1)):
                 return self.enviar(pg_licitacao(m.group(1), AVISOS.get(q.get("ok", ""), "")))
@@ -5861,6 +6365,43 @@ class Painel(BaseHTTPRequestHandler):
                                           '<p><a class="btn sec" href="/processos">Voltar</a></p>', "/processos"))
             return self.redirecionar("/classificacao?" + urllib.parse.urlencode(
                 {"empresa": eid, "processo": chave[0], "promotor": chave[1]}))
+        if self.path.rstrip("/") == "/certidoes/lote":
+            if tam > 40 * 1024 * 1024:
+                return self.enviar(pg_certidoes({}, "Arquivos grandes demais (máx. 40 MB por envio)."), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido("/certidoes/salvar", campos):
+                return
+            nome = campos.get("empresa", "")
+            if nome not in nomes_empresas():
+                return self.redirecionar("/certidoes")
+            relato = []
+            for n_a, d_a in [(n, d) for n, d in arqs if d][:20]:
+                if d_a[:4] != b"%PDF":
+                    relato.append(f"❌ {e(n_a)}: não é PDF")
+                    continue
+                lido = agenda.ler_pdf_certidao(d_a)
+                tipo = lido.get("tipo") or "outra"
+                validade, est = lido.get("validade", ""), False
+                if not validade:
+                    validade, est = agenda.validade_estimada(tipo, lido.get("emissao", "")), True
+                existentes = sorted([(c.get("validade") or "", k) for k, c in agenda.certidoes()["itens"].items()
+                                     if c.get("empresa") == nome and c.get("tipo") == tipo], reverse=True)
+                cid_a = ""
+                if tipo not in ("outra", "atestado", "contrato") and existentes and (not validade or validade >= existentes[0][0]):
+                    cid_a = existentes[0][1]
+                dados_c = {"empresa": nome, "tipo": tipo, "numero": lido.get("numero", ""), "emissao": lido.get("emissao", ""),
+                           "validade": validade, "obs": "validade estimada – confira no PDF" if (est and validade) else ""}
+                agenda.salvar_cert(cid_a, dados_c, (n_a, d_a))
+                rot = e(agenda.NOME_CERT.get(tipo, tipo))
+                if not validade:
+                    relato.append(f"⚠️ {e(n_a)}: salvo como <b>{rot}</b>, mas sem validade – clique em “editar” e informe")
+                else:
+                    relato.append(f"✅ {e(n_a)}: <b>{rot}</b> válida até {_dt_br(validade)}{' (estimada)' if est else ''}"
+                                  + (" – substituiu a antiga" if cid_a else ""))
+            self.auditar("enviou certidões em lote", f"{nome} {len(relato)} arquivo(s)")
+            return self.enviar(pg_certidoes({"emp": nome}, "<br>".join(relato) or "Nenhum PDF recebido."))
         if self.path.rstrip("/") == "/certidoes/salvar":
             if tam > 15 * 1024 * 1024:
                 return self.enviar(pg_certidoes({}, "Arquivo grande demais (máx. 15 MB)."), 413)
@@ -5881,6 +6422,10 @@ class Painel(BaseHTTPRequestHandler):
                        "validade": campos.get("validade") or lido.get("validade", "")}
             if campos.get("obs") or not cid:
                 dados_c["obs"] = campos.get("obs", "")
+            if not dados_c["validade"] and arq:
+                dados_c["validade"] = agenda.validade_estimada(dados_c["tipo"], dados_c["emissao"])
+                if dados_c["validade"]:
+                    dados_c["obs"] = ((dados_c.get("obs") or "") + " (validade estimada – confira no PDF)").strip()
             agenda.salvar_cert(cid, dados_c, arq)
             ok = "cert_sem_validade" if not dados_c["validade"] else "cert_lida" if lido else "cert_ok"
             return self.redirecionar("/certidoes?" + urllib.parse.urlencode({"emp": campos["empresa"], "ok": ok}))
@@ -5961,6 +6506,22 @@ class Painel(BaseHTTPRequestHandler):
                                              f"Não consegui montar o pacote: {e(str(ex)[:250])}", True))
             self.auditar("gerou pacote de habilitação", f"{campos.get('emp', '')} {arquivo} {'; '.join(avisos)[:120]}")
             return self.baixar(dados, arquivo, "application/pdf")
+        m_anx = re.fullmatch(r"/licitacoes/([0-9a-f]{12})/anexo", self.path.rstrip("/"))
+        if m_anx:
+            if tam > 21 * 1024 * 1024:
+                return self.enviar(pagina("Erro", "<h2>Arquivos grandes demais (máx. 20 MB por envio).</h2>", "/licitacoes"), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido(self.path.rstrip("/"), campos):
+                return
+            cid = m_anx.group(1)
+            if not kanban.ler(cid):
+                return self.redirecionar("/licitacoes")
+            for n_a, d_a in [(n, d) for n, d in arqs if d][:10]:
+                kanban.salvar_anexo(cid, n_a, d_a, login_atual())
+            self.auditar("anexou arquivo em licitação", f"{cid} {len(arqs)} arquivo(s)")
+            return self.redirecionar(f"/licitacoes/{cid}?ok=feito#equipe-bloco")
         m_conf = re.fullmatch(r"/propostas/([0-9a-f]{12})/conferir", self.path.rstrip("/"))
         if m_conf:
             if tam > 40 * 1024 * 1024:
@@ -6311,6 +6872,18 @@ class Painel(BaseHTTPRequestHandler):
                 pid = propostas.nova(nome, f.get("processo", "").strip()[:80] or proc, f.get("orgao", "").strip()[:200] or prom,
                                      f.get("modalidade", "").strip()[:80], login_atual())
                 return self.redirecionar(f"/propostas/{pid}")
+            if p == "/relatorio/enviar":
+                q_r = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
+                q_r.update({k: f[k] for k in ("mes", "emp") if k in f})
+                mes = _mes_valido(q_r.get("mes", ""))
+                emp_r = q_r.get("emp", "") if q_r.get("emp", "") in nomes_empresas() else ""
+                try:
+                    ok_r, msg_r = enviar_relatorio_tg(login_atual(), mes, emp_r)
+                except Exception as ex:  # noqa: BLE001
+                    ok_r, msg_r = False, f"Não consegui enviar: {str(ex)[:200]}"
+                if not ok_r:
+                    return self.enviar(pg_relatorio(q_r, e(msg_r), True))
+                return self.redirecionar("/relatorio?" + urllib.parse.urlencode({"mes": mes, "emp": emp_r, "ok": "enviado"}))
             if p == "/licitacoes/novo":
                 nome = f.get("emp", "")
                 if nome not in nomes_empresas() or not f.get("processo", "").strip():
@@ -6319,12 +6892,58 @@ class Painel(BaseHTTPRequestHandler):
                                       usuario=login_atual(), link=f.get("link", "").strip()[:500] if f.get("link", "").startswith("http") else "",
                                       fim=f.get("fim", "")[:16])
                 return self.redirecionar(f"/licitacoes/{cid}")
+            m = re.fullmatch(r"/licitacoes/([0-9a-f]{12})/(responsavel|tarefa|comentar|legais)", p)
+            if m and kanban.ler(m.group(1)):
+                cid, acao = m.groups()
+                agora_txt = datetime.now().strftime("%Y-%m-%dT%H:%M")
+
+                def _data_ok(x):
+                    return x if re.fullmatch(r"\d{4}-\d{2}-\d{2}", x or "") else ""
+                if acao == "responsavel":
+                    kanban.atualizar(cid, lambda c: c.__setitem__("responsavel", f.get("responsavel", "").strip()[:60]))
+                elif acao == "tarefa" and f.get("texto", "").strip():
+                    t = {"id": kanban.novo_id(), "texto": f["texto"].strip()[:300], "resp": f.get("resp", "").strip()[:60],
+                         "prazo": _data_ok(f.get("prazo", "")), "feito": False, "por": login_atual(), "criado": agora_txt}
+                    kanban.atualizar(cid, lambda c: c.setdefault("tarefas", []).append(t))
+                elif acao == "comentar" and f.get("texto", "").strip():
+                    cm = {"id": kanban.novo_id(), "autor": login_atual(), "nome": f.get("nome", "").strip()[:60], "texto": f["texto"].strip()[:3000],
+                          "quando": agora_txt}
+                    kanban.atualizar(cid, lambda c: (c.setdefault("comentarios", []).append(cm),
+                                                     c.__setitem__("_ultimo_nome", cm["nome"])))
+                elif acao == "legais":
+                    novos = {"avisar_legais": f.get("avisar_legais") == "1", "recorrer": f.get("recorrer") == "1",
+                             "me_restricao": f.get("me_restricao") == "1", "resultado_em": _data_ok(f.get("resultado_em", "")),
+                             "recurso_em": _data_ok(f.get("recurso_em", "")), "legais_sig": ""}
+                    kanban.atualizar(cid, lambda c: c.update(novos))
+                anc = {"legais": "#prazos"}.get(acao, "#equipe-bloco")
+                return self.redirecionar(f"/licitacoes/{cid}?ok=feito{anc}")
+            m = re.fullmatch(r"/licitacoes/([0-9a-f]{12})/(tarefa|comentario|anexo)/([0-9a-f]{8})/(feito|excluir)", p)
+            if m and kanban.ler(m.group(1)):
+                cid, tipo_i, iid, acao = m.groups()
+                if tipo_i == "tarefa":
+                    def _mud(c):
+                        if acao == "excluir":
+                            c["tarefas"] = [t for t in c.get("tarefas") or [] if t.get("id") != iid]
+                        else:
+                            for t in c.get("tarefas") or []:
+                                if t.get("id") == iid:
+                                    t["feito"] = not t.get("feito")
+                                    t["feito_por"], t["feito_em"] = login_atual(), datetime.now().strftime("%Y-%m-%dT%H:%M")
+                    kanban.atualizar(cid, _mud)
+                elif tipo_i == "comentario" and acao == "excluir":
+                    kanban.atualizar(cid, lambda c: c.__setitem__("comentarios", [x for x in c.get("comentarios") or []
+                                                                                  if not (x.get("id") == iid and x.get("autor") == login_atual())]))
+                elif tipo_i == "anexo" and acao == "excluir":
+                    kanban.remover_anexo(cid, iid)
+                    self.auditar("apagou anexo de licitação", cid)
+                return self.redirecionar(f"/licitacoes/{cid}?ok=feito#equipe-bloco")
             m = re.fullmatch(r"/licitacoes/([0-9a-f]{12})/(mover|marcar|edital|resultado|arquivar|excluir)", p)
             if m and kanban.ler(m.group(1)):
                 cid, acao = m.groups()
                 card = kanban.ler(cid)
                 if acao == "excluir":
                     kanban.excluir(cid)
+                    agenda.sincronizar_cartao(cid, [], {})   # tira os prazos legais da agenda
                     return self.redirecionar("/licitacoes?ok=feito")
                 if acao == "mover":
                     card["etapa_manual"] = f.get("etapa", "") if f.get("etapa", "") in kanban.IDX else ""
@@ -6339,6 +6958,9 @@ class Painel(BaseHTTPRequestHandler):
                     card["resultado_manual"] = f.get("resultado", "") if f.get("resultado") in ("ganhou", "perdeu", "encerrado") else ""
                 elif acao == "arquivar":
                     card["arquivado"] = not card.get("arquivado")
+                    card["legais_sig"] = ""
+                    if card["arquivado"]:
+                        agenda.sincronizar_cartao(cid, [], {})
                 kanban.gravar(cid, card)
                 return self.redirecionar(f"/licitacoes/{cid}?ok=feito" if acao != "arquivar" else "/licitacoes?ok=feito")
             if p == "/contratos/novo":
@@ -6685,7 +7307,7 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
                 hora = max(0, min(23, int(f.get("hora", "7") or 7)))
             except ValueError:
                 hora = 7
-            usuarios.salvar_cfg(lg, {"resumo_ativo": f.get("ativo") == "1", "resumo_hora": hora})
+            usuarios.salvar_cfg(lg, {"resumo_ativo": f.get("ativo") == "1", "resumo_hora": hora, "relatorio_mensal": f.get("relatorio") == "1"})
             if f.get("acao") == "agora":
                 if not (uc.get("tg_token") and uc.get("tg_chat")):
                     return self.enviar(pg_preferencias("Conecte o seu bot do Telegram primeiro.", True))
@@ -6708,6 +7330,8 @@ if __name__ == "__main__":
         if _u.get("trocar_senha"):   # troca obrigatória no 1º acesso não existe mais
             usuarios.atualizar(_lg, trocar_senha=False)
     threading.Thread(target=resumo_usuarios, daemon=True).start()
+    threading.Thread(target=kanban_ciclo, daemon=True).start()
+    threading.Thread(target=relatorio_mensal, daemon=True).start()
     threading.Thread(target=buscas.ciclo, args=(telegram_geral, minutos_busca), daemon=True).start()
     threading.Thread(target=vigiar, daemon=True).start()
     threading.Thread(target=backup.ciclo, args=(CFG_ATUAL, telegram_geral, 3, lambda: destinos_admin()[0]), daemon=True).start()
