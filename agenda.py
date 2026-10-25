@@ -608,6 +608,7 @@ def _fmt(q):
     return q.strftime("%d/%m/%Y") + ("" if q.hour == 23 and q.minute == 59 else q.strftime(" às %H:%M"))
 
 
+AO_ENVIAR = None   # o painel define: guarda o aviso no histórico (sininho)
 ROTEAR = None   # o painel define: (empresas, criado_por) -> ([(token, chat)], [tópicos ntfy]) – alerta vai para o dono
 
 
@@ -617,6 +618,11 @@ def _enviar_rota(enviar, cfg, nomes, criador, txt, ntfy_tit=None, ntfy_txt="", p
         if ntfy_tit:
             ntfy(cfg, ntfy_tit, ntfy_txt, prio)
         return
+    if AO_ENVIAR is not None:
+        try:
+            AO_ENVIAR(nomes, criador, txt)
+        except Exception:  # noqa: BLE001
+            pass
     tgs, topicos = ROTEAR(nomes, criador)
     for tok, chat in tgs:
         try:

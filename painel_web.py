@@ -43,6 +43,7 @@ import resumo
 import documentos
 import geo
 import ajuda
+import avisos
 import edital_vigia
 import atas
 import catalogo
@@ -784,7 +785,7 @@ AREAS = [
                                      ("/pecas", "⚖️ Peças com IA"), ("/assinatura", "✍️ Como assinar")]),
     ("/contratos", "💼 Pós-venda", [("/contratos", "💼 Contratos"), ("/atas", "📑 Atas de registro de preço"), ("/relatorio", "📈 Relatório do mês")]),
     ("/empresas", "⋯ Mais", [("/empresas", "🏢 Empresas"), ("/preferencias", "⚙️ Minhas configurações"), ("/meu-consumo", "💳 Custos de IA"),
-                            ("/ajuda", "❓ Ajuda"), ("/conta", "👤 Minha conta")]),
+                            ("/avisos", "🔔 Avisos"), ("/bem-vindo", "🚀 Primeiros passos"), ("/ajuda", "❓ Ajuda"), ("/conta", "👤 Minha conta")]),
 ]
 ABA_AREA = {"/documentos": "/propostas", "/mensagens": "/disputa", "/processos": "/disputa", "/concorrentes": "/disputa", "/agenda": "/licitacoes",
             "/oportunidades": "/licitacoes", "/buscar": "/licitacoes", "/editais": "/licitacoes", "/preferencias": "/empresas", "/ajuda": "/empresas",
@@ -820,6 +821,13 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
         return pagina_admin(titulo, corpo, aviso, erro)
     abas = ABAS
     nav = nav_html(aba)
+    try:
+        n_av = n_avisos_novos() if u else 0
+    except Exception:  # noqa: BLE001
+        n_av = 0
+    sino = (f'<a class="tema" href="/avisos" title="Avisos" style="text-decoration:none;position:relative">🔔'
+            + (f'<span style="position:absolute;top:-6px;right:-6px;background:#c62828;color:#fff;border-radius:10px;font-size:10px;padding:1px 5px">{min(n_av, 99)}</span>' if n_av else "")
+            + "</a>") if u else ""
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
     if False:   # troca obrigatória de senha no 1º acesso foi retirada
         msg += ('<div class="msg erro">🛡️ ' + ("Defina uma senha nova (a atual foi criada pelo administrador). " if u.get("trocar_senha") else
@@ -828,7 +836,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
-{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="tema" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)">🔍</button><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{BUSCA_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
+{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="tema" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();
 document.querySelectorAll('nav .sub-m a').forEach(a=>{{if(a.getAttribute('href')===location.pathname)a.classList.add('aqui');}});</script></body></html>"""
 
@@ -1250,6 +1258,132 @@ inp.addEventListener('keydown',ev=>{const a=res.querySelectorAll('a');if(ev.key=
  else if(ev.key==='ArrowUp'){sel=Math.max(sel-1,0);marca();ev.preventDefault();}else if(ev.key==='Enter'){const x=a[sel>=0?sel:0];if(x)location.href=x.getAttribute('href');}});
 document.addEventListener('keydown',ev=>{if((ev.ctrlKey||ev.metaKey)&&ev.key.toLowerCase()==='k'){ev.preventDefault();abrirBusca();}else if(ev.key==='Escape')fecharBusca();});
 })();</script>"""
+
+
+# ------------------------------------------------------------------ 🔔 histórico de avisos, glossário ⓘ e assistente do 1º acesso
+def avisos_do_usuario(n=300):
+    lg = login_atual()
+    out = []
+    for a in avisos.ultimos(1500):
+        if a.get("usuario") and a["usuario"] == lg and not a.get("empresas"):
+            out.append(a)
+        elif a.get("empresas") and visivel(", ".join(a["empresas"])):
+            out.append(a)
+        if len(out) >= n:
+            break
+    return out
+
+
+def n_avisos_novos():
+    u = usuario_atual()
+    if not u:
+        return 0
+    visto = (u.get("cfg") or {}).get("avisos_visto", "")
+    return sum(1 for a in avisos_do_usuario(99) if a["quando"] > visto)
+
+
+def pg_avisos(q):
+    lg = login_atual()
+    visto = usuarios.cfg(lg).get("avisos_visto", "")
+    lista = [("aviso", a["quando"], a) for a in avisos_do_usuario(200)]
+    limite = (datetime.now() - timedelta(days=3)).strftime("%d/%m/%Y")
+    for nome, ids in nomes_empresas().items():   # mensagens do pregoeiro que viraram alerta (enviadas pelo monitor)
+        for eid in ids:
+            db = EMPRESAS / eid / "bll_monitor.db"
+            if not db.exists():
+                continue
+            try:
+                con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+                rows = con.execute("SELECT processo, escopo, autor, texto, visto_em FROM mensagens WHERE alertado=1 ORDER BY rowid DESC LIMIT 60").fetchall()
+                con.close()
+            except sqlite3.Error:
+                continue
+            for pr, esc, aut, txt, vis in rows:
+                d = para_data(vis or "")
+                if d == datetime.min or d < datetime.now() - timedelta(days=3):
+                    continue
+                lista.append(("msg", d.strftime("%Y-%m-%dT%H:%M:%S"), {"empresa": nome, "eid": eid, "processo": pr, "escopo": esc, "autor": aut, "texto": txt}))
+    lista.sort(key=lambda x: x[1], reverse=True)
+    linhas = ""
+    for tipo, quando, a in lista[:250]:
+        novo = quando > visto
+        q_br = f"{quando[8:10]}/{quando[5:7]} {quando[11:16]}"
+        if tipo == "msg":
+            corpo_a = (f'<b>💬 {e(a["empresa"])} · {e(a["processo"])}</b> <span class="sub">{e(a["escopo"] or "")} · {e(a["autor"] or "")}</span>'
+                       f'<div style="white-space:pre-wrap">{e((a["texto"] or "")[:600])}</div>'
+                       f'<a class="sub" href="/mensagens?empresa={e(a["eid"])}">abrir as mensagens</a>')
+        else:
+            corpo_a = f'<div style="white-space:pre-wrap">{e(avisos.texto_simples(a["texto"])[:1500])}</div>'
+        linhas += (f'<li class="{"novo" if novo else ""}"><div class="q">{q_br}{" <span class=tag>novo</span>" if novo else ""}</div><div class="c">{corpo_a}</div></li>')
+    usuarios.salvar_cfg(lg, {"avisos_visto": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")})
+    corpo = f"""<style>.avl{{list-style:none;padding:0;margin:0}}.avl li{{display:flex;gap:12px;padding:10px 12px;border:1px solid var(--borda);border-radius:10px;
+background:var(--card);margin-bottom:8px}}.avl li.novo{{border-left:4px solid var(--verde)}}.avl .q{{min-width:92px;font-size:12px;color:var(--sub)}}.avl .c{{flex:1;min-width:0;font-size:13.5px}}</style>
+<h2>🔔 Avisos</h2><p class="sub">O que foi mandado no seu Telegram (prazos, certidões, contratos, editais, resumos…) e as mensagens do pregoeiro que viraram alerta nos últimos 3 dias.</p>
+<ul class="avl">{linhas or '<li>Nenhum aviso ainda.</li>'}</ul>"""
+    return pagina("Avisos", corpo, "/")
+
+
+GLOSSARIO = {
+    "empate ficto": "Direito da ME/EPP de cobrir o melhor lance quando ficou até 5% acima dele no pregão (LC 123, arts. 44 e 45).",
+    "carona": "Adesão à ata por um órgão que não participou da licitação – limites do art. 86 da Lei 14.133.",
+    "adesão": "Uso da ata de registro de preço por outro órgão (carona). O fornecedor pode aceitar ou recusar.",
+    "readequ": "Ajustar os preços dos itens da proposta ao valor do lance final, sem aumentar nenhum item.",
+    "markup": "Forma de calcular o preço: custo ÷ (1 − percentuais de impostos, despesas e margem).",
+    "lance mínimo": "O menor lance que ainda paga custo, impostos e despesas com a margem mínima.",
+    "piso": "Valor abaixo do qual você não quer dar lance (vem da formação de preço).",
+    "impugna": "Pedido para corrigir uma regra ilegal ou restritiva do edital – até 3 dias úteis antes da abertura (art. 164).",
+    "esclarecimento": "Pergunta formal ao órgão sobre o edital – até 3 dias úteis antes da abertura (art. 164).",
+    "intenção de recurso": "Aviso, feito na própria sessão logo após o resultado, de que você vai recorrer.",
+    "contrarraz": "Resposta ao recurso de outro licitante – 3 dias úteis contados da intimação (art. 165).",
+    "dias úteis": "Contam de segunda a sexta, sem feriados nacionais. Feriado local não entra – confira no edital.",
+    "homolog": "Ato final que confirma o resultado da licitação; depois vem a contratação.",
+    "adjudic": "Ato que entrega o objeto da licitação ao vencedor.",
+    "habilitação": "Fase em que o órgão confere os documentos (certidões, atestados, declarações) da empresa.",
+    "atestado de capacidade": "Documento de um cliente dizendo o que a empresa já forneceu – comprova a qualificação técnica.",
+    "registro de preço": "Licitação em que o órgão registra preços e compra aos poucos durante a vigência da ata (até 1 ano + 1).",
+    "diligência": "Pedido do pregoeiro para esclarecer ou complementar um documento, com prazo curto.",
+}
+
+GLOSSARIO_JS = ("<style>.ti{border-bottom:1px dotted var(--verde);cursor:help}.ti::after{content:'ⓘ';font-size:10px;color:var(--verde);margin-left:1px;vertical-align:super}</style>"
+                "<script>(function(){const G=" + json.dumps(GLOSSARIO, ensure_ascii=False) + r""";
+const main=document.querySelector('main');if(!main)return;const usados=new Set();
+const w=document.createTreeWalker(main,NodeFilter.SHOW_TEXT,{acceptNode:n=>n.parentElement.closest('a,button,textarea,input,select,option,script,style,code,.ti,h2,label,summary')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT});
+const nos=[];while(w.nextNode())nos.push(w.currentNode);
+for(const n of nos){for(const k in G){if(usados.has(k))continue;const t=n.nodeValue;
+ const re=new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'[a-zà-ú]*','i');const m=re.exec(t);if(!m)continue;
+ if(m.index>0&&/[a-zà-ú]/i.test(t[m.index-1]))continue;
+ const sp=document.createElement('span');sp.className='ti';sp.title=G[k];sp.textContent=m[0];
+ const resto=n.splitText(m.index);resto.nodeValue=resto.nodeValue.slice(m[0].length);n.parentNode.insertBefore(sp,resto);usados.add(k);break;}}
+})();</script>""")
+
+
+def pg_bem_vindo(q):
+    lg = login_atual()
+    ps = passos_conta()
+    feitos = sum(1 for _, ok, _ in ps if ok)
+    explic = {
+        "/empresas": ("🏢", "O login da empresa na plataforma (BLL, BNC, Portal de Compras…) é o que permite ao monitor ler o chat do pregoeiro, as diligências e a classificação. O sistema só lê – nunca envia nada."),
+        "/documentos#dados": ("📄", "CNPJ, endereço com cidade/UF, representante e banco: com isso o sistema gera declarações, propostas e o pacote de habilitação prontos. A logo vira o papel timbrado."),
+        "/certidoes": ("📑", "Envie os PDFs das certidões: o sistema lê a validade e avisa antes de vencer, com o link para emitir de novo."),
+        "/preferencias": ("🔔", "Ligue o seu bot do Telegram (alertas do pregoeiro, prazos, resumo do dia) e o alarme ntfy, que toca alto no celular."),
+        "/propostas": ("💰", "Monte a primeira proposta: traga os itens do edital, calcule o preço e baixe em Word/PDF."),
+    }
+    itens, atual = "", None
+    for i, (t, ok, u) in enumerate(ps, 1):
+        if not ok and atual is None:
+            atual = i
+        ic, txt = explic.get(u, ("•", ""))
+        itens += (f'<li class="{"feito" if ok else ("atual" if atual == i else "")}"><div class="n">{"✓" if ok else i}</div><div style="flex:1">'
+                  f'<b>{ic} {e(t)}</b>' + (f'<div class="sub">{e(txt)}</div>' if txt and not ok else "")
+                  + (f'<div class="acoes"><a class="btn" href="{e(u)}">Fazer agora →</a></div>' if atual == i else "") + "</div></li>")
+    corpo = f"""{ESTILO_KANBAN}<div style="max-width:760px;margin:auto"><h2>👋 Bem-vindo ao Licitatudo{(", " + e(lg)) if lg else ""}!</h2>
+<p>Em poucos passos o sistema começa a trabalhar por você: acompanha os processos, avisa os prazos e monta os documentos.
+<b>{feitos} de {len(ps)}</b> feitos.</p><div class="pbar grande"><span style="width:{int(100 * feitos / len(ps))}%"></span></div>
+<ol class="siga" style="margin-top:12px">{itens}</ol>
+<div class="acoes" style="margin-top:14px">{botao("/bem-vindo/pular", "Pular por agora – ir para o painel" if feitos < len(ps) else "✅ Tudo pronto – ir para o painel", "sec" if feitos < len(ps) else "")}
+<a class="btn sec" href="/ajuda#inicio">❓ Ver o tutorial</a></div>
+<p class="sub">Você pode voltar a este assistente quando quiser pelo menu ⋯ Mais → Primeiros passos.</p></div>"""
+    return pagina("Bem-vindo", corpo, "/")
 
 
 def urg_tag(m):
@@ -7069,6 +7203,7 @@ def destinos_alerta(nomes, criador=""):
 
 
 agenda.ROTEAR = destinos_alerta
+agenda.AO_ENVIAR = lambda nomes, criador, txt: avisos.registrar(txt, [x.strip() for x in (nomes or "").split(",") if x.strip()], criador or "")
 
 
 def ntfy_em_uso(topico, login):
@@ -7175,7 +7310,9 @@ def resumo_usuarios():
                 if agora.hour != hora_u or c.get("resumo_ultimo") == hoje:
                     continue
                 tok = c.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
-                resumo.enviar_partes(lambda t: telegram_para(tok, c["tg_chat"], t), resumo.montar(agora, nomes_do_usuario(lg), lg))
+                txt_r = resumo.montar(agora, nomes_do_usuario(lg), lg)
+                avisos.registrar(txt_r, [], lg)
+                resumo.enviar_partes(lambda t: telegram_para(tok, c["tg_chat"], t), txt_r)
                 usuarios.salvar_cfg(lg, {"resumo_ultimo": hoje})
         except Exception as ex:  # noqa: BLE001
             print("Erro no resumo dos usuários:", ex, flush=True)
@@ -7199,6 +7336,8 @@ def destinos_admin():
 
 def telegram_geral(texto, usuario=None, empresas=None):
     """Sem destino: avisos do sistema (Telegram geral, se houver). Com empresas/usuário: vai para o bot do dono."""
+    if empresas or usuario is not None:
+        avisos.registrar(texto, list(empresas or []), usuario or "")
     if empresas:
         for tok, chat in destinos_alerta(", ".join(empresas))[0]:
             telegram_para(tok, chat, texto)
@@ -7609,6 +7748,9 @@ class Painel(BaseHTTPRequestHandler):
             p = p[6:]
         try:
             if p == "/":
+                uc_w = usuarios.cfg(login_atual())
+                if not eh_admin() and not nomes_empresas() and not uc_w.get("assistente_visto"):
+                    return self.redirecionar("/bem-vindo")   # 1º acesso: assistente passo a passo
                 return self.enviar(pg_visao())
             if p == "/mensagens/busca":
                 return self.enviar(pg_busca_msgs(q))
@@ -7694,6 +7836,10 @@ class Painel(BaseHTTPRequestHandler):
                 tipo_a = mimetypes.guess_type(arq_a.name)[0] or "application/octet-stream"
                 nome_h = re.sub(r"[^A-Za-z0-9._ -]", "_", unicodedata.normalize("NFKD", arq_a.name).encode("ascii", "ignore").decode()) or "atestado"
                 return self.baixar(arq_a.read_bytes(), nome_h, tipo_a, na_tela=True)
+            if p == "/avisos":
+                return self.enviar(pg_avisos(q))
+            if p == "/bem-vindo":
+                return self.enviar(pg_bem_vindo(q))
             if p == "/busca.json":
                 dados_b = json.dumps(busca_global(q.get("q", "")[:80]), ensure_ascii=False).encode()
                 self.send_response(200)
@@ -8732,6 +8878,9 @@ class Painel(BaseHTTPRequestHandler):
                     propostas.gravar(m.group(1), prop)
                     threading.Thread(target=buscar_precos, args=(m.group(1),), daemon=True).start()
                 return self.redirecionar(f"/propostas/{m.group(1)}")
+            if p == "/bem-vindo/pular":
+                usuarios.salvar_cfg(login_atual(), {"assistente_visto": True})
+                return self.redirecionar("/")
             if p == "/catalogo/param":
                 nome = f.get("empresa", "")
                 if nome in nomes_empresas():
