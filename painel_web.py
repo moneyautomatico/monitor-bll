@@ -8018,6 +8018,21 @@ class Painel(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(dados_p)
             return
+        if re.fullmatch(r"/site/[a-z0-9-]{1,40}\.webp", caminho) and (PASTA / caminho.lstrip("/")).is_file():   # telas da página de vendas
+            dados_p = (PASTA / caminho.lstrip("/")).read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/webp")
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.send_header("Content-Length", str(len(dados_p)))
+            self.cabecalhos_seguranca()
+            self.end_headers()
+            self.wfile.write(dados_p)
+            return
+        if caminho == "/prazos":   # calculadora pública de prazos (Lei 14.133)
+            cv = cfg_vendas()
+            q0 = {k: v[0][:20] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()
+                  if k in ("abertura", "publicacao", "tipo", "protocolo", "resultado", "recurso", "ata", "me")}
+            return self.enviar(landing.pagina_prazos(q0, cv["aberto"], cv["dias"]))
         if caminho in ("", "/conheca") and (caminho == "/conheca" or not self.sessao()[0]):
             cv = cfg_vendas()
             return self.enviar(landing.pagina(cv["dias"], cv["whatsapp"], cv["aberto"]))
