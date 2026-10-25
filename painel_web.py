@@ -656,6 +656,8 @@ ESTILO = """
 --verde2:#1f3328;--aviso:#e3a14b;--avisobg:#3a2b12;--erro:#ff8a80;--errobg:#3b1715;--borda:#2a332e;--nova:#3a3418;--achou:#3a3418;color-scheme:dark}
 :root{--achou:#fffde7}
 .tema{background:none;border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:8px;padding:5px 10px;font-size:15px;cursor:pointer;margin-left:auto}
+.topo{background:none;border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:8px;padding:5px 10px;font-size:15px;cursor:pointer;text-decoration:none}
+.topo:hover{background:rgba(255,255,255,.1)}.topo~.tema{margin-left:0}
 .tema:hover{background:rgba(255,255,255,.1)}header .tema+.sair{margin-left:8px}
 *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--txt)}
 header{background:#173f2c;color:#fff;padding:0 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
@@ -830,7 +832,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
         n_av = n_avisos_novos() if u else 0
     except Exception:  # noqa: BLE001
         n_av = 0
-    sino = (f'<a class="tema" href="/avisos" title="Avisos" style="text-decoration:none;position:relative">🔔'
+    sino = (f'<a class="topo" href="/avisos" title="Avisos" style="position:relative">🔔'
             + (f'<span style="position:absolute;top:-6px;right:-6px;background:#c62828;color:#fff;border-radius:10px;font-size:10px;padding:1px 5px">{min(n_av, 99)}</span>' if n_av else "")
             + "</a>") if u else ""
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
@@ -842,7 +844,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
 <link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#173f2c"><link rel="apple-touch-icon" href="/icone-192.png">
-{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="tema" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
+{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="topo" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)" style="margin-left:auto">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();
 document.querySelectorAll('nav .sub-m a').forEach(a=>{{if(a.getAttribute('href')===location.pathname)a.classList.add('aqui');}});
 if('serviceWorker' in navigator){{navigator.serviceWorker.register('/sw.js').catch(()=>{{}});}}</script></body></html>"""
