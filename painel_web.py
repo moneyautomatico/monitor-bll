@@ -2296,6 +2296,7 @@ def pg_proposta(pid, aviso="", erro=False):
     elif ia.get("status") == "pronto" and ia.get("quando", "") > (p.get("visto_ia") or ""):
         bloco_ia = (f'<div class="msg">🤖 A IA leu o edital e trouxe <b>{ia.get("n", 0)}</b> item(ns). Confira descrições e quantidades '
                     f'com o edital e preencha os preços. {custo_uso(ia.get("custo"))}</div>')
+    etapa_inicial = 1 if not itens or not all(i["_u"] > 0 for i in itens) else (3 if falta else 4 if (p.get("readequada") or {}) else 1)
     aviso_falta = (f'<div class="msg erro">Para gerar o documento, preencha os dados da empresa em '
                    f'<a href="/documentos?emp={urllib.parse.quote(p.get("empresa", ""))}">Declarações → Dados da empresa</a>: <b>{e(", ".join(falta))}</b>.</div>'
                    if falta else "")
@@ -2312,9 +2313,10 @@ details.dica ul{{padding-left:14px;margin:4px 0}}
 <p><a href="/propostas">← Minhas propostas</a></p>
 <h2 style="margin-top:4px">💰 Proposta – {e(p.get("processo") or "sem nº")} <small class="sub">{e(p.get("empresa", ""))}</small></h2>
 {aviso_falta}{bloco_ia}
-{html_readequar(pid, p, itens)}
-{html_cotacao(pid, p, itens)}
-{html_formacao(pid, p, itens)}
+{etapas_proposta(p, itens, conf, falta)}
+<div class="etapa" data-e="2">{html_cotacao(pid, p, itens) or '<p class="sub">Traga os itens primeiro (etapa 1).</p>'}
+{html_formacao(pid, p, itens)}<div class="acoes"><button type="button" class="sec" onclick="irEtapa(1)">← Itens</button><button type="button" onclick="irEtapa(3)">Próximo: documento →</button></div></div>
+<div class="etapa" data-e="4">{html_readequar(pid, p, itens)}
 {ESTILO_CONF}<details class="op-perfil" id="conferencia" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if itens else ""}>
 <summary style="display:block;cursor:pointer;padding:10px 14px">✅ <b>Conferência antes de enviar</b> –
 {sum(1 for n, _ in conf if n == "erro")} erro(s) · {sum(1 for n, _ in conf if n == "atencao")} atenção</summary>
@@ -2325,7 +2327,9 @@ details.dica ul{{padding-left:14px;margin:4px 0}}
 <input type="file" name="arquivo" accept=".pdf,.docx,.zip" multiple></div></div>
 <div class="acoes"><button class="sec" {"disabled" if (p.get("conferencia_ia") or {}).get("status") == "gerando" else ""}>🤖 Conferir com o edital</button>
 <a class="btn sec" href="/pacote?emp={urllib.parse.quote(p.get("empresa", ""))}&proposta={pid}">📦 Montar o pacote de habilitação</a></div></form></div></details>
-<details class="op-perfil" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if not itens else ""}>
+<div class="acoes"><button type="button" class="sec" onclick="irEtapa(3)">← Documento</button>
+<a class="btn" href="/pacote?emp={urllib.parse.quote(p.get("empresa", ""))}&proposta={pid}">📦 Montar o pacote de habilitação</a></div></div>
+<div class="etapa" data-e="1"><details class="op-perfil" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if not itens else ""}>
 <summary style="display:block;cursor:pointer;padding:10px 14px">📥 <b>Trazer os itens</b> – do monitor, do PNCP ou lidos do edital pela IA</summary>
 <div style="padding:0 14px 12px"><div class="duas">
 <form method="post" action="/propostas/{pid}/importar"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="fonte" value="monitor">
@@ -2343,24 +2347,25 @@ details.dica ul{{padding-left:14px;margin:4px 0}}
 <select class="campo" name="edital">{sel_edital}</select></div><div><label>…ou envie o PDF do edital/termo de referência</label>
 <input type="file" name="arquivo" accept=".pdf,.docx,.zip" multiple></div></div>
 <label class="ck"><input type="checkbox" name="substituir" value="1" checked> Substituir os itens atuais</label>
-<div class="acoes"><button class="sec" {"disabled" if ia.get("status") == "gerando" else ""}>🤖 Ler os itens</button></div></form></div></details>
+<div class="acoes"><button class="sec" {"disabled" if ia.get("status") == "gerando" else ""}>🤖 Ler os itens</button></div></form></div></details></div>
 <form method="post" action="/propostas/{pid}/salvar" id="fprop"><input type="hidden" name="csrf" value="{CSRF}">
-<div class="form" style="max-width:none"><div class="duas">
+<div class="etapa" data-e="3"><div class="form" style="max-width:none"><div class="duas">
 <div><label>Órgão</label><input class="campo" name="orgao" value="{e(p.get("orgao", ""))}"></div>
 <div><label>Nº do processo/edital</label><input class="campo" name="processo" value="{e(p.get("processo", ""))}"></div>
 <div><label>Modalidade</label><input class="campo" name="modalidade" value="{e(p.get("modalidade", ""))}"></div>
 <div><label>Local e data <small>(vazio = cidade da empresa e hoje)</small></label><div class="linha" style="gap:8px">
 <input class="campo" name="cidade_data" value="{e(p.get("cidade_data", ""))}" placeholder="{e(ctx.get("cidade", "Cidade/UF"))}">
 <input class="campo" name="data" value="{e(p.get("data", ""))}" placeholder="{e(documentos.data_extenso())}"></div></div></div>
-<label>Objeto</label><textarea class="campo" name="objeto" rows="2" style="max-width:100%">{e(p.get("objeto", ""))}</textarea></div>
-<h3>Itens</h3>
+<label>Objeto</label><textarea class="campo" name="objeto" rows="2" style="max-width:100%">{e(p.get("objeto", ""))}</textarea></div></div>
+<div class="etapa" data-e="1"><h3>Itens e preços</h3>
 <div style="overflow-x:auto"><table class="tab-it"><thead><tr><th>Lote</th><th>Item</th><th style="min-width:260px">Descrição</th><th>Marca/modelo</th>
 <th>Unid.</th><th>Qtd.</th><th>Valor unit. (R$)</th><th>Total (R$)</th><th></th></tr></thead><tbody id="itens">{linhas}</tbody></table></div>
 <div class="acoes"><button type="button" class="sec" onclick="novaLinha()">+ Item</button>
 <button type="submit" class="sec" form="fprecos" {"disabled" if (p.get("precos") or {}).get("status") == "gerando" or not itens else ""}>💡 Buscar preços pagos no PNCP</button></div>
 {status_precos(p)}
 <div class="total-box">Total: <span id="total">{propostas.brl(total)}</span><small id="ext">{e(propostas.extenso(total))}</small></div>
-<div class="duas"><div class="form" style="max-width:none"><h3 style="margin-top:0">Condições</h3>
+<div class="acoes"><button class="sec" name="voltar" value="1">💾 Salvar itens</button><button type="button" onclick="irEtapa(2)">Próximo: custos e cotação →</button></div></div>
+<div class="etapa" data-e="3"><div class="duas"><div class="form" style="max-width:none"><h3 style="margin-top:0">Condições</h3>
 <label>Validade da proposta (dias)</label><input class="campo" name="validade" value="{e(c["validade"])}" style="max-width:120px">
 <label>Prazo de entrega/execução</label><input class="campo" name="entrega" value="{e(c["entrega"])}">
 <label>Pagamento</label><input class="campo" name="pagamento" value="{e(c["pagamento"])}">
@@ -2374,7 +2379,8 @@ details.dica ul{{padding-left:14px;margin:4px 0}}
 <div class="acoes"><button>💾 Salvar</button>
 <button class="sec" name="depois" value="ver" {"disabled" if falta else ""}>💾 Salvar e visualizar / PDF</button>
 <button class="sec" name="depois" value="docx" {"disabled" if falta else ""}>💾 Salvar e baixar Word</button>
-<button class="sec" name="depois" value="pdf" {"disabled" if falta else ""}>💾 Salvar e baixar PDF</button></div></form>
+<button class="sec" name="depois" value="pdf" {"disabled" if falta else ""}>💾 Salvar e baixar PDF</button></div>
+<div class="acoes"><button type="button" class="sec" onclick="irEtapa(2)">← Custos</button><button type="button" onclick="irEtapa(4)">Próximo: conferência →</button></div></div></form>
 <form method="post" action="/propostas/{pid}/precos" id="fprecos"><input type="hidden" name="csrf" value="{CSRF}"></form>
 <div class="acoes" style="margin-top:14px">{botao(f"/propostas/{pid}/excluir", "🗑 Excluir proposta", "perigo", "Excluir esta proposta?")}</div>
 <p class="sub">Confira tudo com o edital antes de enviar. Valor em vermelho = acima do valor de referência do órgão.</p>
@@ -2386,6 +2392,11 @@ function calc(){{let t=0;document.querySelectorAll('#itens tr').forEach(tr=>{{co
  const c=tr.querySelector('td.tot');c.textContent=f(x);c.classList.toggle('acima',r>0&&u>r);}});
  document.getElementById('total').textContent='R$ '+f(t);document.getElementById('ext').textContent='(salve para ver o valor por extenso)';}}
 function usar(b,v){{const td=b.closest('td');td.querySelector('[name=i_unit]').value=v.toFixed(2).replace('.',',');calc();}}
+function irEtapa(n){{document.querySelectorAll('.etapa').forEach(x=>x.style.display=(x.dataset.e==n)?'':'none');
+ document.querySelectorAll('.passo-et').forEach(x=>x.classList.toggle('on',x.dataset.e==n));history.replaceState(null,'','#etapa-'+n);window.scrollTo(0,0);}}
+(function(){{let h=location.hash,n=(h.match(/etapa-(\\d)/)||[])[1];
+ if(!n){{const m={{'#cotacao':2,'#formacao':2,'#conferencia':4,'#readequar':4}};n=m[h]||{etapa_inicial};}}
+ irEtapa(n);if(h&&!h.startsWith('#etapa')){{const el=document.querySelector(h);if(el){{if(el.tagName==='DETAILS')el.open=true;el.scrollIntoView();}}}}}})();
 function novaLinha(){{const tb=document.getElementById('itens');const tr=document.createElement('tr');
  tr.innerHTML='<td><input name="i_lote" class="mini"></td><td><input name="i_item" class="mini" value="'+(tb.children.length+1)+'"></td><td><textarea name="i_desc" rows="2"></textarea></td>'+
  '<td><input name="i_marca"></td><td><input name="i_un" class="mini" value="UN"></td><td><input name="i_qtd" class="num" oninput="calc()"></td>'+
@@ -2811,6 +2822,22 @@ def pg_orgao(q):
 {l_lotes or '<tr><td colspan="6">Nenhum lote deste órgão na classificação lida pelo monitor.</td></tr>'}</table>
 <p class="sub">“Paga em dia” vem das notas fiscais que você lança em Contratos (vencimento × data do pagamento). Quanto mais você lança, mais confiável fica.</p>"""
     return pagina("Ficha do órgão", corpo, "/concorrentes")
+
+
+def etapas_proposta(p, itens, conf, falta):
+    n_custo = sum(1 for i in itens if propostas.num(i.get("custo")))
+    feitos = {1: bool(itens) and all(i["_u"] > 0 for i in itens), 2: bool(itens) and n_custo == len(itens),
+              3: not falta and bool(p.get("orgao")) and bool(p.get("processo")), 4: bool(itens) and not any(n == "erro" for n, _ in conf)}
+    nomes = {1: "Itens e preços", 2: "Custos e cotação", 3: "Documento", 4: "Conferência e envio"}
+    pct = int(100 * sum(feitos.values()) / 4)
+    passos = "".join(f'<button type="button" class="passo-et" data-e="{k}" onclick="irEtapa({k})"><span class="n">{"✓" if feitos[k] else k}</span>{v}</button>'
+                     for k, v in nomes.items())
+    return f"""<style>.etapas{{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px}}.passo-et{{flex:1;min-width:150px;display:flex;align-items:center;gap:8px;
+background:var(--card);border:1px solid var(--borda);color:var(--txt);border-radius:10px;padding:9px 12px;font-weight:600;cursor:pointer;margin:0}}
+.passo-et .n{{width:24px;height:24px;border-radius:50%;background:var(--borda);display:grid;place-items:center;font-size:13px}}
+.passo-et.on{{border-color:var(--verde);box-shadow:0 0 0 2px rgba(47,138,91,.25)}}.passo-et.on .n{{background:var(--verde);color:#fff}}
+.pbar-p{{height:6px;background:var(--borda);border-radius:4px;overflow:hidden;margin-bottom:12px}}.pbar-p span{{display:block;height:100%;background:var(--verde)}}</style>
+<div class="etapas">{passos}</div><div class="pbar-p"><span style="width:{pct}%"></span></div>"""
 
 
 def chave_preco(it):
