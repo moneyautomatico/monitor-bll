@@ -43,6 +43,7 @@ import resumo
 import documentos
 import geo
 import ajuda
+import landing
 import pwa
 import planilhas
 import lixeira
@@ -844,7 +845,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
 <link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#173f2c"><link rel="apple-touch-icon" href="/icone-192.png">
-{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="topo" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)" style="margin-left:auto">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
+{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="topo" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)" style="margin-left:auto">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header>{faixa_teste(u) if u else ""}<main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();
 document.querySelectorAll('nav .sub-m a').forEach(a=>{{if(a.getAttribute('href')===location.pathname)a.classList.add('aqui');}});
 if('serviceWorker' in navigator){{navigator.serviceWorker.register('/sw.js').catch(()=>{{}});}}</script></body></html>"""
@@ -1495,6 +1496,97 @@ def importar_planilha(tipo, alvo, nome_arq, dados, substituir=False):
         return len(novos), ""
     return 0, "tipo desconhecido"
 
+
+
+# ------------------------------------------------------------------ página de vendas e teste grátis
+CADASTROS_IP = {}   # ip -> [horários] (limite de contas de teste por endereço)
+
+
+def cfg_vendas():
+    g = CFG_ATUAL()
+    try:
+        dias = max(1, min(60, int(g.get("TESTE_DIAS", "7") or 7)))
+    except ValueError:
+        dias = 7
+    try:
+        max_emp = max(1, int(g.get("TESTE_MAX_EMPRESAS", "2") or 2))
+    except ValueError:
+        max_emp = 2
+    return {"dias": dias, "whatsapp": re.sub(r"\D", "", g.get("VENDAS_WHATSAPP", "")), "aberto": g.get("CADASTRO_ABERTO", "1") != "0",
+            "max_emp": max_emp, "ia": g.get("TESTE_IA", "1") != "0"}
+
+
+def token_cadastro():
+    ts = str(int(time.time()))
+    return ts + "." + hmac.new(CSRF.encode(), ts.encode(), hashlib.sha256).hexdigest()[:20]
+
+
+def token_ok(tok):
+    ts, _, assin = (tok or "").partition(".")
+    if not ts.isdigit() or not hmac.compare_digest(assin, hmac.new(CSRF.encode(), ts.encode(), hashlib.sha256).hexdigest()[:20]):
+        return False
+    idade = time.time() - int(ts)
+    return 3 <= idade <= 7200   # nem rápido demais (robô) nem formulário velho
+
+
+def situacao_teste(u):
+    """None = conta normal; senão {"ate": date, "dias": restantes, "acabou": bool}."""
+    c = (u or {}).get("cfg") or {}
+    if not c.get("teste_ate") or c.get("plano") == "assinante":
+        return None
+    try:
+        ate = date.fromisoformat(c["teste_ate"])
+    except ValueError:
+        return None
+    resta = (ate - date.today()).days
+    return {"ate": ate, "dias": resta, "acabou": resta < 0}
+
+
+def pausar_testes_vencidos():
+    """Teste grátis acabou: pausa os monitores das empresas da conta (os dados ficam). Volta ao virar assinante/estender."""
+    for lg, u in usuarios.carregar().items():
+        uu = dict(u, login=lg)
+        st = situacao_teste(uu)
+        c = u.get("cfg") or {}
+        if st and st["acabou"] and not c.get("pausados_teste"):
+            eids = [a.stem for a in EMPRESAS.glob("*.env") if (ler_env(a).get("EMPRESA_DONO") or "").lower() == lg] if EMPRESAS.exists() else []
+            for eid in eids:
+                sh("systemctl", "disable", "--now", f"monitor-bll@{eid}")
+            usuarios.salvar_cfg(lg, {"pausados_teste": eids or ["-"]})
+            usuarios.auditar(lg, "", "teste grátis encerrado: monitores pausados", ", ".join(eids))
+
+
+def religar_depois_teste(lg):
+    for eid in usuarios.cfg(lg).get("pausados_teste") or []:
+        if eid != "-" and (EMPRESAS / f"{eid}.env").exists():
+            sh("systemctl", "enable", "--now", f"monitor-bll@{eid}")
+    usuarios.salvar_cfg(lg, {"pausados_teste": None})
+
+
+def link_whatsapp(texto):
+    w = cfg_vendas()["whatsapp"]
+    return ("https://wa.me/" + w + "?text=" + urllib.parse.quote(texto)) if w else ""
+
+
+def pg_teste_encerrado():
+    u = usuario_atual() or {}
+    wa = link_whatsapp(f"Olá! Meu teste do Licitatudo terminou (login {u.get('login', '')}) e quero continuar.")
+    corpo = f"""<div style="max-width:620px;margin:40px auto;text-align:center"><h2 style="font-size:26px">⏳ O seu teste grátis terminou</h2>
+<p>Obrigado por testar o Licitatudo! Os seus dados (empresas, licitações, propostas e documentos) continuam guardados.
+Para continuar de onde parou, fale com a gente e escolha o plano.</p>
+{f'<p><a class="btn" href="{e(wa)}" target="_blank" rel="noopener" style="font-size:16px;padding:12px 20px">💬 Falar no WhatsApp e continuar</a></p>' if wa else '<p><b>Fale com o administrador do sistema para continuar.</b></p>'}
+<p class="sub">Enquanto isso, os monitores das suas empresas ficam pausados no painel.</p></div>"""
+    return pagina("Teste encerrado", corpo, "/")
+
+
+def faixa_teste(u):
+    st = situacao_teste(u)
+    if not st or st["acabou"]:
+        return ""
+    wa = link_whatsapp(f"Olá! Estou testando o Licitatudo (login {u.get('login', '')}) e quero assinar.")
+    txt = "último dia" if st["dias"] == 0 else f"faltam {st['dias']} dia(s)"
+    return (f'<div style="background:#fff4e0;color:#7a4b00;font-size:13px;padding:7px 16px;text-align:center">🎁 Teste grátis – <b>{txt}</b> '
+            f'(até {st["ate"]:%d/%m}).{(" <a href=" + chr(34) + e(wa) + chr(34) + " target=_blank rel=noopener style=color:#7a4b00;font-weight:700>Quero assinar →</a>") if wa else ""}</div>')
 
 
 def urg_tag(m):
@@ -4064,9 +4156,13 @@ def kanban_ciclo():
     (assim o resumo diário e os avisos funcionam mesmo sem ninguém abrir o painel)."""
     time.sleep(240)
     while True:
+        try:
+            pausar_testes_vencidos()
+        except Exception as ex:  # noqa: BLE001
+            print("Erro ao pausar testes vencidos:", ex, flush=True)
         for lg in list(usuarios.carregar()):
             u = usuarios.obter(lg)
-            if not u or not u.get("ativo", True) or u["papel"] == "admin":
+            if not u or not u.get("ativo", True) or u["papel"] == "admin" or (situacao_teste(u) or {}).get("acabou"):
                 continue
             _REQ.user, _REQ.perm, _REQ.admin = u, None, False
             try:
@@ -6298,6 +6394,26 @@ def pg_admin(q, aviso="", erro=False, f=None):
     return pagina("Administrador", corpo, "/admin", aviso, erro)
 
 
+def html_plano_admin(lg, u):
+    c = u.get("cfg") or {}
+    if not c.get("teste_ate") and c.get("plano") != "assinante":
+        return ""
+    st = situacao_teste(u)
+    zap = c.get("whatsapp", "")
+    if c.get("plano") == "assinante":
+        sit = '<span class="tag ok">✅ assinante</span>'
+    elif st and st["acabou"]:
+        sit = f'<span class="tag erro">teste encerrado em {st["ate"]:%d/%m/%Y}</span>'
+    else:
+        sit = f'<span class="tag aviso">🎁 em teste até {st["ate"]:%d/%m/%Y} ({st["dias"]} dia(s))</span>' if st else ""
+    return (f'<div style="border:1px solid var(--borda);border-radius:10px;padding:10px 12px;margin:8px 0"><b>Plano:</b> {sit}'
+            + (f'<div class="sub">Empresa informada: {e(c.get("empresa_nome", ""))} · WhatsApp: '
+               f'<a href="https://wa.me/{e(zap if zap.startswith("55") else "55" + zap)}" target="_blank" rel="noopener">{e(zap)}</a></div>' if zap else "")
+            + '<div class="acoes" style="margin-top:6px">'
+            + ("" if c.get("plano") == "assinante" else botao(f"/admin/usuario/{lg}/assinante", "✅ Virou assinante (liberar)"))
+            + botao(f"/admin/usuario/{lg}/estender", "➕ 7 dias de teste", "sec") + "</div></div>")
+
+
 def pg_usuario(lg, aviso="", erro=False):
     u = usuarios.obter(lg)
     eu = lg == login_atual()
@@ -6315,6 +6431,7 @@ def pg_usuario(lg, aviso="", erro=False):
 <label>Papel</label><select class="campo" name="papel" {"" if not eu else 'title="Você não pode mudar o seu próprio papel"'}>{opcoes_papel(u["papel"])}</select>
 <p class="sub">Empresas cadastradas por ele: <b>{e(", ".join(sorted({(ler_env(a).get("EMPRESA_NOME") or a.stem).upper() for a in EMPRESAS.glob("*.env") if (ler_env(a).get("EMPRESA_DONO") or "").lower() == lg})) or "nenhuma")}</b></p>
 <p class="sub">Ele só vê as empresas que ele mesmo cadastrou.</p>
+{html_plano_admin(lg, u)}
 <label class="ck"><input type="checkbox" name="ia" value="1" {"checked" if u.get("ia", True) else ""}> Pode usar recursos com IA (têm custo)</label>
 <label class="ck"><input type="checkbox" name="ativo" value="1" {"checked" if u.get("ativo", True) else ""}> Ativo (desmarque para bloquear o acesso)</label>
 <div class="acoes"><button>Salvar</button><a class="btn sec" href="/admin">Voltar</a></div></form></div>
@@ -6421,6 +6538,17 @@ Usados para calcular o custo de cada uso e o comunicado aos licitantes. <a href=
 <div><label>Acréscimo no repasse %</label><input class="campo" name="IA_ACRESCIMO_PCT" value="{g('IA_ACRESCIMO_PCT', '0')}" style="width:110px"></div></div>
 <label style="font-weight:400;display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" name="IA_COBRAR" value="1" {"checked" if c.get("IA_COBRAR", "1") != "0" else ""}>
 O custo da IA é repassado ao licitante (mostrar o “valor ao licitante”, com o acréscimo, nos avisos e no comunicado)</label>
+<div class="acoes"><button>Salvar</button></div></form></div>
+<h2 style="margin-top:22px">🛒 Página de vendas e teste grátis</h2><div class="form">
+<form method="post" action="/config/vendas"><input type="hidden" name="csrf" value="{CSRF}">
+<p class="sub">A página de vendas aparece para quem abre o endereço do painel sem estar logado (e em <a href="/conheca" target="_blank">/conheca</a>).
+Novos testes avisam no seu Telegram.</p>
+<label class="ck"><input type="checkbox" name="CADASTRO_ABERTO" value="1" {"checked" if c.get("CADASTRO_ABERTO", "1") != "0" else ""}> Permitir que qualquer pessoa crie uma conta de teste grátis</label>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 14px">
+<div><label>Dias de teste</label><input class="campo" name="TESTE_DIAS" value="{g('TESTE_DIAS', '7')}"></div>
+<div><label>Empresas no teste (máx.)</label><input class="campo" name="TESTE_MAX_EMPRESAS" value="{g('TESTE_MAX_EMPRESAS', '2')}"></div>
+<div><label>WhatsApp de vendas <small>(com DDI e DDD)</small></label><input class="campo" name="VENDAS_WHATSAPP" value="{g('VENDAS_WHATSAPP')}" placeholder="5575999999999"></div></div>
+<label class="ck"><input type="checkbox" name="TESTE_IA" value="1" {"checked" if c.get("TESTE_IA", "1") != "0" else ""}> Liberar os recursos com IA no teste (têm custo – acompanhe em Consumo de IA)</label>
 <div class="acoes"><button>Salvar</button></div></form></div>
 <h2 style="margin-top:22px">☀️ Resumo diário no Telegram</h2><div class="form">
 <form method="post" action="/config/resumo"><input type="hidden" name="csrf" value="{CSRF}">
@@ -7429,7 +7557,8 @@ def resumo_usuarios():
                 c = u.get("cfg") or {}
                 g = CFG_ATUAL()
                 padrao_ativo = g.get("RESUMO_ATIVO", "1") != "0"   # quem nunca mexeu recebe (padrão do administrador)
-                if u.get("papel") == "admin" or not u.get("ativo", True) or not (c.get("resumo_ativo", padrao_ativo) and c.get("tg_chat")):
+                if u.get("papel") == "admin" or not u.get("ativo", True) or not (c.get("resumo_ativo", padrao_ativo) and c.get("tg_chat")) \
+                        or (situacao_teste(u) or {}).get("acabou"):
                     continue   # o administrador não recebe resumo com empresas dos usuários
                 try:
                     hora_u = int(c.get("resumo_hora", g.get("RESUMO_HORA", "7")) or 7)
@@ -7486,6 +7615,12 @@ def salvar_empresa(f, eid=None):
     if not nome:
         return "Informe o nome."
     novo = eid is None
+    st_t = situacao_teste(usuario_atual())
+    if novo and st_t:
+        lim = cfg_vendas()["max_emp"]
+        meus = sum(1 for a in EMPRESAS.glob("*.env") if (ler_env(a).get("EMPRESA_DONO") or "").lower() == login_atual()) if EMPRESAS.exists() else 0
+        if meus >= lim:
+            return f"No teste grátis dá para cadastrar até {lim} empresa(s). Fale com a gente para liberar mais."
     dono = (f.get("dono", "").strip().lower() if eh_admin() and usuarios.obter(f.get("dono", "")) else "") or \
         (dono_empresa(eid) if eid else login_atual())
     for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
@@ -7715,6 +7850,11 @@ class Painel(BaseHTTPRequestHandler):
         if u and u.get("ativo", True):
             _REQ.user = u
             caminho = urllib.parse.urlparse(self.path).path.rstrip("/") or "/"
+            st_t = situacao_teste(u)
+            if st_t and st_t["acabou"] and not caminho.startswith(("/teste-encerrado", "/ping", "/conta", "/sair")):
+                if self.command == "GET":
+                    return self.redirecionar("/teste-encerrado") and False
+                return self.negar("O seu teste grátis terminou. Fale com a gente para continuar.")
             q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
             return self.permitido(caminho, q0)
         _REQ.user = None
@@ -7728,6 +7868,52 @@ class Painel(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write("Sessão expirada. Recarregue a página e entre de novo.".encode())
         return False
+
+    def cadastro_teste(self):
+        cv = cfg_vendas()
+        ip = self.ip()
+        tam = int(self.headers.get("Content-Length", "0") or 0)
+        f = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(min(tam, 5000)).decode("utf-8", "ignore"), keep_blank_values=True).items()}
+        if not cv["aberto"]:
+            return self.redirecionar("/conheca")
+        agora = time.time()
+        CADASTROS_IP[ip] = [t for t in CADASTROS_IP.get(ip, []) if agora - t < 86400]
+
+        def volta(msg):
+            return self.enviar(landing.pagina_cadastro(cv["dias"], token_cadastro(), msg, f), 400)
+        if f.get("site") or not token_ok(f.get("t", "")):
+            return volta("Não deu para concluir. Recarregue a página e tente de novo.")
+        if len(CADASTROS_IP[ip]) >= 3:
+            return volta("Muitas contas criadas deste endereço hoje. Fale com a gente pelo WhatsApp.")
+        lg = f.get("login", "").strip().lower()
+        nome = f.get("nome", "").strip()[:80]
+        zap = re.sub(r"\D", "", f.get("whatsapp", ""))[:15]
+        if not nome or len(zap) < 10:
+            return volta("Informe o seu nome e um WhatsApp com DDD.")
+        if f.get("aceite") != "1":
+            return volta("Marque a caixa de concordância para continuar.")
+        if f.get("senha") != f.get("senha2"):
+            return volta("As senhas não conferem.")
+        try:
+            usuarios.criar(lg, nome, f.get("senha", ""), "operador", ia=cv["ia"], por="teste-gratis")
+        except ValueError as ex:
+            return volta(str(ex))
+        ate = date.today() + timedelta(days=cv["dias"])
+        usuarios.salvar_cfg(lg, {"teste_ate": ate.isoformat(), "plano": "teste", "whatsapp": zap,
+                                 "empresa_nome": f.get("empresa", "").strip()[:120]})
+        CADASTROS_IP[ip].append(agora)
+        usuarios.auditar(lg, ip, "criou conta de teste grátis", f"{nome} · {f.get('empresa', '')[:60]}")
+        threading.Thread(target=telegram_geral, args=(f"🆕 <b>Novo teste grátis</b>\n{e(nome)} – {e(f.get('empresa', '')[:80])}\n"
+                                                      f"login <b>{e(lg)}</b> · WhatsApp {e(zap)}\nTeste até {ate:%d/%m/%Y}.",), daemon=True).start()
+        tok = criar_sessao(1, lg, "painel")
+        acesso_novo(ip, self.headers.get("User-Agent", ""))
+        usuarios.marcar_acesso(lg, ip)
+        self.send_response(303)
+        seguro = "; Secure" if self.https() else ""
+        self.send_header("Set-Cookie", f"lt_sessao={tok}; Path=/; HttpOnly; SameSite=Lax{seguro}")
+        self.send_header("Location", "/bem-vindo")
+        self.cabecalhos_seguranca()
+        self.end_headers()
 
     def login(self):
         ip = self.ip()
@@ -7832,6 +8018,14 @@ class Painel(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(dados_p)
             return
+        if caminho in ("", "/conheca") and (caminho == "/conheca" or not self.sessao()[0]):
+            cv = cfg_vendas()
+            return self.enviar(landing.pagina(cv["dias"], cv["whatsapp"], cv["aberto"]))
+        if caminho == "/teste-gratis":
+            cv = cfg_vendas()
+            if not cv["aberto"]:
+                return self.redirecionar("/conheca")
+            return self.enviar(landing.pagina_cadastro(cv["dias"], token_cadastro()))
         if caminho == "/login":
             q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
             return self.enviar(pg_login("", q0.get("destino", "/")))
@@ -7990,6 +8184,8 @@ class Painel(BaseHTTPRequestHandler):
                 return self.baixar(planilhas.csv_bytes(cab, linhas_pl), f"{nome_pl}.csv", "text/csv; charset=utf-8")
             if p == "/lixeira":
                 return self.enviar(pg_lixeira(q))
+            if p == "/teste-encerrado":
+                return self.enviar(pg_teste_encerrado())
             if p == "/avisos":
                 return self.enviar(pg_avisos(q))
             if p == "/bem-vindo":
@@ -8157,6 +8353,8 @@ class Painel(BaseHTTPRequestHandler):
     def do_POST(self):
         if urllib.parse.urlparse(self.path).path.rstrip("/") == "/login":
             return self.login()
+        if urllib.parse.urlparse(self.path).path.rstrip("/") == "/teste-gratis":
+            return self.cadastro_teste()
         if not self.autorizado():
             return
         tam = int(self.headers.get("Content-Length", "0") or 0)
@@ -8523,6 +8721,17 @@ class Painel(BaseHTTPRequestHandler):
                 except ValueError as ex:
                     return self.enviar(pg_admin({}, str(ex), True, f))
                 return self.redirecionar("/admin?ok=usuario_criado")
+            m = re.fullmatch(r"/admin/usuario/([a-z0-9._-]{3,32})/(assinante|estender)", p)
+            if m and usuarios.obter(m.group(1)):
+                lg_p, acao_p = m.groups()
+                if acao_p == "assinante":
+                    usuarios.salvar_cfg(lg_p, {"plano": "assinante"})
+                else:
+                    base = max(date.today(), date.fromisoformat((usuarios.cfg(lg_p).get("teste_ate") or date.today().isoformat())))
+                    usuarios.salvar_cfg(lg_p, {"plano": "teste", "teste_ate": (base + timedelta(days=7)).isoformat()})
+                religar_depois_teste(lg_p)
+                self.auditar(f"plano do usuário {lg_p}: {acao_p}")
+                return self.redirecionar(f"/admin/usuario/{lg_p}?ok=feito")
             m = re.fullmatch(r"/admin/usuario/([a-z0-9._-]{3,32})/(salvar|senha|sessoes|excluir)", p)
             if m and usuarios.obter(m.group(1)):
                 lg, acao = m.groups()
@@ -8687,6 +8896,13 @@ class Painel(BaseHTTPRequestHandler):
                 volta = f.get("voltar", "/disputa")
                 return self.redirecionar((volta if volta.startswith("/") and not volta.startswith("//") else "/disputa")
                                          + ("&" if "?" in volta else "?") + "ok=piso")
+            if p == "/config/vendas":
+                gravar_env(CONFIG, {"CADASTRO_ABERTO": "1" if f.get("CADASTRO_ABERTO") == "1" else "0", "TESTE_IA": "1" if f.get("TESTE_IA") == "1" else "0",
+                                    "TESTE_DIAS": re.sub(r"\D", "", f.get("TESTE_DIAS", "7"))[:2] or "7",
+                                    "TESTE_MAX_EMPRESAS": re.sub(r"\D", "", f.get("TESTE_MAX_EMPRESAS", "2"))[:2] or "2",
+                                    "VENDAS_WHATSAPP": re.sub(r"\D", "", f.get("VENDAS_WHATSAPP", ""))[:15]})
+                self.auditar("alterou a página de vendas / teste grátis")
+                return self.redirecionar("/config?ok=config")
             if p == "/config/resumo":
                 gravar_env(CONFIG, {"RESUMO_ATIVO": "1" if f.get("RESUMO_ATIVO") else "0",
                                     "RESUMO_HORA": re.sub(r"\D", "", f.get("RESUMO_HORA", "7"))[:2] or "7"})
