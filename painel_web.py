@@ -2532,6 +2532,119 @@ def html_cotacao(pid, p, itens):
 </div></details>"""
 
 
+# ------------------------------------------------------------------ ficha do órgão
+PREFIXOS_ORGAO = r"^(prefeitura municipal de|prefeitura de|municipio de|camara municipal de|fundo municipal de saude de|secretaria municipal de \w+ de|governo do estado d[eoa]|estado d[eoa])\s+"
+
+
+def chave_orgao(nome):
+    n = buscas.norm(nome or "")
+    return re.sub(PREFIXOS_ORGAO, "", n).strip()
+
+
+def link_orgao(nome, texto=None):
+    if not (nome or "").strip():
+        return e(texto or "")
+    return f'<a href="/orgao?{e(urllib.parse.urlencode({"nome": nome}))}" title="Ficha do órgão">{e(texto if texto is not None else nome)}</a>'
+
+
+def pct_gap(x):
+    if x.get("gap") is None or x.get("pos") == 1:
+        return ""
+    return "+" + f'{x["gap"]:.1f}%'.replace(".", ",")
+
+
+def pg_orgao(q):
+    nome = q.get("nome", "").strip()[:200]
+    alvo = chave_orgao(nome)
+    if len(alvo) < 3:
+        return pagina("Órgão", "<h2>Informe o órgão</h2>", "/concorrentes")
+    bate = lambda x: bool(x) and (chave_orgao(x) == alvo or (len(alvo) >= 6 and alvo in chave_orgao(x)))  # noqa: E731
+    # disputas que o monitor leu (só das empresas do usuário)
+    lotes, procs, venc = [], set(), {}
+    for emp, db in dbs_usuario():
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+            rows = con.execute("SELECT processo, promotor, lote, descricao, ranking, nossa_pos, nosso_lance, atualizado FROM classificacao").fetchall()
+            con.close()
+        except sqlite3.Error:
+            continue
+        for pr, po, lote, desc, rk, pos, nosso, quando in rows:
+            if not bate(po):
+                continue
+            procs.add((pr, po))
+            try:
+                rank = json.loads(rk or "[]")
+            except ValueError:
+                rank = []
+            validos = sorted([r for r in rank if not r.get("excluido") and r.get("valor")], key=lambda r: r.get("pos") or 999)
+            v1 = validos[0] if validos else {}
+            if v1.get("nome"):
+                d = venc.setdefault(v1["nome"], {"n": 0, "tipo": v1.get("tipo", "")})
+                d["n"] += 1
+            nv = resultados.valor(nosso)
+            gap = (nv - resultados.valor(v1.get("valor"))) / resultados.valor(v1.get("valor")) * 100 if nv and v1.get("valor") else None
+            lotes.append({"emp": emp, "processo": pr, "lote": lote, "desc": desc or "", "pos": pos, "nosso": nv, "venc": v1.get("nome", ""),
+                          "venc_v": resultados.valor(v1.get("valor")), "gap": gap, "quando": quando or "", "n": len(rank)})
+    ganhos = sum(1 for x in lotes if x["pos"] == 1)
+    com_lance = [x for x in lotes if x["nosso"]]
+    gaps = [x["gap"] for x in com_lance if x["gap"] is not None and x["pos"] != 1]
+    # pagamentos (contratos e notas fiscais do usuário com este órgão)
+    notas, dias_atraso, abertas_atras = [], [], 0
+    contr = [c for c in contratos.listar() if visivel(c.get("empresa"), c.get("usuario")) and bate(c.get("orgao"))]
+    for c in contr:
+        for n_ in c.get("notas") or []:
+            notas.append(n_)
+            v = contratos.vencimento(n_)
+            if n_.get("pago_em") and v:
+                pg = contratos._d(n_["pago_em"])
+                if pg:
+                    dias_atraso.append((pg - v).days)
+            elif contratos.situacao_nota(n_) == "atrasada":
+                abertas_atras += 1
+    pagas_atras = sum(1 for d in dias_atraso if d > 0)
+    if not notas:
+        selo = '<span class="tag parado">sem notas lançadas ainda</span>'
+    elif abertas_atras or (dias_atraso and statistics.mean(dias_atraso) > 15):
+        selo = '<span class="tag erro">🔴 costuma atrasar</span>'
+    elif pagas_atras:
+        selo = '<span class="tag aviso">🟠 às vezes atrasa</span>'
+    else:
+        selo = '<span class="tag ok">🟢 paga em dia</span>'
+    cards = [c for c in kanban.listar() if visivel(c.get("empresa"), c.get("usuario")) and bate(c.get("orgao"))]
+    ats = [a for a in atas.listar() if visivel(a.get("empresa"), a.get("usuario")) and bate(a.get("orgao"))]
+    top = "".join(f'<li><b>{e(n_)}</b> <span class="sub">{e(d["tipo"])}</span> – venceu {d["n"]} lote(s)</li>'
+                  for n_, d in sorted(venc.items(), key=lambda kv: -kv[1]["n"])[:8])
+    l_lotes = "".join(
+        f'<tr><td>{e(x["processo"])}<div class="sub">L{e(nlote(x["lote"]))} · {e(x["emp"])}</div></td><td>{e(x["desc"][:80])}</td>'
+        f'<td>{(str(x["pos"]) + "º de " + str(x["n"])) if x["pos"] else "—"}</td><td class="num">{propostas.brl(x["nosso"]) if x["nosso"] else "—"}</td>'
+        f'<td>{e(x["venc"][:40])}<div class="sub">{propostas.brl(x["venc_v"]) if x["venc_v"] else ""}</div></td>'
+        f'<td class="num">{pct_gap(x)}</td></tr>'
+        for x in sorted(lotes, key=lambda x: x["quando"], reverse=True)[:40])
+    l_contr = "".join(f'<li><a href="/contratos/{e(c["id"])}">{e(c.get("processo") or "contrato")}</a> – {contratos.brl(contratos.totais(c)["contratado"])}'
+                      f' · recebido {contratos.brl(contratos.totais(c)["recebido"])}</li>' for c in contr)
+    l_cards = "".join(f'<li><a href="/licitacoes/{e(c["id"])}">{e(c.get("processo") or "licitação")}</a> <span class="sub">{e(c.get("empresa", ""))} · '
+                      f'{e(dict(kanban.ETAPAS).get(c.get("etapa") or "", ""))}</span></li>' for c in cards[:20])
+    media_atraso = statistics.mean(dias_atraso) if dias_atraso else None
+    pncp = "https://pncp.gov.br/app/editais?" + urllib.parse.urlencode({"q": nome})
+    corpo = f"""<style>td.num{{text-align:right;white-space:nowrap}}</style><h2>🏛️ {e(nome)}</h2>
+<p class="sub">Ficha do órgão com o que <b>você</b> já viveu com ele: disputas lidas pelo monitor, quem costuma ganhar, contratos e pagamentos.
+<a href="{e(pncp)}" target="_blank" rel="noopener">Ver as licitações dele no PNCP</a>.</p>
+<div class="kpis"><div class="kpi"><div class="v">{len(procs)}</div><div class="l">processo(s) disputado(s)</div></div>
+<div class="kpi"><div class="v">{ganhos} / {len(com_lance)}</div><div class="l">lotes ganhos / com lance</div></div>
+<div class="kpi"><div class="v">{("+" + f"{statistics.median(gaps):.1f}%".replace(".", ",")) if gaps else "—"}</div><div class="l">diferença mediana p/ o vencedor</div></div>
+<div class="kpi"><div class="v">{selo}</div><div class="l">{len(notas)} nota(s) · {("atraso médio " + f"{media_atraso:.0f}" + " dia(s)") if media_atraso is not None else "pagamento"}{(" · " + str(abertas_atras) + " em atraso agora") if abertas_atras else ""}</div></div></div>
+<div class="duas-adm" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:10px">
+<div class="form" style="max-width:none"><h3 style="margin-top:0">🥇 Quem costuma ganhar aqui</h3><ul>{top or "<li class=sub>Sem disputas lidas ainda.</li>"}</ul></div>
+<div class="form" style="max-width:none"><h3 style="margin-top:0">💼 Contratos e licitações</h3>
+<ul>{l_contr or "<li class=sub>Nenhum contrato com este órgão.</li>"}</ul>
+{("<p class=sub style='margin:6px 0 0'>Atas: " + ", ".join(f'<a href="/atas/{e(a["id"])}">{e(a.get("numero") or "ata")}</a>' for a in ats) + "</p>") if ats else ""}
+<ul>{l_cards}</ul></div></div>
+<h3>Lotes disputados</h3><table><tr><th>Processo</th><th>Descrição</th><th>Sua posição</th><th class="num">Seu lance</th><th>Vencedor</th><th class="num">Diferença</th></tr>
+{l_lotes or '<tr><td colspan="6">Nenhum lote deste órgão na classificação lida pelo monitor.</td></tr>'}</table>
+<p class="sub">“Paga em dia” vem das notas fiscais que você lança em Contratos (vencimento × data do pagamento). Quanto mais você lança, mais confiável fica.</p>"""
+    return pagina("Ficha do órgão", corpo, "/concorrentes")
+
+
 def chave_preco(it):
     return buscas.norm(it.get("descricao") or "")[:160] + "|" + buscas.norm(it.get("unidade") or "")
 
@@ -2938,7 +3051,7 @@ def pg_contratos(q, aviso="", erro=False):
                                         f'🚚 {t["entregas_atrasadas"]} entrega(s) atrasada(s)' if t["entregas_atrasadas"] else "",
                                         f'⏰ {t["entregas_perto"]} entrega(s) perto do prazo' if t["entregas_perto"] else ""] if x)
         linhas += (f'<tr><td><a href="/contratos/{e(c["id"])}"><b>{e(c.get("processo") or "sem nº")}</b></a>'
-                   f'{" · contrato " + e(c["numero"]) if c.get("numero") else ""}<div class="sub">{e(c.get("orgao", ""))}</div>'
+                   f'{" · contrato " + e(c["numero"]) if c.get("numero") else ""}<div class="sub">{link_orgao(c.get("orgao", ""))}</div>'
                    f'<div class="sub" style="color:var(--erro)">{e(alerta)}</div></td><td>{e(c.get("empresa", ""))}</td>'
                    f'<td>{contratos.brl(t["contratado"])}</td><td class="ocultar">{contratos.brl(t["faturado"])}</td>'
                    f'<td>{contratos.brl(t["recebido"])}<div class="barra-p"><span style="width:{pct}%"></span></div></td>'
@@ -3590,7 +3703,7 @@ def pg_licitacao(cid, aviso="", erro=False):
     etapa_nome = dict(kanban.ETAPAS).get(info["etapa"], "")
     opts = "".join(f'<option value="{k}" {"selected" if k == card.get("etapa_manual") else ""}>{n}</option>' for k, n in kanban.ETAPAS)
     corpo = f"""{ESTILO_KANBAN}<p><a href="/licitacoes">← Minhas licitações</a></p>
-<h2>{e(card.get("processo") or "Licitação")} <small class="sub">{e(card.get("orgao", ""))} · {e(nome)}</small></h2>
+<h2>{e(card.get("processo") or "Licitação")} <small class="sub">{link_orgao(card.get("orgao", ""))} · {e(nome)}</small></h2>
 <div class="form" style="max-width:none"><div class="linha" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
 <b>{etapa_nome} · {info["progresso"]}% pronto</b><span class="sub">{("⏰ abertura " + _dt_hora(info["abertura"])) if info.get("abertura") else ""}{(" · 👤 " + e(card["responsavel"])) if card.get("responsavel") else ""}
 {(" · situação: " + e(m.get("situacao", ""))) if m.get("situacao") else ""}</span></div>
@@ -3881,7 +3994,7 @@ def pg_resultado(q):
         (r["disputados"], "lotes com lance"), (r["ganhos"], "em 1º lugar"), (r["perdidos"], "perdidos"),
         (r["triz"] + r["perto"], "perdidos por até 5%"), (gap_med, "diferença mediana"))) + "</div>"
     dic = "".join(f"<li>{d}</li>" for d in a["dicas"])
-    corpo = f"""<h2>🔎 Por que perdi? – {e(proc)}</h2><p class="sub">{e(nome)} · {e(prom)}</p>
+    corpo = f"""<h2>🔎 Por que perdi? – {e(proc)}</h2><p class="sub">{e(nome)} · {link_orgao(prom)}</p>
 <p><a class="btn sec" href="/classificacao?{e(urllib.parse.urlencode({"empresa": eid, "processo": proc, "promotor": prom}))}">📊 Classificação completa</a>
 {f'<a class="btn sec" href="/propostas/{e(prop["id"])}">💰 Proposta</a>' if prop else ""}</p>
 {kp if a["lotes"] else ""}
@@ -6091,7 +6204,7 @@ def pg_oportunidades(q, aviso=""):
         cards += f"""<div class="card{' lote-oculto' if n_card >= LOTE_CARDS else ''}" data-lid="{e(str(r.get('id') or ''))}" style="border-left-color:{cor}">
 <div class="sub"><b style="color:{cor}">{rot}</b> · {r.get('pontos', 0)} pts {'<span class="tag-nova">NOVA</span>' if nova else ''}
 · {e(r.get('modalidade') or '')} · {e(r.get('titulo') or '')}</div>
-<div class="nome" style="margin:4px 0">{e(r.get('orgao') or '')}</div>
+<div class="nome" style="margin:4px 0">{link_orgao(r.get('orgao') or '')}</div>
 <div class="sub"><b>{e(r.get('municipio') or '')}/{e(r.get('uf') or '')}</b> · publicada {e(buscas.data_br(r.get('publicada')))}
 {f" · 📍 <b>{round(r['_km'])} km</b> de {e(base)}" if r.get('_km') is not None else ''}</div>
 <p style="margin:8px 0;font-size:14px">{e(r.get('objeto') or '')}</p>
@@ -7144,6 +7257,8 @@ class Painel(BaseHTTPRequestHandler):
                 tipo_a = mimetypes.guess_type(arq_a.name)[0] or "application/octet-stream"
                 nome_h = re.sub(r"[^A-Za-z0-9._ -]", "_", unicodedata.normalize("NFKD", arq_a.name).encode("ascii", "ignore").decode()) or "atestado"
                 return self.baixar(arq_a.read_bytes(), nome_h, tipo_a, na_tela=True)
+            if p == "/orgao":
+                return self.enviar(pg_orgao(q))
             if p == "/resultado":
                 return self.enviar(pg_resultado(q))
             if p == "/relatorio":
