@@ -2145,6 +2145,7 @@ details.dica ul{{padding-left:14px;margin:4px 0}}
 <h2 style="margin-top:4px">💰 Proposta – {e(p.get("processo") or "sem nº")} <small class="sub">{e(p.get("empresa", ""))}</small></h2>
 {aviso_falta}{bloco_ia}
 {html_readequar(pid, p, itens)}
+{html_cotacao(pid, p, itens)}
 {html_formacao(pid, p, itens)}
 {ESTILO_CONF}<details class="op-perfil" id="conferencia" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if itens else ""}>
 <summary style="display:block;cursor:pointer;padding:10px 14px">✅ <b>Conferência antes de enviar</b> –
@@ -2470,6 +2471,65 @@ def _proc_monitor(db, np_):
     except sqlite3.Error:
         pass
     return ""
+
+
+# ------------------------------------------------------------------ cotação com fornecedores
+def chave_item(it):
+    return hashlib.sha1(buscas.norm(it.get("descricao") or "").encode()).hexdigest()[:8]
+
+
+def texto_cotacao(p, itens, ctx):
+    linhas = "\n".join(f"{n}) {(it.get('descricao') or '')[:300]} – {propostas.qtd_txt(it['_q'])} {it.get('unidade') or 'un'}"
+                       for n, it in enumerate(itens, 1))
+    return (f"Olá! Aqui é da {ctx.get('razao') or p.get('empresa', '')}.\n"
+            f"Gostaria de uma cotação para os itens abaixo (licitação {p.get('processo') or ''} – {p.get('orgao') or ''}):\n\n{linhas}\n\n"
+            "Por favor, informe: preço unitário de cada item, marca/modelo, prazo de entrega, se o frete está incluso e a validade da cotação.\n"
+            "Se tiver, mande também a ficha técnica dos produtos. Obrigado!")
+
+
+def html_cotacao(pid, p, itens):
+    if not itens:
+        return ""
+    ctx = ctx_proposta(p)
+    cot = p.get("cotacoes") or {}
+    forns = cot.get("fornecedores") or []
+    precos_c = cot.get("precos") or {}
+    texto = texto_cotacao(p, itens, ctx)
+    cab = "".join(f'<th class="num">{e(fo["nome"])}<div class="sub">{e(fo.get("prazo", ""))}{(" · frete " + e(fo["frete_un"]) + "/un") if fo.get("frete_un") else ""}</div>'
+                  f'{botao("/propostas/" + pid + "/cotacao/" + fo["id"] + "/excluir", "✕", "sec", "Remover este fornecedor da cotação?")}</th>' for fo in forns)
+    linhas = ""
+    for n, it in enumerate(itens, 1):
+        k = chave_item(it)
+        vals = [(propostas.num((precos_c.get(fo["id"]) or {}).get(k)) + propostas.num(fo.get("frete_un")), fo) for fo in forns
+                if propostas.num((precos_c.get(fo["id"]) or {}).get(k))]
+        melhor = min(vals, key=lambda x: x[0]) if vals else None
+        celulas = "".join(
+            f'<td class="num"><input class="campo fnum" name="c_{fo["id"]}_{k}" value="{e((precos_c.get(fo["id"]) or {}).get(k, ""))}" placeholder="0,00"'
+            f'{" style=border-color:#2e7d32;font-weight:700" if melhor and melhor[1]["id"] == fo["id"] else ""}></td>' for fo in forns)
+        linhas += (f'<tr><td><b>{n}</b> {e((it.get("descricao") or "")[:70])}<div class="sub">{propostas.qtd_txt(it["_q"])} {e(it.get("unidade") or "")}'
+                   f'{(" · custo atual " + propostas.brl(propostas.num(it["custo"]))) if it.get("custo") else ""}</div></td>{celulas}'
+                   f'<td class="num">{(propostas.brl(melhor[0]) + "<div class=sub>" + e(melhor[1]["nome"]) + "</div>") if melhor else "—"}</td></tr>')
+    tabela = (f"""<form method="post" action="/propostas/{pid}/cotacao" style="margin-top:10px"><input type="hidden" name="csrf" value="{CSRF}">
+<div style="overflow-x:auto"><table><tr><th>Item</th>{cab}<th class="num">Melhor</th></tr>{linhas}</table></div>
+<div class="acoes"><button class="sec" name="acao" value="precos">💾 Salvar preços</button>
+<button name="acao" value="usar">✅ Salvar e usar o melhor preço como custo (vai para a formação de preço)</button></div></form>""") if forns else ""
+    wa = "https://wa.me/?text=" + urllib.parse.quote(texto)
+    mail = "mailto:?subject=" + urllib.parse.quote(f"Pedido de cotação – {p.get('processo') or ''}") + "&body=" + urllib.parse.quote(texto)
+    return f"""<details class="op-perfil" id="cotacao" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)">
+<summary style="display:block;cursor:pointer;padding:10px 14px">🛒 <b>Cotação com fornecedores</b> <span class="sub">({len(forns)} fornecedor(es))</span></summary>
+<div style="padding:0 14px 12px">
+<p class="sub"><b>1)</b> Copie o pedido de cotação e mande para os seus fornecedores (o sistema não envia nada – você manda pelo seu WhatsApp/e-mail).</p>
+<textarea class="campo" id="txt-cot" rows="7" style="max-width:100%;font-size:12.5px">{e(texto)}</textarea>
+<div class="acoes"><button type="button" class="sec" onclick="navigator.clipboard.writeText(document.getElementById('txt-cot').value);this.textContent='✅ Copiado'">📋 Copiar o texto</button>
+<a class="btn sec" href="{e(wa)}" target="_blank" rel="noopener">💬 Abrir no WhatsApp</a><a class="btn sec" href="{e(mail)}">✉️ Abrir no e-mail</a></div>
+<p class="sub" style="margin-top:12px"><b>2)</b> Cadastre quem respondeu e lance os preços unitários. O menor (com o frete por unidade) fica em destaque.</p>
+<form method="post" action="/propostas/{pid}/cotacao" class="linha" style="gap:6px;flex-wrap:wrap;align-items:flex-end"><input type="hidden" name="csrf" value="{CSRF}">
+<input type="hidden" name="acao" value="fornecedor"><div><label>Fornecedor</label><input class="campo" name="nome" required style="max-width:220px;margin:0"></div>
+<div><label>Contato</label><input class="campo" name="contato" style="max-width:180px;margin:0"></div>
+<div><label>Frete R$/un. <small>(se não incluso)</small></label><input class="campo" name="frete_un" style="max-width:110px;margin:0"></div>
+<div><label>Prazo de entrega</label><input class="campo" name="prazo" style="max-width:140px;margin:0"></div><button class="sec">➕ Adicionar fornecedor</button></form>
+{tabela}
+</div></details>"""
 
 
 def chave_preco(it):
@@ -8089,6 +8149,35 @@ class Painel(BaseHTTPRequestHandler):
                 nome = catalogo.ler(m.group(1)).get("empresa", "")
                 catalogo.excluir(m.group(1))
                 return self.redirecionar("/catalogo?" + urllib.parse.urlencode({"emp": nome, "ok": "feito"}))
+            m = re.fullmatch(r"/propostas/([0-9a-f]{12})/cotacao(?:/([0-9a-f]{8})/excluir)?", p)
+            if m and propostas.ler(m.group(1)):
+                pid, fid = m.groups()
+                prop = propostas.ler(pid)
+                cot = prop.setdefault("cotacoes", {"fornecedores": [], "precos": {}})
+                cot.setdefault("fornecedores", [])
+                cot.setdefault("precos", {})
+                if fid:
+                    cot["fornecedores"] = [x for x in cot["fornecedores"] if x["id"] != fid]
+                    cot["precos"].pop(fid, None)
+                elif f.get("acao") == "fornecedor" and f.get("nome", "").strip():
+                    cot["fornecedores"].append({"id": secrets.token_hex(4), "nome": f["nome"].strip()[:100], "contato": f.get("contato", "").strip()[:100],
+                                                "frete_un": f.get("frete_un", "").strip()[:20], "prazo": f.get("prazo", "").strip()[:60]})
+                elif f.get("acao") in ("precos", "usar"):
+                    for k, v in f.items():
+                        mm = re.fullmatch(r"c_([0-9a-f]{8})_([0-9a-f]{8})", k)
+                        if mm and any(x["id"] == mm.group(1) for x in cot["fornecedores"]):
+                            cot["precos"].setdefault(mm.group(1), {})[mm.group(2)] = v.strip()[:20]
+                    if f.get("acao") == "usar":
+                        for it in prop.get("itens") or []:
+                            k = chave_item(it)
+                            vals = [(propostas.num(cot["precos"].get(fo["id"], {}).get(k)) + propostas.num(fo.get("frete_un")), fo)
+                                    for fo in cot["fornecedores"] if propostas.num(cot["precos"].get(fo["id"], {}).get(k))]
+                            if vals:
+                                v, fo = min(vals, key=lambda x: x[0])
+                                it["custo"] = propostas.unit_txt(v)
+                                it["fornecedor_cot"] = fo["nome"]
+                propostas.gravar(pid, prop)
+                return self.redirecionar(f"/propostas/{pid}?ok={'formacao' if f.get('acao') == 'usar' else 'feito'}#{'formacao' if f.get('acao') == 'usar' else 'cotacao'}")
             m = re.fullmatch(r"/propostas/([0-9a-f]{12})/formacao", p)
             if m and propostas.ler(m.group(1)):
                 pid = m.group(1)
