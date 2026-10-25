@@ -44,6 +44,7 @@ import documentos
 import geo
 import ajuda
 import atas
+import catalogo
 import atestados
 import kanban
 import resultados
@@ -58,7 +59,8 @@ EMPRESAS = PASTA / "empresas"
 CONFIG = PASTA / "config.env"
 PY = PASTA / "venv" / "bin" / "python"
 CSRF = secrets.token_hex(16)
-AVISOS = {"readequada": "📝 Proposta readequada criada (a original foi mantida). Confira os preços e baixe em Word/PDF.",
+AVISOS = {"formacao": "🧮 Custos salvos. O lance mínimo de cada lote virou o piso na 🎯 Disputa (nos lotes que o monitor já conhece).",
+          "readequada": "📝 Proposta readequada criada (a original foi mantida). Confira os preços e baixe em Word/PDF.",
           "migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "pref": "Configurações salvas.", "pref_aplicadas": "Configurações salvas e aplicadas em todas as suas empresas (monitores reiniciados).",
           "pref_chat": "Pronto! Conversa ligada e aplicada em todas as suas empresas – chegou uma mensagem de confirmação no seu Telegram.",
@@ -2104,7 +2106,9 @@ def pg_proposta(pid, aviso="", erro=False):
                 f'<td><input name="i_marca" value="{e(it.get("marca") or "")}"></td>'
                 f'<td><input name="i_un" value="{e(it.get("unidade") or "")}" class="mini"></td>'
                 f'<td><input name="i_qtd" value="{e(str(it.get("qtd") or ""))}" class="num" oninput="calc()"></td>'
-                f'<td><input name="i_unit" value="{e(str(it.get("unit") or ""))}" class="num" oninput="calc()" placeholder="0,00">'
+                f'<td><input type="hidden" name="i_custo" value="{e(str(it.get("custo") or ""))}"><input type="hidden" name="i_frete" value="{e(str(it.get("frete") or ""))}">'
+                f'<input type="hidden" name="i_prod" value="{e(str(it.get("produto_id") or ""))}">'
+                f'<input name="i_unit" value="{e(str(it.get("unit") or ""))}" class="num" oninput="calc()" placeholder="0,00">'
                 f'{f"<div class=ref>ref. órgão {propostas.brl(ref)}</div>" if ref else ""}{dica_preco(it)}{dica_hist(it)}<input type="hidden" name="i_ref" value="{e(str(it.get("ref") or ""))}"></td>'
                 f'<td class="tot{" acima" if acima else ""}">{propostas.brl(it["_t"], False)}</td>'
                 f'<td><button type="button" class="sec mini-b" onclick="this.closest(\'tr\').remove();calc()" title="Remover">✕</button></td></tr>')
@@ -2140,6 +2144,7 @@ details.dica ul{{padding-left:14px;margin:4px 0}}
 <h2 style="margin-top:4px">💰 Proposta – {e(p.get("processo") or "sem nº")} <small class="sub">{e(p.get("empresa", ""))}</small></h2>
 {aviso_falta}{bloco_ia}
 {html_readequar(pid, p, itens)}
+{html_formacao(pid, p, itens)}
 {ESTILO_CONF}<details class="op-perfil" id="conferencia" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if itens else ""}>
 <summary style="display:block;cursor:pointer;padding:10px 14px">✅ <b>Conferência antes de enviar</b> –
 {sum(1 for n, _ in conf if n == "erro")} erro(s) · {sum(1 for n, _ in conf if n == "atencao")} atenção</summary>
@@ -2214,8 +2219,8 @@ function usar(b,v){{const td=b.closest('td');td.querySelector('[name=i_unit]').v
 function novaLinha(){{const tb=document.getElementById('itens');const tr=document.createElement('tr');
  tr.innerHTML='<td><input name="i_lote" class="mini"></td><td><input name="i_item" class="mini" value="'+(tb.children.length+1)+'"></td><td><textarea name="i_desc" rows="2"></textarea></td>'+
  '<td><input name="i_marca"></td><td><input name="i_un" class="mini" value="UN"></td><td><input name="i_qtd" class="num" oninput="calc()"></td>'+
- '<td><input name="i_unit" class="num" oninput="calc()" placeholder="0,00"><input type="hidden" name="i_ref"></td><td class="tot">0,00</td>'+
- '<td><button type="button" class="sec mini-b" onclick="this.closest(\'tr\').remove();calc()">✕</button></td>';tb.appendChild(tr);}}
+ '<td><input type="hidden" name="i_custo"><input type="hidden" name="i_frete"><input type="hidden" name="i_prod"><input name="i_unit" class="num" oninput="calc()" placeholder="0,00"><input type="hidden" name="i_ref"></td><td class="tot">0,00</td>'+
+ '<td><button type="button" class="sec mini-b" onclick="this.closest(\\'tr\\').remove();calc()">✕</button></td>';tb.appendChild(tr);}}
 </script>"""
     if ia.get("status") == "pronto" and ia.get("quando", "") > (p.get("visto_ia") or ""):
         p["visto_ia"] = ia.get("quando", "")
@@ -2288,6 +2293,182 @@ def html_readequar(pid, p, itens):
 <div class="linha" style="gap:8px;align-items:center;margin-top:8px"><label style="margin:0">Casas decimais do preço unitário</label>
 <select class="campo" name="casas" style="max-width:90px;margin:0"><option>2</option><option>3</option><option>4</option></select>
 <button>📝 Gerar a proposta readequada</button></div></form></details>"""
+
+
+# ------------------------------------------------------------------ catálogo de produtos e formação de preço
+def pg_catalogo(q, aviso="", erro=False):
+    emps = sorted(nomes_empresas())
+    if not emps:
+        return pagina("Catálogo", f"<h2>📄 Documentos</h2>{abas_doc('cat')}<p>Cadastre uma empresa primeiro.</p>", "/documentos")
+    emp = q.get("emp", "") if q.get("emp", "") in emps else emps[0]
+    prm = catalogo.param(emp)
+    busca = q.get("q", "").strip()
+    prods = [x for x in catalogo.listar(emp) if not busca or buscas.norm(busca) in buscas.norm(" ".join(str(x.get(k, "")) for k in ("nome", "descricao", "marca", "modelo", "palavras")))]
+    linhas = ""
+    for x in prods:
+        xid = x["id"]
+        calc = catalogo.calcular(x.get("custo"), prm.get("frete"), prm)
+        fic = f'<a href="/catalogo/{xid}/ficha" target="_blank">📄 ficha</a>' if catalogo.ficha(xid) else '<span class="sub">sem ficha</span>'
+        form = (f'<details><summary class="sub" style="cursor:pointer">✎ editar</summary><form method="post" action="/catalogo/salvar" enctype="multipart/form-data" style="margin-top:6px">'
+                f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="pid" value="{xid}"><input type="hidden" name="empresa" value="{e(emp)}">'
+                + "".join(f'<label>{rot}</label><input class="campo" name="{k}" value="{e(x.get(k, ""))}">' for k, rot in (
+                    ("nome", "Nome"), ("descricao", "Descrição técnica"), ("marca", "Marca"), ("modelo", "Modelo"), ("unidade", "Unidade"),
+                    ("custo", "Custo de compra (R$ por unidade)"), ("fornecedor", "Fornecedor"), ("codigo", "Código"),
+                    ("palavras", "Palavras para achar no edital (ex.: papel higiênico folha dupla)")))
+                + '<label>Trocar a ficha técnica (PDF/imagem)</label><input type="file" name="ficha" accept=".pdf,.png,.jpg,.jpeg">'
+                f'<div class="acoes"><button>Salvar</button></div></form></details>')
+        linhas += (f'<tr><td><b>{e(x.get("nome", ""))}</b><div class="sub">{e((x.get("descricao") or "")[:120])}</div>{form}</td>'
+                   f'<td>{e(x.get("marca", ""))}<div class="sub">{e(x.get("modelo", ""))}</div></td><td>{e(x.get("unidade", ""))}</td>'
+                   f'<td class="num">{propostas.brl(catalogo.num(x.get("custo"))) if x.get("custo") else "—"}<div class="sub">{e(x.get("fornecedor", ""))}</div></td>'
+                   f'<td class="num">{propostas.brl(calc["preco"]) if calc else "—"}<div class="sub">mín. {propostas.brl(calc["minimo"]) if calc else "—"}</div></td>'
+                   f'<td>{fic}</td><td>{botao("/catalogo/" + xid + "/excluir", "🗑", "sec", "Apagar este produto?")}</td></tr>')
+    opc = "".join(f'<option value="{e(n)}" {"selected" if n == emp else ""}>{e(n)}</option>' for n in emps)
+    inp = lambda k, rot, dica="": (f'<div><label>{rot} {("<small>(" + dica + ")</small>") if dica else ""}</label>'  # noqa: E731
+                                   f'<input class="campo" name="{k}" value="{e(prm.get(k, ""))}" style="max-width:130px"></div>')
+    corpo = f"""<style>td.num,th.num{{text-align:right;white-space:nowrap}}.grade{{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:4px 14px}}</style>
+<h2>📄 Documentos</h2>{abas_doc("cat")}
+<p class="sub">Cadastre os produtos que você vende (marca, modelo, custo, fornecedor e ficha técnica). Na proposta, cada item do edital puxa o produto
+parecido do catálogo e a <b>formação de preço</b> calcula o preço da proposta e o <b>lance mínimo</b> (que vira o piso na 🎯 Disputa).</p>
+<div class="acoes"><select class="campo" style="max-width:260px" onchange="location.href='/catalogo?emp='+encodeURIComponent(this.value)">{opc}</select></div>
+<details class="form" style="max-width:none;margin:10px 0"><summary><b>🧮 Formação de preço – percentuais padrão de {e(emp)}</b></summary>
+<form method="post" action="/catalogo/param"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="empresa" value="{e(emp)}">
+<p class="sub">Percentuais sobre o <b>preço de venda</b> (markup divisor): preço = (custo + frete) ÷ (1 − (impostos + comissão + despesas + margem) ÷ 100).
+O <b>lance mínimo</b> usa a margem mínima. Impostos: no Simples, a alíquota efetiva do seu DAS; no Presumido/Real, PIS, COFINS, IRPJ, CSLL e ICMS/ISS –
+<b>confirme com o seu contador</b>.</p>
+<div class="grade">{inp("impostos", "Impostos %")}{inp("comissao", "Comissão %")}{inp("despesas", "Despesas adm. %", "aluguel, pessoal…")}
+{inp("margem", "Margem desejada %")}{inp("margem_min", "Margem mínima %", "piso do lance")}{inp("frete", "Frete padrão R$/un.")}</div>
+<div class="acoes"><button>Salvar percentuais</button></div></form></details>
+<details class="form" style="max-width:none;margin:10px 0" {"open" if not catalogo.listar(emp) else ""}><summary><b>➕ Cadastrar produto</b></summary>
+<form method="post" action="/catalogo/salvar" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="empresa" value="{e(emp)}">
+<div class="grade" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr))">
+<div><label>Nome</label><input class="campo" name="nome" required placeholder="ex.: Papel higiênico folha dupla 30m"></div>
+<div><label>Marca</label><input class="campo" name="marca"></div><div><label>Modelo</label><input class="campo" name="modelo"></div>
+<div><label>Unidade</label><input class="campo" name="unidade" placeholder="pct, un, cx…"></div>
+<div><label>Custo de compra (R$/un.)</label><input class="campo" name="custo" placeholder="0,00"></div>
+<div><label>Fornecedor</label><input class="campo" name="fornecedor"></div></div>
+<label>Descrição técnica</label><textarea class="campo" name="descricao" rows="2"></textarea>
+<label>Palavras para achar no edital <small>(opcional)</small></label><input class="campo" name="palavras">
+<label>Ficha técnica <small>(PDF ou imagem – entra no pacote de habilitação)</small></label><input type="file" name="ficha" accept=".pdf,.png,.jpg,.jpeg">
+<div class="acoes"><button>Cadastrar</button></div></form></details>
+<form method="get" action="/catalogo" class="acoes"><input type="hidden" name="emp" value="{e(emp)}"><input class="campo" name="q" value="{e(busca)}" placeholder="Buscar produto…" style="max-width:320px"><button class="sec">Buscar</button></form>
+<table><tr><th>Produto</th><th>Marca / modelo</th><th>Unid.</th><th class="num">Custo</th><th class="num">Preço calculado</th><th>Ficha</th><th></th></tr>
+{linhas or '<tr><td colspan="7">Nenhum produto cadastrado.</td></tr>'}</table>"""
+    return pagina("Catálogo de produtos", corpo, "/documentos", aviso, erro)
+
+
+def html_formacao(pid, p, itens):
+    if not itens:
+        return ""
+    emp = p.get("empresa", "")
+    prm = {**catalogo.param(emp), **(p.get("param_preco") or {})}
+    prods = catalogo.listar(emp)
+    linhas, n_custo = "", 0
+    for i, it in enumerate(itens):
+        sug = catalogo.sugerir(emp, it.get("descricao") or "")
+        ids_sug = {x["id"] for _, x in sug}
+        atual = it.get("produto_id") or ""
+        opts = '<option value="">— sem produto —</option>'
+        if sug:
+            opts += '<optgroup label="⭐ parecidos">' + "".join(
+                f'<option value="{x["id"]}" data-custo="{e(x.get("custo", ""))}" {"selected" if x["id"] == atual else ""}>{e(x.get("nome", "")[:60])} · {e(x.get("marca", ""))}</option>'
+                for _, x in sug) + "</optgroup>"
+        outros = [x for x in prods if x["id"] not in ids_sug][:150]
+        if outros:
+            opts += '<optgroup label="todos">' + "".join(
+                f'<option value="{x["id"]}" data-custo="{e(x.get("custo", ""))}" {"selected" if x["id"] == atual else ""}>{e(x.get("nome", "")[:60])} · {e(x.get("marca", ""))}</option>'
+                for x in outros) + "</optgroup>"
+        custo = it.get("custo") or ""
+        n_custo += bool(catalogo.num(custo))
+        linhas += (f'<tr class="fp"><td><b>{e(str(it.get("item") or i + 1))}</b> {e((it.get("descricao") or "")[:70])}<div class="sub">qtd {propostas.qtd_txt(it["_q"])} {e(it.get("unidade") or "")}</div></td>'
+                   f'<td><select class="campo" name="f_prod" onchange="pegaCusto(this)" style="max-width:230px;margin:0">{opts}</select>'
+                   f'{"<div class=sub>⭐ " + str(len(sug)) + " sugestão(ões)</div>" if sug and not atual else ""}</td>'
+                   f'<td><input class="campo fnum" name="f_custo" value="{e(custo)}" oninput="fcalc()" placeholder="0,00"></td>'
+                   f'<td><input class="campo fnum" name="f_frete" value="{e(it.get("frete") or "")}" oninput="fcalc()" placeholder="{e(prm.get("frete", ""))}"></td>'
+                   f'<td class="num c-preco">—</td><td class="num c-min">—</td><td class="num" data-atual="{it["_u"]}">{propostas.brl(it["_u"]) if it["_u"] else "—"}<div class="sub c-marg"></div></td></tr>')
+    inp = lambda k, rot: f'<label class="sub">{rot}<input class="campo fnum fp-p" name="p_{k}" value="{e(prm.get(k, ""))}" oninput="fcalc()"></label>'  # noqa: E731
+    return f"""<details class="op-perfil" id="formacao" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)">
+<summary style="display:block;cursor:pointer;padding:10px 14px">🧮 <b>Formação de preço</b> – custo, impostos, margem e lance mínimo
+<span class="sub">({n_custo} de {len(itens)} item(ns) com custo)</span></summary>
+<form method="post" action="/propostas/{pid}/formacao" style="padding:0 14px 12px"><input type="hidden" name="csrf" value="{CSRF}">
+<p class="sub">Escolha o produto do <a href="/catalogo?emp={urllib.parse.quote(emp)}">catálogo</a> (o custo vem junto) ou digite o custo. Preço = (custo + frete) ÷ (1 − % ÷ 100);
+o <b>lance mínimo</b> usa a margem mínima e vira o <b>piso</b> na 🎯 Disputa.</p>
+<div style="display:flex;gap:10px;flex-wrap:wrap">{inp("impostos", "Impostos %")}{inp("comissao", "Comissão %")}{inp("despesas", "Despesas %")}
+{inp("margem", "Margem %")}{inp("margem_min", "Margem mín. %")}{inp("frete", "Frete padrão R$/un.")}</div>
+<div style="overflow-x:auto"><table><tr><th>Item</th><th>Produto do catálogo</th><th>Custo R$/un.</th><th>Frete R$/un.</th><th class="num">Preço calculado</th>
+<th class="num">Lance mínimo</th><th class="num">Preço atual · margem</th></tr>{linhas}</table></div>
+<label class="ck"><input type="checkbox" name="padrao" value="1"> Usar estes percentuais como padrão da empresa</label>
+<div class="acoes"><button class="sec" name="acao" value="salvar">💾 Salvar custos</button>
+<button name="acao" value="aplicar">✅ Salvar e usar o preço calculado nos itens</button></div></form></details>
+<style>.fnum{{max-width:105px;margin:0}}.fp-p{{display:block;margin-top:2px}}</style>
+<script>
+function fn(v){{return n(v);}}
+function pegaCusto(sel){{const o=sel.options[sel.selectedIndex];const c=o&&o.dataset.custo;const inp=sel.closest('tr').querySelector('[name=f_custo]');
+ if(c&&!inp.value)inp.value=c;fcalc();}}
+function fcalc(){{const P=k=>fn((document.querySelector('[name=p_'+k+']')||{{}}).value);
+ const soma=P('impostos')+P('comissao')+P('despesas'),m=P('margem'),mm=P('margem_min'),fp=P('frete');
+ document.querySelectorAll('tr.fp').forEach(tr=>{{const c=fn(tr.querySelector('[name=f_custo]').value);const fr=tr.querySelector('[name=f_frete]').value;
+  const b=c+(fr?fn(fr):fp);const ok=b>0&&soma+Math.max(m,mm)<100;
+  tr.querySelector('.c-preco').textContent=ok?'R$ '+f(b/(1-(soma+m)/100)):'—';tr.querySelector('.c-min').textContent=ok?'R$ '+f(Math.ceil(b/(1-(soma+mm)/100)*100)/100):'—';
+  const at=parseFloat(tr.querySelector('[data-atual]').dataset.atual)||0;const mg=tr.querySelector('.c-marg');
+  if(at>0&&b>0){{const r=100*(at-b)/at-soma;mg.textContent='margem '+r.toFixed(1).replace('.',',')+'%';mg.style.color=r<mm?'#c62828':'';}}else mg.textContent='';}});}}
+document.addEventListener('DOMContentLoaded',fcalc);
+</script>"""
+
+
+def gravar_pisos_proposta(p):
+    """Lance mínimo de cada lote/item vira o piso do copiloto (🎯 Disputa) nos lotes que o monitor já conhece."""
+    itens = propostas.calcular(p)[0]
+    prm = {**catalogo.param(p.get("empresa", "")), **(p.get("param_preco") or {})}
+    gs = propostas.grupos(itens)
+    np_ = _norm_proc(p.get("processo"))
+    if not np_:
+        return 0
+    feitos = 0
+    for eid in nomes_empresas().get(p.get("empresa", ""), []):
+        db = EMPRESAS / eid / "bll_monitor.db"
+        if not db.exists():
+            continue
+        lotes = {}
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+            for tabela, col_v in (("classificacao", "melhor"), ("ao_vivo", "melhor")):
+                try:
+                    for pr, po, lote, melhor in con.execute(f"SELECT processo, promotor, lote, {col_v} FROM {tabela}"):
+                        if _norm_proc(pr) == np_:
+                            lotes[(po, lote)] = resultados.valor(melhor)
+                except sqlite3.Error:
+                    pass
+            con.close()
+        except sqlite3.Error:
+            continue
+        for (po, lote), melhor in lotes.items():
+            n = re.sub(r"\D", "", str(lote)).lstrip("0")
+            idxs = gs.get("L" + n) or gs.get("I" + n)
+            if not idxs:
+                continue
+            mins = [catalogo.calcular(itens[i].get("custo"), itens[i].get("frete") or prm.get("frete"), prm) for i in idxs]
+            if not all(mins):
+                continue
+            unit = mins[0]["minimo"]
+            total = round(sum(itens[i]["_q"] * mn["minimo"] for i, mn in zip(idxs, mins)), 2)
+            usar_unit = len(idxs) == 1 and (not melhor or abs(melhor - unit) <= abs(melhor - total))
+            chave = copiloto.chave_piso(p.get("empresa", ""), _proc_monitor(db, np_), po, lote)
+            copiloto.salvar_piso(chave, None, None, unit if usar_unit else total)
+            feitos += 1
+    return feitos
+
+
+def _proc_monitor(db, np_):
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        for (pr,) in con.execute("SELECT DISTINCT processo FROM classificacao UNION SELECT DISTINCT processo FROM processos"):
+            if _norm_proc(pr) == np_:
+                con.close()
+                return pr
+        con.close()
+    except sqlite3.Error:
+        pass
+    return ""
 
 
 def chave_preco(it):
@@ -2528,6 +2709,13 @@ def pg_pacote(q, aviso="", erro=False):
         f'<small class="sub"> {e((a.get("objeto") or "")[:60])}</small></label>'
         for a in atestados.listar(nome) if atestados.arquivo(a["id"])) or \
         '<p class="sub">Nenhum atestado com arquivo. Cadastre em <a href="/atestados">Atestados</a>.</p>'
+    fichas = []
+    for it in (prop_q or {}).get("itens") or []:
+        pr_c = catalogo.ler(it.get("produto_id") or "") if it.get("produto_id") else None
+        if pr_c and pr_c.get("empresa") == nome and catalogo.ficha(pr_c["id"]) and pr_c["id"] not in [x["id"] for x in fichas]:
+            fichas.append(pr_c)
+    caixas_ficha = "".join(f'<label class="dec"><input type="checkbox" name="ficha" value="{e(x["id"])}" checked> 🏷️ Ficha técnica – '
+                           f'{e(x.get("nome", ""))} {e(x.get("marca", ""))}</label>' for x in fichas)
     caixas_dec = "".join(f'<label class="dec"><input type="checkbox" name="d" value="{i}" {"checked" if i in documentos.PADRAO else ""}'
                          f'{" disabled" if i == "meepp" and ctx.get("porte") not in ("ME", "EPP") else ""}> {e(t)}</label>'
                          for i, t, _ in documentos.DECLARACOES)
@@ -2550,6 +2738,7 @@ arquivos (contrato social, atestados…), com papel timbrado, marcadores e “P�
 <label class="dec" style="margin-top:8px"><input type="checkbox" name="unificada" value="1"> Juntar numa “Declaração unificada”</label></div>
 <div><h3>Certidões</h3>{caixas_cert}
 <h3>Atestados de capacidade técnica</h3>{caixas_at}
+{('<h3>Fichas técnicas dos produtos da proposta</h3>' + caixas_ficha) if caixas_ficha else ''}
 {('<p class="sub">Marcados os recomendados pela IA para este edital.</p>') if rec else (f'<p class="sub"><a href="/atestados?emp={urllib.parse.quote(nome)}' + (f'&edital={e(ed_rec)}' if ed_rec else '') + '">🔎 Ver quais atendem o edital</a></p>')}
 <h3>Outros documentos <small class="sub">(PDF, PNG ou JPG – contrato social, atestados, balanço…)</small></h3>
 <input type="file" name="extra" accept=".pdf,.png,.jpg,.jpeg" multiple>
@@ -2560,7 +2749,7 @@ arquivos (contrato social, atestados…), com papel timbrado, marcadores e “P�
     return pagina("Pacote de habilitação", corpo, "/documentos", aviso, erro)
 
 
-def gerar_pacote(campos, arqs, multi_d, multi_cert, multi_at=()):
+def gerar_pacote(campos, arqs, multi_d, multi_cert, multi_at=(), multi_ficha=()):
     """Monta o pacote. Devolve (bytes, nome_arquivo, avisos)."""
     emps = nomes_empresas()
     nome = campos.get("emp", "")
@@ -2591,6 +2780,13 @@ def gerar_pacote(campos, arqs, multi_d, multi_cert, multi_at=()):
             dados = a.read_bytes()
             ext = a.suffix.lower().lstrip(".")
             secoes.append((certs[cid], dados if ext == "pdf" else pacote.pdf_da_imagem(dados, "png" if ext == "png" else "jpg")))
+    for fid in multi_ficha:
+        pr_c = catalogo.ler(fid)
+        arq_f = catalogo.ficha(fid) if pr_c and pr_c.get("empresa") == nome else None
+        if arq_f:
+            dados = arq_f.read_bytes()
+            secoes.append((f"Ficha técnica – {pr_c.get('nome', '')} {pr_c.get('marca', '')}"[:90], dados if dados[:4] == b"%PDF" else
+                           pacote.pdf_da_imagem(dados, "png" if arq_f.suffix.lower() == ".png" else "jpg")))
     for aid in multi_at:
         a = atestados.ler(aid)
         p_at = atestados.arquivo(aid) if a and a.get("empresa") == nome else None
@@ -3950,7 +4146,8 @@ def abas_doc(atual):
             f'<a class="btn {"" if atual == "ass" else "sec"}" href="/assinatura">✍️ Como assinar</a>'
             f'<a class="btn {"" if atual == "pec" else "sec"}" href="/pecas">⚖️ Peças com IA (recurso, contrarrazões…)</a>'
             f'<a class="btn {"" if atual == "cer" else "sec"}" href="/certidoes">📑 Certidões</a>'
-            f'<a class="btn {"" if atual == "ate" else "sec"}" href="/atestados">📜 Atestados</a></div>')
+            f'<a class="btn {"" if atual == "ate" else "sec"}" href="/atestados">📜 Atestados</a>'
+            f'<a class="btn {"" if atual == "cat" else "sec"}" href="/catalogo">🏷️ Catálogo e preços</a></div>')
 
 
 def pg_pecas(q, aviso=""):
@@ -6506,9 +6703,11 @@ class Painel(BaseHTTPRequestHandler):
             if (caminho.startswith(ROTAS_IA) and not caminho.endswith("/telegram") or ROTAS_IA_RE.fullmatch(caminho)) and not u.get("ia", True):
                 return self.negar("O seu usuário não tem permissão para usar os recursos com IA (que têm custo). Fale com o administrador.")
         if nomes_permitidos() is not None:
-            m = re.match(r"/(agenda|certidoes|pecas|propostas|contratos|licitacoes|atestados|atas)/([0-9a-f]{12,14})(/|$)", caminho)
+            m = re.match(r"/(agenda|certidoes|pecas|propostas|contratos|licitacoes|atestados|atas|catalogo)/([0-9a-f]{12,14})(/|$)", caminho)
             if m:
-                if m.group(1) == "atas":
+                if m.group(1) == "catalogo":
+                    dono, criador = (catalogo.ler(m.group(2)) or {}).get("empresa", ""), "?"
+                elif m.group(1) == "atas":
                     it = atas.ler(m.group(2)) or {}
                     dono, criador = it.get("empresa", ""), it.get("usuario")
                 elif m.group(1) == "atestados":
@@ -6792,6 +6991,16 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_chances(q))
             if p == "/licitacoes":
                 return self.enviar(pg_licitacoes(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/catalogo":
+                return self.enviar(pg_catalogo(q, AVISOS.get(q.get("ok", ""), "")))
+            m = re.fullmatch(r"/catalogo/([0-9a-f]{12})/ficha", p)
+            if m:
+                arq_f = catalogo.ficha(m.group(1))
+                if not arq_f:
+                    return self.enviar(pagina("Ficha", "<h2>Ficha não encontrada</h2>", "/catalogo"), 404)
+                tipo_f = mimetypes.guess_type(arq_f.name)[0] or "application/octet-stream"
+                nome_h = re.sub(r"[^A-Za-z0-9._ -]", "_", unicodedata.normalize("NFKD", arq_f.name).encode("ascii", "ignore").decode()) or "ficha"
+                return self.baixar(arq_f.read_bytes(), nome_h, tipo_f, na_tela=True)
             if p == "/ajuda":
                 return self.enviar(pg_ajuda(q))
             if p == "/atas":
@@ -6982,6 +7191,23 @@ class Painel(BaseHTTPRequestHandler):
                                           '<p><a class="btn sec" href="/processos">Voltar</a></p>', "/processos"))
             return self.redirecionar("/classificacao?" + urllib.parse.urlencode(
                 {"empresa": eid, "processo": chave[0], "promotor": chave[1]}))
+        if self.path.rstrip("/") == "/catalogo/salvar":
+            if tam > 20 * 1024 * 1024:
+                return self.enviar(pg_catalogo({}, "Arquivo grande demais (máx. 20 MB).", True), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            pid_c = campos.get("pid", "") if re.fullmatch(r"[0-9a-f]{12}", campos.get("pid", "")) else ""
+            if not self.permitido(f"/catalogo/{pid_c}" if pid_c else "/catalogo/salvar", campos):
+                return
+            nome = campos.get("empresa", "")
+            if nome not in nomes_empresas() or (pid_c and (catalogo.ler(pid_c) or {}).get("empresa") != nome) or not campos.get("nome", "").strip():
+                return self.redirecionar("/catalogo")
+            arq = next(((n, d) for n, d in arqs if d), None)
+            dados_c = {k: campos.get(k, "").strip() for k in catalogo.CAMPOS if k in campos}
+            dados_c["empresa"] = nome
+            catalogo.salvar(pid_c, dados_c, arq)
+            return self.redirecionar("/catalogo?" + urllib.parse.urlencode({"emp": nome, "ok": "feito"}))
         if self.path.rstrip("/") == "/atestados/salvar":
             if tam > 20 * 1024 * 1024:
                 return self.enviar(pg_atestados({}, "Arquivo grande demais (máx. 20 MB).", True), 413)
@@ -7137,7 +7363,7 @@ class Painel(BaseHTTPRequestHandler):
             if campos.get("emp", "") not in nomes_empresas():
                 return self.redirecionar("/pacote")
             try:
-                dados, arquivo, avisos = gerar_pacote(campos, arqs[:15], listas.get("d", []), listas.get("cert", []), listas.get("at", []))
+                dados, arquivo, avisos = gerar_pacote(campos, arqs[:15], listas.get("d", []), listas.get("cert", []), listas.get("at", []), listas.get("ficha", []))
                 _pp = propostas.ler(campos.get("proposta", "")) if re.fullmatch(r"[0-9a-f]{12}", campos.get("proposta", "")) else None
                 if _pp:   # o "siga-me" das licitações marca o pacote como feito
                     _pp["pacote_gerado"] = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -7776,6 +8002,52 @@ class Painel(BaseHTTPRequestHandler):
                     propostas.gravar(m.group(1), prop)
                     threading.Thread(target=buscar_precos, args=(m.group(1),), daemon=True).start()
                 return self.redirecionar(f"/propostas/{m.group(1)}")
+            if p == "/catalogo/param":
+                nome = f.get("empresa", "")
+                if nome in nomes_empresas():
+                    catalogo.salvar_param(nome, {k: f.get(k, "") for k in catalogo.PARAM_PADRAO})
+                return self.redirecionar("/catalogo?" + urllib.parse.urlencode({"emp": nome, "ok": "feito"}))
+            m = re.fullmatch(r"/catalogo/([0-9a-f]{12})/excluir", p)
+            if m and catalogo.ler(m.group(1)):
+                nome = catalogo.ler(m.group(1)).get("empresa", "")
+                catalogo.excluir(m.group(1))
+                return self.redirecionar("/catalogo?" + urllib.parse.urlencode({"emp": nome, "ok": "feito"}))
+            m = re.fullmatch(r"/propostas/([0-9a-f]{12})/formacao", p)
+            if m and propostas.ler(m.group(1)):
+                pid = m.group(1)
+                prop = propostas.ler(pid)
+                emp_p = prop.get("empresa", "")
+                prm = {k: f.get("p_" + k, "").strip()[:20] for k in catalogo.PARAM_PADRAO}
+                prop["param_preco"] = prm
+                if f.get("padrao") == "1":
+                    catalogo.salvar_param(emp_p, prm)
+                col = lambda k: multi.get(k, [])  # noqa: E731
+                aviso_f = []
+                for i, it in enumerate(prop.get("itens") or []):
+                    prod_id = col("f_prod")[i] if i < len(col("f_prod")) else ""
+                    prod = catalogo.ler(prod_id) if re.fullmatch(r"[0-9a-f]{12}", prod_id or "") else None
+                    if prod and prod.get("empresa") != emp_p:
+                        prod = None
+                    custo = (col("f_custo")[i] if i < len(col("f_custo")) else "").strip()[:20] or (prod or {}).get("custo", "")
+                    it["produto_id"] = prod["id"] if prod else ""
+                    it["custo"] = custo
+                    it["frete"] = (col("f_frete")[i] if i < len(col("f_frete")) else "").strip()[:20]
+                    if prod and not (it.get("marca") or "").strip():
+                        it["marca"] = " ".join(x for x in (prod.get("marca", ""), prod.get("modelo", "")) if x)[:200]
+                    if f.get("acao") == "aplicar":
+                        cc = catalogo.calcular(custo, it["frete"] or prm.get("frete"), prm)
+                        if cc:
+                            it["unit"] = propostas.unit_txt(cc["preco"])
+                        elif custo:
+                            aviso_f.append(str(it.get("item") or i + 1))
+                propostas.gravar(pid, prop)
+                try:
+                    gravar_pisos_proposta(propostas.ler(pid))
+                except Exception as ex:  # noqa: BLE001
+                    print("pisos da proposta:", ex, flush=True)
+                if aviso_f:
+                    return self.enviar(pg_proposta(pid, "Os percentuais somam 100% ou mais – não deu para calcular o preço dos itens " + e(", ".join(aviso_f)) + ".", True))
+                return self.redirecionar(f"/propostas/{pid}?ok=formacao#formacao")
             m = re.fullmatch(r"/propostas/([0-9a-f]{12})/readequar", p)
             if m and propostas.ler(m.group(1)):
                 pid = m.group(1)
@@ -7819,7 +8091,8 @@ class Painel(BaseHTTPRequestHandler):
                     pega = lambda k, i: (col(k)[i] if i < len(col(k)) else "").strip()  # noqa: E731
                     prop["itens"] = [{"lote": pega("i_lote", i)[:20], "item": pega("i_item", i)[:20], "descricao": pega("i_desc", i)[:3000],
                                       "marca": pega("i_marca", i)[:200], "unidade": pega("i_un", i)[:30], "qtd": pega("i_qtd", i)[:20],
-                                      "unit": pega("i_unit", i)[:20], "ref": pega("i_ref", i)[:20]}
+                                      "unit": pega("i_unit", i)[:20], "ref": pega("i_ref", i)[:20], "custo": pega("i_custo", i)[:20],
+                                      "frete": pega("i_frete", i)[:20], "produto_id": pega("i_prod", i)[:12]}
                                      for i in range(n_it) if pega("i_desc", i) or pega("i_unit", i)][:600]
                     for k, lim in (("orgao", 200), ("processo", 80), ("modalidade", 80), ("objeto", 1500), ("cidade_data", 80), ("data", 60), ("obs", 3000)):
                         prop[k] = f.get(k, "").strip()[:lim]
