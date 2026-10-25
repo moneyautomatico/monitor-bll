@@ -828,7 +828,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
-{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
+{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="tema" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)">🔍</button><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{BUSCA_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();
 document.querySelectorAll('nav .sub-m a').forEach(a=>{{if(a.getAttribute('href')===location.pathname)a.classList.add('aqui');}});</script></body></html>"""
 
@@ -1159,6 +1159,97 @@ border:1px solid var(--borda);border-radius:10px;padding:10px 12px;margin-bottom
 <div class="linha" style="justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:baseline"><h2 style="margin:0">🏠 Hoje – {titulo}</h2>
 <span class="sub">{resumo}</span></div>
 <p class="sub">Tudo o que precisa de ação, em ordem de urgência. Clique no botão para resolver.</p>{vazio}{blocos}"""
+
+
+# ------------------------------------------------------------------ busca geral (Ctrl+K)
+def busca_global(q, limite=40):
+    termos = [t for t in buscas.norm(q).split() if t]
+    if not termos or len("".join(termos)) < 2:
+        return []
+    bate = lambda *xs: all(t in buscas.norm(" ".join(str(x or "") for x in xs)) for t in termos)  # noqa: E731
+    out, vistos_org = [], set()
+
+    def add(tipo, titulo, sub, url):
+        out.append({"tipo": tipo, "titulo": str(titulo)[:120], "sub": str(sub or "")[:140], "url": url})
+    for sec_url, sec_nome, subs in AREAS:   # telas do menu
+        for u, n in subs or [(sec_url, sec_nome)]:
+            if bate(n, u):
+                add("Tela", n, "abrir a tela", u)
+    for x in ajuda.SECOES:
+        if bate(x["titulo"], x["resumo"]):
+            add("Ajuda", f'{x["icone"]} {x["titulo"]}', x["resumo"], f'/ajuda#{x["id"]}')
+    for c in kanban.listar():
+        if visivel(c.get("empresa"), c.get("usuario")) and bate(c.get("processo"), c.get("orgao"), c.get("empresa"), c.get("titulo")):
+            add("Licitação", c.get("processo") or "Licitação", f'{c.get("orgao", "")} · {c.get("empresa", "")}', f'/licitacoes/{c["id"]}')
+    for p in propostas.listar():
+        if visivel(p.get("empresa"), p.get("usuario")) and bate(p.get("processo"), p.get("orgao"), p.get("empresa"), p.get("objeto"),
+                                                              " ".join(i.get("descricao") or "" for i in p.get("itens") or [])):
+            add("Proposta", f'Proposta {p.get("processo") or ""}', f'{p.get("orgao", "")} · {p.get("empresa", "")}', f'/propostas/{p["id"]}')
+    for c in contratos.listar():
+        if visivel(c.get("empresa"), c.get("usuario")) and bate(c.get("processo"), c.get("orgao"), c.get("numero"), c.get("objeto"), c.get("empresa")):
+            add("Contrato", f'Contrato {c.get("processo") or ""}', f'{c.get("orgao", "")} · {c.get("empresa", "")}', f'/contratos/{c["id"]}')
+    for a in atas.listar():
+        if visivel(a.get("empresa"), a.get("usuario")) and bate(a.get("numero"), a.get("orgao"), a.get("processo"), a.get("objeto"),
+                                                              " ".join(i.get("descricao") or "" for i in a.get("itens") or [])):
+            add("Ata", f'Ata {a.get("numero") or ""}', f'{a.get("orgao", "")} · {a.get("empresa", "")}', f'/atas/{a["id"]}')
+    for nome in nomes_empresas():
+        for x in catalogo.listar(nome):
+            if bate(x.get("nome"), x.get("marca"), x.get("modelo"), x.get("descricao"), x.get("palavras"), x.get("fornecedor")):
+                add("Produto", x.get("nome", ""), f'{x.get("marca", "")} · {nome}', f'/catalogo?{urllib.parse.urlencode({"emp": nome, "q": x.get("nome", "")})}')
+        for x in atestados.listar(nome):
+            if bate(x.get("contratante"), x.get("objeto"), x.get("itens")):
+                add("Atestado", x.get("contratante") or "Atestado", f'{(x.get("objeto") or "")[:80]} · {nome}', f'/atestados?{urllib.parse.urlencode({"emp": nome})}')
+    concorr = {}
+    for emp, db in dbs_usuario():   # processos do monitor, órgãos e concorrentes
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+            procs = con.execute("SELECT processo, promotor, situacao FROM processos").fetchall()
+            rks = con.execute("SELECT ranking FROM classificacao").fetchall()
+            con.close()
+        except sqlite3.Error:
+            continue
+        eid = db.parent.name
+        for pr, po, st in procs:
+            if bate(pr, po):
+                add("Processo", pr, f'{po} · {emp} · {st or ""}', "/classificacao?" + urllib.parse.urlencode({"empresa": eid, "processo": pr, "promotor": po}))
+            if po and chave_orgao(po) not in vistos_org and bate(po):
+                vistos_org.add(chave_orgao(po))
+                add("Órgão", po, "ficha do órgão", "/orgao?" + urllib.parse.urlencode({"nome": po}))
+        for (rk,) in rks:
+            try:
+                for r in json.loads(rk or "[]"):
+                    n_ = (r.get("nome") or "").strip()
+                    if n_ and n_ not in concorr and bate(n_, r.get("num")):
+                        concorr[n_] = r.get("num", "")
+            except ValueError:
+                pass
+    for n_, num_ in list(concorr.items())[:10]:
+        add("Concorrente", n_, f"CNPJ/participante {num_}", "/concorrentes?" + urllib.parse.urlencode({"c": concorrentes.chave_nome(n_)}))
+    ordem = {"Tela": 0, "Licitação": 1, "Proposta": 2, "Processo": 3, "Contrato": 4, "Ata": 5, "Órgão": 6, "Concorrente": 7, "Produto": 8, "Atestado": 9, "Ajuda": 10}
+    return sorted(out, key=lambda x: ordem.get(x["tipo"], 99))[:limite]
+
+
+BUSCA_JS = """<div id="busca-g" class="busca-g" onclick="if(event.target===this)fecharBusca()"><div class="busca-cx">
+<input id="busca-in" placeholder="🔍 Buscar processo, órgão, proposta, contrato, produto, concorrente… (Esc fecha)" autocomplete="off">
+<div id="busca-res"></div></div></div>
+<style>.busca-g{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;padding:8vh 12px}.busca-g.on{display:block}
+.busca-cx{max-width:680px;margin:auto;background:var(--card);border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.35);overflow:hidden}
+#busca-in{width:100%;border:0;border-bottom:1px solid var(--borda);padding:16px 18px;font-size:16px;background:var(--card);color:var(--txt);outline:none}
+#busca-res{max-height:60vh;overflow:auto}#busca-res a{display:flex;gap:10px;align-items:baseline;padding:10px 18px;text-decoration:none;color:var(--txt);border-bottom:1px solid var(--borda)}
+#busca-res a:hover,#busca-res a.sel{background:rgba(47,138,91,.1)}#busca-res .tp{font-size:11px;color:var(--sub);min-width:74px}#busca-res .sb{font-size:12px;color:var(--sub)}
+#busca-res .vz{padding:14px 18px;color:var(--sub);font-size:13px}</style>
+<script>(function(){let t=null,sel=-1;const g=document.getElementById('busca-g'),inp=document.getElementById('busca-in'),res=document.getElementById('busca-res');
+window.abrirBusca=function(){g.classList.add('on');inp.value='';res.innerHTML='<div class="vz">Digite pelo menos 2 letras…</div>';setTimeout(()=>inp.focus(),30);};
+window.fecharBusca=function(){g.classList.remove('on');};
+function esc(x){return (x||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function marca(){const a=res.querySelectorAll('a');a.forEach((x,i)=>x.classList.toggle('sel',i===sel));if(a[sel])a[sel].scrollIntoView({block:'nearest'});}
+inp.addEventListener('input',()=>{clearTimeout(t);const q=inp.value.trim();if(q.length<2){res.innerHTML='<div class="vz">Digite pelo menos 2 letras…</div>';return;}
+ t=setTimeout(()=>fetch('/busca.json?q='+encodeURIComponent(q),{credentials:'same-origin'}).then(r=>r.json()).then(d=>{sel=-1;
+  res.innerHTML=d.length?d.map(x=>'<a href="'+esc(x.url)+'"><span class="tp">'+esc(x.tipo)+'</span><span><b>'+esc(x.titulo)+'</b><br><span class="sb">'+esc(x.sub)+'</span></span></a>').join(''):'<div class="vz">Nada encontrado.</div>';}),220);});
+inp.addEventListener('keydown',ev=>{const a=res.querySelectorAll('a');if(ev.key==='ArrowDown'){sel=Math.min(sel+1,a.length-1);marca();ev.preventDefault();}
+ else if(ev.key==='ArrowUp'){sel=Math.max(sel-1,0);marca();ev.preventDefault();}else if(ev.key==='Enter'){const x=a[sel>=0?sel:0];if(x)location.href=x.getAttribute('href');}});
+document.addEventListener('keydown',ev=>{if((ev.ctrlKey||ev.metaKey)&&ev.key.toLowerCase()==='k'){ev.preventDefault();abrirBusca();}else if(ev.key==='Escape')fecharBusca();});
+})();</script>"""
 
 
 def urg_tag(m):
@@ -7603,6 +7694,15 @@ class Painel(BaseHTTPRequestHandler):
                 tipo_a = mimetypes.guess_type(arq_a.name)[0] or "application/octet-stream"
                 nome_h = re.sub(r"[^A-Za-z0-9._ -]", "_", unicodedata.normalize("NFKD", arq_a.name).encode("ascii", "ignore").decode()) or "atestado"
                 return self.baixar(arq_a.read_bytes(), nome_h, tipo_a, na_tela=True)
+            if p == "/busca.json":
+                dados_b = json.dumps(busca_global(q.get("q", "")[:80]), ensure_ascii=False).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.cabecalhos_seguranca()
+                self.end_headers()
+                self.wfile.write(dados_b)
+                return
             if p == "/orgao":
                 return self.enviar(pg_orgao(q))
             if p == "/resultado":
