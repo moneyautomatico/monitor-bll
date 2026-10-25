@@ -43,7 +43,6 @@ import resumo
 import documentos
 import geo
 import ajuda
-import email_aviso
 import pwa
 import planilhas
 import lixeira
@@ -1550,11 +1549,8 @@ def ics_usuario():
             "X-WR-CALNAME:Licitatudo\r\nX-WR-TIMEZONE:America/Sao_Paulo\r\n" + "\r\n".join(eventos) + "\r\nEND:VCALENDAR\r\n")
 
 
-def cartao_agenda_email(lg, uc):
+def cartao_agenda(lg, uc):
     tok = uc.get("ics_token", "")
-    g = CFG_ATUAL()
-    email_ok = email_aviso.configurado(g)
-    ck = lambda k, padrao=False: "checked" if uc.get(k, padrao) else ""  # noqa: E731
     if tok:
         ics_html = f"""<input class="campo" id="ics-link" readonly onclick="this.select()" style="max-width:100%">
 <div class="acoes"><button type="button" class="sec" onclick="navigator.clipboard.writeText(document.getElementById('ics-link').value);this.textContent='✅ Copiado'">📋 Copiar o link</button>
@@ -1568,41 +1564,7 @@ def cartao_agenda_email(lg, uc):
 <p class="sub">Um link de calendário com prazos, disputas, prazos legais, tarefas e fim das atas. Ele se atualiza sozinho no seu calendário.</p>
 {ics_html}
 </div>
-<div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">✉️ Avisos por e-mail</h3>
-{'' if email_ok else '<p class="msg">O envio de e-mail ainda não foi configurado pelo administrador do sistema.</p>'}
-<form method="post" action="/preferencias/email"><input type="hidden" name="csrf" value="{CSRF}">
-<label>Seu e-mail</label><input class="campo" type="email" name="email" value="{e(uc.get("email", ""))}" placeholder="voce@empresa.com.br">
-<label class="ck"><input type="checkbox" name="email_resumo" value="1" {ck("email_resumo")}> Resumo do dia</label>
-<label class="ck"><input type="checkbox" name="email_relatorio" value="1" {ck("email_relatorio")}> Relatório do mês (PDF) no dia 1º</label>
-<label class="ck"><input type="checkbox" name="email_avisos" value="1" {ck("email_avisos")}> Todos os avisos (prazos, certidões, contratos, edital alterado…)</label>
-<div class="acoes"><button>Salvar</button>{'<button class="sec" name="acao" value="teste">📨 Enviar um e-mail de teste</button>' if email_ok else ''}</div></form>
-<p class="sub">As mensagens do pregoeiro (alarme) continuam pelo Telegram/ntfy, que chegam na hora.</p></div>"""
-
-
-def donos_de(empresas):
-    out = set()
-    lista = {x.strip().upper() for x in empresas if x}
-    for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
-        c = ler_env(a)
-        if (c.get("EMPRESA_NOME") or a.stem).upper().strip() in lista and c.get("EMPRESA_DONO"):
-            out.add(c["EMPRESA_DONO"].lower())
-    return out
-
-
-def email_avisos(texto, empresas=(), usuario=""):
-    """Manda o aviso também por e-mail para os donos que pediram 'todos os avisos'."""
-    g = CFG_ATUAL()
-    if not email_aviso.configurado(g):
-        return
-    logins = donos_de(empresas) if empresas else ({usuario} if usuario else set())
-    assunto = re.sub(r"<[^>]+>", "", (texto or "").split("\n", 1)[0])[:120] or "Aviso do Licitatudo"
-    for lg in logins:
-        uc = usuarios.cfg(lg)
-        if uc.get("email") and uc.get("email_avisos"):
-            try:
-                email_aviso.enviar(g, uc["email"], "Licitatudo – " + assunto, texto)
-            except Exception as ex:  # noqa: BLE001
-                print("e-mail de aviso:", ex, flush=True)
+"""
 
 
 def urg_tag(m):
@@ -4733,18 +4695,13 @@ def relatorio_mensal():
                     u = usuarios.obter(lg)
                     c = (u or {}).get("cfg") or {}
                     quer_tg = bool(c.get("tg_chat") and c.get("relatorio_mensal", True))
-                    quer_em = bool(c.get("email") and c.get("email_relatorio") and email_aviso.configurado(CFG_ATUAL()))
-                    if not u or not u.get("ativo", True) or u["papel"] == "admin" or not (quer_tg or quer_em) or c.get("relatorio_ultimo") == mes:
+                    if not u or not u.get("ativo", True) or u["papel"] == "admin" or not quer_tg or c.get("relatorio_ultimo") == mes:
                         continue
                     _REQ.user, _REQ.perm, _REQ.admin = u, None, False
                     try:
                         if nomes_empresas():
                             if quer_tg:
                                 enviar_relatorio_tg(lg, mes)
-                            if quer_em:
-                                email_aviso.enviar(CFG_ATUAL(), c["email"], f"Licitatudo – relatório de {nome_mes(mes)}",
-                                                   f"📈 <b>Relatório de {nome_mes(mes)}</b>\nSegue o PDF em anexo.",
-                                                   [(f"relatorio-licitacoes-{mes}.pdf", pdf_relatorio(dados_relatorio(mes)), "application/pdf")])
                         usuarios.salvar_cfg(lg, {"relatorio_ultimo": mes})
                     except Exception as ex:  # noqa: BLE001
                         print("Relatório mensal de", lg, ex, flush=True)
@@ -6291,7 +6248,7 @@ No celular, este link já abre o app: <a href="ntfy://ntfy.sh/{e(topico)}">ntfy:
 O texto “Sobre a empresa” e as instruções da análise ficam em <a href="/editais">Editais</a>.</p>
 {form_ia}</div>
 {cartao_meu_consumo(lg, uc)}
-{cartao_agenda_email(lg, uc)}
+{cartao_agenda(lg, uc)}
 <div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">🔑 Conta e segurança</h3>
 <p class="sub">Login <b>{e(lg)}</b> · {tag_papel(u["papel"])} · aparelhos conectados: <b>{sum(1 for v in _sessoes().values() if v[1] == lg)}</b></p>
 <div class="acoes"><a class="btn sec" href="/conta">Trocar minha senha</a><a class="btn sec" href="/empresas">Minhas empresas</a>
@@ -6535,17 +6492,6 @@ Usados para calcular o custo de cada uso e o comunicado aos licitantes. <a href=
 <div><label>Acréscimo no repasse %</label><input class="campo" name="IA_ACRESCIMO_PCT" value="{g('IA_ACRESCIMO_PCT', '0')}" style="width:110px"></div></div>
 <label style="font-weight:400;display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" name="IA_COBRAR" value="1" {"checked" if c.get("IA_COBRAR", "1") != "0" else ""}>
 O custo da IA é repassado ao licitante (mostrar o “valor ao licitante”, com o acréscimo, nos avisos e no comunicado)</label>
-<div class="acoes"><button>Salvar</button></div></form></div>
-<h2 style="margin-top:22px">✉️ E-mail (SMTP) para os avisos</h2><div class="form">
-<form method="post" action="/config/email"><input type="hidden" name="csrf" value="{CSRF}">
-<p class="sub">Para os usuários receberem resumo, relatório e avisos por e-mail. Use o SMTP do seu provedor (ex.: Hostinger, Gmail com senha de app, Brevo).
-{"<b>✅ Configurado.</b>" if email_aviso.configurado(c) else "Ainda não configurado."}</p>
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 14px">
-<div><label>Servidor SMTP</label><input class="campo" name="SMTP_HOST" value="{g('SMTP_HOST')}" placeholder="smtp.hostinger.com"></div>
-<div><label>Porta</label><input class="campo" name="SMTP_PORTA" value="{g('SMTP_PORTA', '587')}" placeholder="587 ou 465"></div>
-<div><label>Usuário</label><input class="campo" name="SMTP_USUARIO" value="{g('SMTP_USUARIO')}" autocomplete="off"></div>
-<div><label>Senha <small>({"configurada; " if c.get("SMTP_SENHA") else ""}vazio = manter)</small></label><input class="campo" type="password" name="SMTP_SENHA" autocomplete="new-password"></div>
-<div><label>Remetente (e-mail)</label><input class="campo" name="SMTP_REMETENTE" value="{g('SMTP_REMETENTE')}" placeholder="avisos@seudominio.com.br"></div></div>
 <div class="acoes"><button>Salvar</button></div></form></div>
 <h2 style="margin-top:22px">☀️ Resumo diário no Telegram</h2><div class="form">
 <form method="post" action="/config/resumo"><input type="hidden" name="csrf" value="{CSRF}">
@@ -7454,7 +7400,6 @@ agenda.ROTEAR = destinos_alerta
 def _ao_enviar_agenda(nomes, criador, txt):
     emps = [x.strip() for x in (nomes or "").split(",") if x.strip()]
     avisos.registrar(txt, emps, criador or "")
-    threading.Thread(target=email_avisos, args=(txt, emps, criador or ""), daemon=True).start()
 
 
 agenda.AO_ENVIAR = _ao_enviar_agenda
@@ -7555,8 +7500,7 @@ def resumo_usuarios():
                 c = u.get("cfg") or {}
                 g = CFG_ATUAL()
                 padrao_ativo = g.get("RESUMO_ATIVO", "1") != "0"   # quem nunca mexeu recebe (padrão do administrador)
-                quer_email = bool(c.get("email") and c.get("email_resumo") and email_aviso.configurado(g))
-                if u.get("papel") == "admin" or not u.get("ativo", True) or not ((c.get("resumo_ativo", padrao_ativo) and c.get("tg_chat")) or quer_email):
+                if u.get("papel") == "admin" or not u.get("ativo", True) or not (c.get("resumo_ativo", padrao_ativo) and c.get("tg_chat")):
                     continue   # o administrador não recebe resumo com empresas dos usuários
                 try:
                     hora_u = int(c.get("resumo_hora", g.get("RESUMO_HORA", "7")) or 7)
@@ -7569,11 +7513,6 @@ def resumo_usuarios():
                 avisos.registrar(txt_r, [], lg)
                 if c.get("tg_chat") and c.get("resumo_ativo", padrao_ativo):
                     resumo.enviar_partes(lambda t: telegram_para(tok, c["tg_chat"], t), txt_r)
-                if quer_email:
-                    try:
-                        email_aviso.enviar(g, c["email"], f"Licitatudo – resumo do dia {agora:%d/%m}", txt_r)
-                    except Exception as ex:  # noqa: BLE001
-                        print("e-mail do resumo:", ex, flush=True)
                 usuarios.salvar_cfg(lg, {"resumo_ultimo": hoje})
         except Exception as ex:  # noqa: BLE001
             print("Erro no resumo dos usuários:", ex, flush=True)
@@ -7599,7 +7538,6 @@ def telegram_geral(texto, usuario=None, empresas=None):
     """Sem destino: avisos do sistema (Telegram geral, se houver). Com empresas/usuário: vai para o bot do dono."""
     if empresas or usuario is not None:
         avisos.registrar(texto, list(empresas or []), usuario or "")
-        threading.Thread(target=email_avisos, args=(texto, list(empresas or []), usuario or ""), daemon=True).start()
     if empresas:
         for tok, chat in destinos_alerta(", ".join(empresas))[0]:
             telegram_para(tok, chat, texto)
@@ -8844,14 +8782,6 @@ class Painel(BaseHTTPRequestHandler):
                 volta = f.get("voltar", "/disputa")
                 return self.redirecionar((volta if volta.startswith("/") and not volta.startswith("//") else "/disputa")
                                          + ("&" if "?" in volta else "?") + "ok=piso")
-            if p == "/config/email":
-                v_e = {k: f.get(k, "").strip()[:200] for k in ("SMTP_HOST", "SMTP_USUARIO", "SMTP_REMETENTE")}
-                v_e["SMTP_PORTA"] = re.sub(r"\D", "", f.get("SMTP_PORTA", "587"))[:5] or "587"
-                if f.get("SMTP_SENHA", "").strip():
-                    v_e["SMTP_SENHA"] = f["SMTP_SENHA"].strip()[:200]
-                gravar_env(CONFIG, v_e)
-                self.auditar("alterou o e-mail (SMTP)", v_e.get("SMTP_HOST", ""))
-                return self.redirecionar("/config?ok=config")
             if p == "/config/resumo":
                 gravar_env(CONFIG, {"RESUMO_ATIVO": "1" if f.get("RESUMO_ATIVO") else "0",
                                     "RESUMO_HORA": re.sub(r"\D", "", f.get("RESUMO_HORA", "7"))[:2] or "7"})
@@ -9621,19 +9551,6 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
             return self.redirecionar("/preferencias?ok=pref")
         if p == "/preferencias/ics":
             usuarios.salvar_cfg(lg, {"ics_token": secrets.token_urlsafe(24)})
-            return self.redirecionar("/preferencias?ok=pref")
-        if p == "/preferencias/email":
-            em = f.get("email", "").strip()[:120]
-            if em and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", em):
-                return self.enviar(pg_preferencias("E-mail inválido.", True))
-            usuarios.salvar_cfg(lg, {"email": em or None, "email_resumo": f.get("email_resumo") == "1",
-                                     "email_relatorio": f.get("email_relatorio") == "1", "email_avisos": f.get("email_avisos") == "1"})
-            if f.get("acao") == "teste" and em:
-                try:
-                    email_aviso.enviar(CFG_ATUAL(), em, "Licitatudo – e-mail de teste", "✅ <b>Funcionou!</b>\nOs avisos que você escolheu vão chegar neste e-mail.")
-                    return self.enviar(pg_preferencias("📨 E-mail de teste enviado – confira a caixa de entrada (e o spam)."))
-                except Exception as ex:  # noqa: BLE001
-                    return self.enviar(pg_preferencias(f"Não consegui enviar: {e(str(ex)[:200])}", True))
             return self.redirecionar("/preferencias?ok=pref")
         if p == "/preferencias/resumo":
             try:
