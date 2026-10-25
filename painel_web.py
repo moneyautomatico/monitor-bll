@@ -343,6 +343,8 @@ def encerrar_todas(menos=""):
 
 ARQ_ACESSOS = PASTA / "acessos_conhecidos.json"
 FALHAS_GERAIS = []          # horários de senha errada (todos os IPs)
+FALHAS_USUARIO = {}         # login -> [(horário, ip)] de senhas erradas (aviso ao admin)
+ROBO_LOGIN = "🤖 robô (sem usuário)"
 _ALERTAS_LOGIN = {}
 
 
@@ -5129,17 +5131,28 @@ def pg_usuario(lg, aviso="", erro=False):
     return pagina("Usuário", corpo, "/admin", aviso, erro)
 
 
+def acao_auditoria(r):
+    a = r.get("acao", "")
+    if a == ROBO_LOGIN or (a == "login recusado" and r.get("usuario") in ("", "-")):
+        return f'<span class="sub">{ROBO_LOGIN} – bloqueado, sem risco</span>'
+    if "recusado" in a:
+        return f'<b style="color:var(--erro)">❌ {e(a)}</b>'
+    return e(a)
+
+
 def pg_auditoria(q):
     filtro = q.get("q", "")[:80]
     regs = usuarios.auditoria(300, filtro)
     linhas = "".join(
         f'<tr><td>{e(r["quando"][8:10] + "/" + r["quando"][5:7] + "/" + r["quando"][:4] + " " + r["quando"][11:19])}</td>'
         f'<td><a href="/admin/auditoria?q={urllib.parse.quote(r["usuario"])}">{e(r["usuario"])}</a></td>'
-        f'<td>{"❌ " if "recusado" in r["acao"] else ""}{e(r["acao"])}<div class="sub">{e(r.get("detalhe", ""))}</div></td>'
+        f'<td>{acao_auditoria(r)}<div class="sub">{e(r.get("detalhe", ""))}</div></td>'
         f'<td class="ocultar">{e(r.get("ip", ""))}</td></tr>' for r in regs)
     corpo = f"""{ESTILO_ADM}<h2>📜 Auditoria</h2>{abas_admin("aud")}
 <p class="sub">Quem entrou, quem saiu, tentativas de senha errada e cada ação que altera algo (cadastros, configurações,
-documentos, IA, agenda…). Senhas e chaves nunca são gravadas aqui.</p>
+documentos, IA, agenda…). Senhas e chaves nunca são gravadas aqui.
+<b>{ROBO_LOGIN}</b> = formulário de login enviado vazio por robôs da internet (bloqueado, ninguém entra). Atenção mesmo é ao
+<b style="color:var(--erro)">❌ login recusado</b> com um usuário preenchido – 3 seguidas em 30 min geram aviso no seu Telegram.</p>
 <form method="get" action="/admin/auditoria" class="acoes"><input class="campo" name="q" value="{e(filtro)}" placeholder="Filtrar: login, ação, IP…" style="max-width:320px">
 <button>Filtrar</button>{'<a class="btn sec" href="/admin/auditoria">Limpar</a>' if filtro else ''}</form>
 <table><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th class="ocultar">IP</th></tr>{linhas or '<tr><td colspan="4">Nada registrado ainda.</td></tr>'}</table>
@@ -6526,9 +6539,23 @@ class Painel(BaseHTTPRequestHandler):
             return self.enviar(pg_login("Este acesso é só para administradores. Use o endereço normal do painel.", "/", True), 403)
         ok = u is not None
         if not ok:
-            usuarios.auditar(f.get("usuario", "")[:32], ip, "login recusado")
+            lg_t = f.get("usuario", "").strip().lower()[:32]
             TENTATIVAS[ip].append(agora)
-            FALHAS_GERAIS.append(agora)
+            if not lg_t:
+                # formulário enviado vazio: robôs que varrem a internet. Não conta no bloqueio geral (não tranca ninguém).
+                usuarios.auditar("", ip, ROBO_LOGIN)
+            else:
+                usuarios.auditar(lg_t, ip, "login recusado")
+                FALHAS_GERAIS.append(agora)
+                lst = [x for x in FALHAS_USUARIO.get(lg_t, []) if agora - x[0] < 1800] + [(agora, ip)]
+                FALHAS_USUARIO[lg_t] = lst
+                if len(lst) >= 3:   # 3 senhas erradas em 30 min para o mesmo login: avisa o administrador
+                    existe = usuarios.obter(lg_t) is not None
+                    ips = ", ".join(sorted({x[1] for x in lst}))
+                    alerta_seguranca(f"user|{lg_t}", f"<b>Senha errada {len(lst)}x em 30 min</b> para o usuário "
+                                                    f"<b>{e(lg_t)}</b>{'' if existe else ' (esse usuário não existe)'}.\nIP(s): {e(ips)}\n"
+                                                    "Se não foi a própria pessoa, pode ser alguém tentando adivinhar a senha – "
+                                                    "veja em Administração → Auditoria.")
             time.sleep(1)   # deixa o "chute" de senhas lento
             if len(TENTATIVAS[ip]) >= 5:
                 alerta_seguranca(f"ip|{ip}", f"<b>Tentativas de senha no painel</b>: 5 senhas erradas seguidas do IP "
