@@ -1496,78 +1496,6 @@ def importar_planilha(tipo, alvo, nome_arq, dados, substituir=False):
     return 0, "tipo desconhecido"
 
 
-# ------------------------------------------------------------------ agenda no Google Agenda / Outlook (link de calendário)
-def _ics_txt(t):
-    return str(t or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")[:900]
-
-
-def ics_usuario():
-    """Calendário .ics com prazos, disputas, tarefas e vigência de atas do usuário atual (_REQ.user)."""
-    agora = datetime.now()
-    desde = agora - timedelta(days=7)
-    eventos = []
-
-    def ev(uid, quando, titulo, desc="", dia_todo=False):
-        if dia_todo or (quando.hour, quando.minute) == (23, 59):
-            ini = f"DTSTART;VALUE=DATE:{quando:%Y%m%d}"
-            fim = f"DTEND;VALUE=DATE:{(quando + timedelta(days=1)):%Y%m%d}"
-        else:
-            ini = f"DTSTART:{quando:%Y%m%dT%H%M00}"
-            fim = f"DTEND:{(quando + timedelta(hours=1)):%Y%m%dT%H%M00}"
-        eventos.append("\r\n".join(["BEGIN:VEVENT", f"UID:{uid}@licitatudo", f"DTSTAMP:{agora:%Y%m%dT%H%M%S}", ini, fim,
-                                    f"SUMMARY:{_ics_txt(titulo)}", f"DESCRIPTION:{_ics_txt(desc)}",
-                                    "BEGIN:VALARM", "ACTION:DISPLAY", "DESCRIPTION:Lembrete", "TRIGGER:-PT2H", "END:VALARM", "END:VEVENT"]))
-    for pid, it in agenda.prazos()["itens"].items():
-        if it.get("status") != "aberto" or not visivel(it.get("empresa"), it.get("criado_por")):
-            continue
-        q = datetime.fromisoformat(it["quando"])
-        if q >= desde:
-            ev(f"prazo-{pid}", q, "⏰ " + it.get("titulo", ""), f"{it.get('empresa', '')} · {it.get('promotor', '')}")
-    for c in kanban.listar():
-        if c.get("arquivado") or not visivel(c.get("empresa"), c.get("usuario")):
-            continue
-        ab = c.get("abertura") or ""
-        if ab and not c.get("resultado"):
-            try:
-                q = datetime.strptime(ab[:16], "%Y-%m-%dT%H:%M")
-                if q >= desde:
-                    ev(f"disputa-{c['id']}", q, f"🏁 Disputa – {c.get('processo', '')}", f"{c.get('orgao', '')} · {c.get('empresa', '')}")
-            except ValueError:
-                pass
-        for t in c.get("tarefas") or []:
-            if not t.get("feito") and t.get("prazo"):
-                try:
-                    ev(f"tarefa-{t['id']}", datetime.strptime(t["prazo"], "%Y-%m-%d"), f"☑ {t.get('texto', '')}",
-                       f"{c.get('processo', '')} · {t.get('resp', '')}", True)
-                except ValueError:
-                    pass
-    for a in atas.listar():
-        if a.get("status") == "ativa" and visivel(a.get("empresa"), a.get("usuario")) and a.get("vigencia_fim"):
-            try:
-                ev(f"ata-{a['id']}", datetime.strptime(a["vigencia_fim"], "%Y-%m-%d"), f"📑 Fim da ata {a.get('numero', '')}", a.get("orgao", ""), True)
-            except ValueError:
-                pass
-    return ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Licitatudo//Agenda//PT\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\n"
-            "X-WR-CALNAME:Licitatudo\r\nX-WR-TIMEZONE:America/Sao_Paulo\r\n" + "\r\n".join(eventos) + "\r\nEND:VCALENDAR\r\n")
-
-
-def cartao_agenda(lg, uc):
-    tok = uc.get("ics_token", "")
-    if tok:
-        ics_html = f"""<input class="campo" id="ics-link" readonly onclick="this.select()" style="max-width:100%">
-<div class="acoes"><button type="button" class="sec" onclick="navigator.clipboard.writeText(document.getElementById('ics-link').value);this.textContent='✅ Copiado'">📋 Copiar o link</button>
-{botao("/preferencias/ics", "🔄 Gerar um link novo (o antigo para de funcionar)", "sec")}</div>
-<script>document.getElementById('ics-link').value=location.origin+'/agenda.ics?t={tok}';</script>
-<p class="sub"><b>Google Agenda</b> (no computador): Outras agendas → ➕ → <i>Do URL</i> → cole o link. <b>iPhone</b>: Ajustes → Calendário → Contas → Adicionar → Outra → Calendário assinado.
-<b>Outlook</b>: Adicionar calendário → Assinar da Web. Não compartilhe o link: quem tiver ele vê a sua agenda.</p>"""
-    else:
-        ics_html = botao("/preferencias/ics", "📅 Criar o meu link de calendário")
-    return f"""<div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">📅 Agenda no celular (Google Agenda / Outlook / iPhone)</h3>
-<p class="sub">Um link de calendário com prazos, disputas, prazos legais, tarefas e fim das atas. Ele se atualiza sozinho no seu calendário.</p>
-{ics_html}
-</div>
-"""
-
 
 def urg_tag(m):
     motivo = urgencia.classificar(m["texto"], m["escopo"], m["autor"], chat_urgente=CFG_ATUAL().get("CHAT_URGENTE", "1") != "0")
@@ -6250,7 +6178,6 @@ No celular, este link já abre o app: <a href="ntfy://ntfy.sh/{e(topico)}">ntfy:
 O texto “Sobre a empresa” e as instruções da análise ficam em <a href="/editais">Editais</a>.</p>
 {form_ia}</div>
 {cartao_meu_consumo(lg, uc)}
-{cartao_agenda(lg, uc)}
 <div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">🔑 Conta e segurança</h3>
 <p class="sub">Login <b>{e(lg)}</b> · {tag_papel(u["papel"])} · aparelhos conectados: <b>{sum(1 for v in _sessoes().values() if v[1] == lg)}</b></p>
 <div class="acoes"><a class="btn sec" href="/conta">Trocar minha senha</a><a class="btn sec" href="/empresas">Minhas empresas</a>
@@ -7891,28 +7818,6 @@ class Painel(BaseHTTPRequestHandler):
         self.cabecalhos_seguranca()
         self.end_headers()
 
-    def calendario(self):
-        q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
-        tok = q0.get("t", "")
-        lg_ok = next((lg for lg, u in usuarios.carregar().items() if tok and len(tok) >= 20 and u.get("ativo", True)
-                      and hmac.compare_digest((u.get("cfg") or {}).get("ics_token", ""), tok)), None)
-        if not lg_ok:
-            self.send_response(404)
-            self.end_headers()
-            return
-        _REQ.user, _REQ.perm, _REQ.admin = usuarios.obter(lg_ok), None, False
-        try:
-            dados_c = ics_usuario().encode("utf-8")
-        finally:
-            _REQ.user = None
-        self.send_response(200)
-        self.send_header("Content-Type", "text/calendar; charset=utf-8")
-        self.send_header("Content-Disposition", 'inline; filename="licitatudo.ics"')
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(dados_c)))
-        self.end_headers()
-        self.wfile.write(dados_c)
-
     def do_GET(self):
         caminho = urllib.parse.urlparse(self.path).path.rstrip("/")
         if caminho in ("/manifest.webmanifest", "/sw.js", "/icone-192.png", "/icone-512.png"):   # app no celular (público, sem dados)
@@ -7927,8 +7832,6 @@ class Painel(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(dados_p)
             return
-        if caminho == "/agenda.ics":
-            return self.calendario()
         if caminho == "/login":
             q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
             return self.enviar(pg_login("", q0.get("destino", "/")))
@@ -9550,9 +9453,6 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
             mod = re.sub(r"[^\w.-]", "", f.get("gemini_modelo", ""))[:60]
             usuarios.salvar_cfg(lg, {"gemini_key": None if f.get("tirar_chave") else (k or uc.get("gemini_key") or None),
                                      "gemini_modelo": mod or None})
-            return self.redirecionar("/preferencias?ok=pref")
-        if p == "/preferencias/ics":
-            usuarios.salvar_cfg(lg, {"ics_token": secrets.token_urlsafe(24)})
             return self.redirecionar("/preferencias?ok=pref")
         if p == "/preferencias/resumo":
             try:
