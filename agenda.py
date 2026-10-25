@@ -271,8 +271,9 @@ def sincronizar_cartao(cartao, itens, base):
 
 
 def _chave_dup(it):
-    """O mesmo prazo do mesmo processo (ex.: duas empresas nossas na mesma licitação) vira um item só."""
-    return (it.get("processo", ""), it.get("promotor", ""), it.get("quando", ""), it.get("titulo", ""))
+    """O mesmo prazo do mesmo processo (ex.: duas empresas nossas na mesma licitação) vira um item só –
+    mas só entre empresas do MESMO usuário (dados de usuários diferentes nunca se misturam)."""
+    return (it.get("dono", ""), it.get("processo", ""), it.get("promotor", ""), it.get("quando", ""), it.get("titulo", ""))
 
 
 def _juntar_empresa(destino, nome, eid):
@@ -323,6 +324,14 @@ def varrer_mensagens():
         if _arrumar(d):
             _gravar(ARQ_PRAZOS, d)
     marcas = d.setdefault("marcas", {})
+    donos = {}
+    for env in EMPRESAS.glob("*.env"):
+        for linha in env.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if linha.startswith("EMPRESA_DONO="):
+                donos[env.stem] = linha.split("=", 1)[1].strip().lower()
+    for it in d["itens"].values():   # prazos antigos (sem dono gravado): o dono vem da empresa
+        if it.get("origem") == "auto" and "dono" not in it and it.get("eid"):
+            it["dono"] = donos.get(it["eid"], "")
     indice = {_chave_dup(it): pid for pid, it in d["itens"].items() if it.get("origem") == "auto"}
     juntados = {}
     for env in sorted(EMPRESAS.glob("*.env")):
@@ -330,10 +339,12 @@ def varrer_mensagens():
         db = EMPRESAS / eid / "bll_monitor.db"
         if not db.exists():
             continue
-        nome = eid
+        nome, dono = eid, ""
         for linha in env.read_text(encoding="utf-8", errors="ignore").splitlines():
             if linha.startswith("EMPRESA_NOME="):
                 nome = linha.split("=", 1)[1].strip() or eid
+            elif linha.startswith("EMPRESA_DONO="):
+                dono = linha.split("=", 1)[1].strip().lower()
         try:
             con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
             ultimo = marcas.get(eid)
@@ -364,7 +375,7 @@ def varrer_mensagens():
                 if pid in d["itens"]:
                     continue
                 item = {"titulo": f"{tipo} – {proc}", "quando": quando.strftime("%Y-%m-%dT%H:%M"), "empresa": nome, "eid": eid,
-                        "eids": [eid], "processo": proc, "promotor": prom, "obs": f"{esc} · {aut} · {hor}\n{(txt or '')[:900]}",
+                        "eids": [eid], "dono": dono, "processo": proc, "promotor": prom, "obs": f"{esc} · {aut} · {hor}\n{(txt or '')[:900]}",
                         "origem": "auto", "estimado": estimado, "status": "aberto", "avisos": [],
                         "criado": datetime.now().strftime("%Y-%m-%dT%H:%M")}
                 k = _chave_dup(item)

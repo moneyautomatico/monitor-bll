@@ -57,7 +57,9 @@ def montar(agora=None, permitidos=None, login=""):
         for rot, grupo in (("❗ Atrasado", atras), ("🔴 Hoje", hoje), ("🟠 Amanhã", amanha)):
             for q, it in grupo[:8]:
                 hora = "" if q.hour == 23 and q.minute == 59 else q.strftime(" %H:%M")
-                linhas.append(f"{rot}{hora} – {e(it['titulo'])} <i>({e(it.get('empresa', ''))})</i>")
+                emp_txt = ", ".join(x for x in (it.get("empresa") or "").split(", ")
+                                    if permitidos is None or x.strip().upper() in permitidos)
+                linhas.append(f"{rot}{hora} – {e(it['titulo'])} <i>({e(emp_txt)})</i>")
         partes.append("\n".join(linhas))
     else:
         partes.append("\n📅 Nenhum prazo para hoje ou amanhã.")
@@ -145,6 +147,7 @@ def montar(agora=None, permitidos=None, login=""):
     except Exception:  # noqa: BLE001
         itens = []
     novas = sorted([r for r in itens if not r.get("descartado") and r.get("nivel") == "alto"
+                    and (permitidos is None or set(r.get("empresas") or []) & set(permitidos))   # só das empresas do usuário
                     and (r.get("achada_em") or "") >= desde.strftime("%Y-%m-%d %H:%M")], key=lambda r: -r.get("pontos", 0))
     if novas:
         linhas = [f"\n🎯 <b>{len(novas)} oportunidade(s) nova(s) com encaixe alto</b>"]

@@ -4728,7 +4728,7 @@ No celular, este link já abre o app: <a href="ntfy://ntfy.sh/{e(topico)}">ntfy:
 <div class="form" style="max-width:none"><h3 style="margin-top:0">☀️ Meu resumo diário</h3>
 <p class="sub">Um resumo por dia no seu Telegram, só com as suas empresas: prazos, certidões vencendo e o que mudou nos processos.</p>
 <form method="post" action="/preferencias/resumo"><input type="hidden" name="csrf" value="{CSRF}">
-<label class="ck"><input type="checkbox" name="ativo" value="1" {"checked" if uc.get("resumo_ativo") else ""}> Receber o resumo diário</label>
+<label class="ck"><input type="checkbox" name="ativo" value="1" {"checked" if uc.get("resumo_ativo", CFG_ATUAL().get("RESUMO_ATIVO", "1") != "0") else ""}> Receber o resumo diário</label>
 <label class="ck"><input type="checkbox" name="relatorio" value="1" {"checked" if uc.get("relatorio_mensal", True) else ""}> Receber no dia 1º o <a href="/relatorio">relatório do mês</a> em PDF</label>
 <label>Hora <small>(0 a 23)</small></label><input class="campo" type="number" min="0" max="23" name="hora" value="{e(str(uc.get("resumo_hora", 7)))}" style="max-width:120px">
 <div class="acoes"><button>Salvar</button><button class="sec" name="acao" value="agora">📨 Enviar agora</button></div></form></div>
@@ -4973,9 +4973,10 @@ O custo da IA é repassado ao licitante (mostrar o “valor ao licitante”, com
 <h2 style="margin-top:22px">☀️ Resumo diário no Telegram</h2><div class="form">
 <form method="post" action="/config/resumo"><input type="hidden" name="csrf" value="{CSRF}">
 <label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" name="RESUMO_ATIVO" value="1" {"checked" if c.get("RESUMO_ATIVO", "1") != "0" else ""}>
-Mandar todo dia um resumo: prazos de hoje/amanhã, certidões vencendo, o que mudou nos processos e oportunidades novas</label>
-<label>Hora do resumo <small>(0 a 23)</small></label><input class="campo" type="number" min="0" max="23" name="RESUMO_HORA" value="{g('RESUMO_HORA', '7')}" style="max-width:120px">
-<div class="acoes"><button>Salvar</button><button class="sec" name="acao" value="agora">📨 Enviar um resumo agora</button></div></form></div>
+Resumo diário ligado por padrão para os usuários (cada um recebe só as empresas dele, no próprio bot – e pode mudar em ⚙️)</label>
+<p class="sub">O administrador não recebe resumo com dados das empresas dos usuários.</p>
+<label>Hora padrão <small>(0 a 23 – para quem não escolheu)</small></label><input class="campo" type="number" min="0" max="23" name="RESUMO_HORA" value="{g('RESUMO_HORA', '7')}" style="max-width:120px">
+<div class="acoes"><button>Salvar</button></div></form></div>
 <h2 style="margin-top:22px" id="seguranca">🛡️ Segurança</h2><div class="form">
 <p class="sub">Acesso ao painel: {"<b>HTTPS (cadeado) ativo</b>" if HOST == "127.0.0.1" else "<b style='color:var(--erro)'>sem HTTPS</b> – rode <code>bash seguranca.sh</code> no servidor"} ·
 sessões abertas: <b>{len(_sessoes())}</b> · usuários: <b>{len(usuarios.carregar())}</b></p>
@@ -5968,9 +5969,15 @@ def resumo_usuarios():
             hoje = date.today().isoformat()
             for lg, u in usuarios.carregar().items():
                 c = u.get("cfg") or {}
-                if not (u.get("ativo", True) and c.get("resumo_ativo") and c.get("tg_chat")):
-                    continue
-                if agora.hour != int(c.get("resumo_hora", 7)) or c.get("resumo_ultimo") == hoje:
+                g = CFG_ATUAL()
+                padrao_ativo = g.get("RESUMO_ATIVO", "1") != "0"   # quem nunca mexeu recebe (padrão do administrador)
+                if u.get("papel") == "admin" or not (u.get("ativo", True) and c.get("resumo_ativo", padrao_ativo) and c.get("tg_chat")):
+                    continue   # o administrador não recebe resumo com empresas dos usuários
+                try:
+                    hora_u = int(c.get("resumo_hora", g.get("RESUMO_HORA", "7")) or 7)
+                except ValueError:
+                    hora_u = 7
+                if agora.hour != hora_u or c.get("resumo_ultimo") == hoje:
                     continue
                 tok = c.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
                 resumo.enviar_partes(lambda t: telegram_para(tok, c["tg_chat"], t), resumo.montar(agora, nomes_do_usuario(lg), lg))
@@ -7103,9 +7110,6 @@ class Painel(BaseHTTPRequestHandler):
             if p == "/config/resumo":
                 gravar_env(CONFIG, {"RESUMO_ATIVO": "1" if f.get("RESUMO_ATIVO") else "0",
                                     "RESUMO_HORA": re.sub(r"\D", "", f.get("RESUMO_HORA", "7"))[:2] or "7"})
-                if f.get("acao") == "agora":
-                    threading.Thread(target=lambda: resumo.enviar_partes(telegram_geral, resumo.montar()), daemon=True).start()
-                    return self.redirecionar("/config?ok=resumo_enviado")
                 return self.redirecionar("/config?ok=config")
             if p == "/agenda/novo":
                 try:
@@ -7620,6 +7624,8 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
             if f.get("acao") == "agora":
                 if not (uc.get("tg_token") and uc.get("tg_chat")):
                     return self.enviar(pg_preferencias("Conecte o seu bot do Telegram primeiro.", True))
+                if nomes_do_usuario(lg) is None:
+                    return self.enviar(pg_preferencias("O administrador não recebe resumo com as empresas dos usuários.", True))
                 resumo.enviar_partes(lambda t: telegram_para(uc["tg_token"], uc["tg_chat"], t), resumo.montar(None, nomes_do_usuario(lg), lg))
                 return self.redirecionar("/preferencias?ok=pref_resumo")
             return self.redirecionar("/preferencias?ok=pref")
@@ -7646,5 +7652,4 @@ if __name__ == "__main__":
     threading.Thread(target=backup.ciclo, args=(CFG_ATUAL, telegram_geral, 3, lambda: destinos_admin()[0]), daemon=True).start()
     threading.Thread(target=oportunidades.ciclo, args=(telegram_geral,), daemon=True).start()
     threading.Thread(target=agenda.ciclo, args=(telegram_geral, CFG_ATUAL), daemon=True).start()
-    threading.Thread(target=resumo.ciclo, args=(telegram_geral, CFG_ATUAL), daemon=True).start()
     ThreadingHTTPServer((HOST, PORTA), Painel).serve_forever()
