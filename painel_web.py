@@ -43,6 +43,7 @@ import resumo
 import documentos
 import geo
 import ajuda
+import edital_vigia
 import atas
 import catalogo
 import atestados
@@ -3120,6 +3121,67 @@ def processar_cartao(card, info):
         card.update(snap)
 
 
+def pncp_ref_cartao(card):
+    ref = edital_vigia.ref_do_link(card.get("pncp_link") or card.get("link") or "")
+    if ref:
+        return ref
+    o = (analise.ler(card.get("edital_chave") or "") or {}).get("origem") or {}
+    return (o["cnpj"], o["ano"], o["seq"]) if o.get("tipo") == "pncp" and o.get("cnpj") else None
+
+
+def vigiar_edital(card, forcar=False):
+    """Confere o edital no PNCP e avisa o que mudou. Devolve a lista de mudanças (ou None se não deu para conferir)."""
+    ref = pncp_ref_cartao(card)
+    if not ref:
+        return None
+    agora = time.time()
+    if not forcar and agora - float(card.get("pncp_checado") or 0) < 3 * 3600:
+        return []
+    try:
+        snap = edital_vigia.consultar(*ref)
+    except Exception as ex:  # noqa: BLE001
+        print("vigia do edital:", card.get("id"), ex, flush=True)
+        return None
+    difs = edital_vigia.diferencas(card.get("pncp_snap"), snap)
+    novos = {"pncp_snap": snap, "pncp_checado": agora}
+    enc = snap.get("encerramento") or ""
+    if enc and (not card.get("fim") or difs and any("encerramento" in d for d in difs)):
+        novos["fim"] = enc[:16] if len(enc) >= 16 else enc[:10] + "T23:59"
+        novos["legais_sig"] = ""   # data mudou: refaz os prazos legais
+    if difs:
+        reg = {"quando": datetime.now().strftime("%d/%m/%Y %H:%M"), "itens": difs}
+        novos["alteracoes"] = ([reg] + (card.get("alteracoes") or []))[:30]
+        link = "https://pncp.gov.br/app/editais/{}/{}/{}".format(*ref)
+        texto = (f"📝 <b>Edital alterado</b> – {e(card.get('processo') or '')}\n{e((card.get('orgao') or '')[:80])}\n"
+                 + "\n".join(difs) + f"\n\n<i>{e(card.get('empresa', ''))}</i> · {link}\n"
+                 "Releia o que mudou (e refaça a análise do edital, se for o caso). Os prazos legais já foram recalculados.")
+        threading.Thread(target=telegram_geral, args=(texto,), kwargs={"empresas": [card.get("empresa", "")]}, daemon=True).start()
+    kanban.atualizar(card["id"], lambda c: c.update(novos))
+    card.update(novos)
+    return difs
+
+
+def html_vigia(card):
+    cid = card["id"]
+    ref = pncp_ref_cartao(card)
+    alts = "".join(f'<li><b>{e(a["quando"])}</b><ul>' + "".join(f"<li>{d}</li>" for d in a["itens"]) + "</ul></li>"
+                   for a in card.get("alteracoes") or [])
+    chec = datetime.fromtimestamp(float(card["pncp_checado"])).strftime("%d/%m/%Y %H:%M") if card.get("pncp_checado") else ""
+    snap = card.get("pncp_snap") or {}
+    docs = "".join(f"<li>{e(t)}</li>" for t in list((snap.get("arquivos") or {}).values())[:15])
+    return f"""<div class="form" style="max-width:none;margin-top:12px" id="vigia"><h3 style="margin-top:0">📝 Edital no PNCP – aviso de alteração</h3>
+{(f'<p class="sub">Acompanhando <a href="https://pncp.gov.br/app/editais/{ref[0]}/{ref[1]}/{ref[2]}" target="_blank" rel="noopener">o edital no PNCP</a> a cada 3 horas'
+  f'{" · última conferência " + chec if chec else ""}{" · situação: " + e(snap["situacao"]) if snap.get("situacao") else ""}. '
+  'Documento novo (errata, adendo, esclarecimento), mudança de data ou de situação chegam no seu Telegram e a data da abertura é atualizada aqui.</p>')
+ if ref else '<p class="sub">Cole o link do edital no PNCP para o sistema avisar quando sair errata, adendo, esclarecimento ou mudança de data.</p>'}
+{f'<details><summary class="sub" style="cursor:pointer">documentos publicados ({len(snap.get("arquivos") or {})})</summary><ul>{docs}</ul></details>' if docs else ''}
+{f'<h4 style="margin:10px 0 4px">Alterações percebidas</h4><ul>{alts}</ul>' if alts else ''}
+<form method="post" action="/licitacoes/{cid}/pncp" class="linha" style="gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px"><input type="hidden" name="csrf" value="{CSRF}">
+<input class="campo" name="pncp_link" value="{e(card.get("pncp_link") or (card.get("link") if edital_vigia.ref_do_link(card.get("link")) else "") or "")}"
+ placeholder="https://pncp.gov.br/app/editais/CNPJ/ANO/Nº" style="flex:1;min-width:260px;margin:0">
+<button class="sec">🔄 Salvar e conferir agora</button></form></div>"""
+
+
 def cartoes_visiveis(emp_f="", processar=True):
     """[(cartão, info)] das licitações do usuário (não arquivadas)."""
     mon = dados_monitor()
@@ -3151,7 +3213,10 @@ def kanban_ciclo():
                 continue
             _REQ.user, _REQ.perm, _REQ.admin = u, None, False
             try:
-                cartoes_visiveis()
+                for card, info in cartoes_visiveis():
+                    ab = info.get("abertura")
+                    if not info.get("resultado") and (not ab or ab > datetime.now() - timedelta(days=1)):
+                        vigiar_edital(card)
             except Exception as ex:  # noqa: BLE001
                 print("Erro no kanban de", lg, ex, flush=True)
         _REQ.user = None
@@ -3472,6 +3537,7 @@ def pg_licitacao(cid, aviso="", erro=False):
 <div class="pbar grande"><span style="width:{info["progresso"]}%"></span></div>
 <p style="margin:4px 0"><b>Próximo passo:</b> {e(info["proximo"])}</p></div>
 <div class="form" style="max-width:none;margin-top:12px"><h3 style="margin-top:0">🧭 Siga-me – passo a passo</h3><ol class="siga">{lista}</ol></div>
+{html_vigia(card)}
 {html_prazos_legais(card, info)}
 {html_equipe(card)}
 <div class="form" style="max-width:none;margin-top:12px"><h3 style="margin-top:0">Ajustes</h3>
@@ -7863,6 +7929,17 @@ class Painel(BaseHTTPRequestHandler):
                                       usuario=login_atual(), link=f.get("link", "").strip()[:500] if f.get("link", "").startswith("http") else "",
                                       fim=f.get("fim", "")[:16])
                 return self.redirecionar(f"/licitacoes/{cid}")
+            m = re.fullmatch(r"/licitacoes/([0-9a-f]{12})/pncp", p)
+            if m and kanban.ler(m.group(1)):
+                cid = m.group(1)
+                link = f.get("pncp_link", "").strip()[:300]
+                if link and not edital_vigia.ref_do_link(link):
+                    return self.enviar(pg_licitacao(cid, "Esse link não parece do PNCP (pncp.gov.br/app/editais/CNPJ/ANO/Nº).", True))
+                kanban.atualizar(cid, lambda c: c.update({"pncp_link": link, **({} if link == (c.get("pncp_link") or "") else {"pncp_snap": None})}))
+                difs = vigiar_edital(kanban.ler(cid), forcar=True)
+                msg = ("Não consegui consultar o PNCP agora – tento de novo sozinho em até 3 horas." if difs is None and link else
+                       ("Mudanças encontradas: " + " · ".join(re.sub(r"<[^>]+>", "", d) for d in difs)) if difs else "Conferido: nada mudou desde a última vez.")
+                return self.enviar(pg_licitacao(cid, e(msg)))
             m = re.fullmatch(r"/licitacoes/([0-9a-f]{12})/(responsavel|tarefa|comentar|legais)", p)
             if m and kanban.ler(m.group(1)):
                 cid, acao = m.groups()
