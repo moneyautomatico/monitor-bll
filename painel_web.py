@@ -95,7 +95,9 @@ AVISOS = {"formacao": "🧮 Custos salvos. O lance mínimo de cada lote virou o 
           "sessoes": "Todas as outras sessões foram encerradas.",
           "op_rodando": "Atualizando as oportunidades no PNCP. Leva 1 a 3 minutos; recarregue a página depois.",
           "op_cfg": "Perfil salvo. Atualizando as oportunidades com as novas regras (1 a 3 minutos)."}
-e = html.escape
+def e(x, quote=True):
+    """html.escape que aceita None/números (campo vazio no banco não derruba a página)."""
+    return "" if x is None else html.escape(x if isinstance(x, str) else str(x), quote)
 
 
 # ------------------------------------------------------------------ arquivos .env
@@ -803,7 +805,8 @@ NOMES_PAGINA = [("/admin/empresas", "Admin · Empresas"), ("/admin/auditoria", "
                 ("/preferencias", "⚙️ Minhas configurações"), ("/meu-consumo", "Meu consumo de IA"), ("/pergunte", "Pergunte ao Licitatudo"),
                 ("/conta", "Minha conta"), ("/config", "Configurações gerais"), ("/consumo", "Consumo de IA"),
                 ("/licitacoes", "🗂️ Licitações"), ("/atas", "Atas de registro de preço"), ("/contratos", "Contratos"), ("/ajuda", "❓ Ajuda"),
-                ("/atestados", "Atestados"), ("/relatorio", "Relatório do mês"), ("/resultado", "Por que perdi?")]
+                ("/atestados", "Atestados"), ("/relatorio", "Relatório do mês"), ("/resultado", "Por que perdi?"),
+                ("/catalogo", "Catálogo e preços"), ("/orgao", "Ficha do órgão"), ("/pacote", "Pacote de habilitação")]
 
 
 def nome_pagina(url):
@@ -3349,6 +3352,90 @@ def processar_cartao(card, info):
         card.update(snap)
 
 
+# ------------------------------------------------------------------ esclarecimentos e impugnações
+NOME_PEDIDO = {"esclarecimento": "❓ Pedido de esclarecimento", "impugnacao": "⚖️ Impugnação"}
+
+
+def prazo_resposta(enviado, abertura):
+    """Art. 164, parágrafo único: resposta em até 3 dias úteis, limitada ao último dia útil antes da abertura."""
+    try:
+        d = date.fromisoformat(enviado)
+    except ValueError:
+        return ""
+    lim = agenda.somar_dias_uteis(d, 3)
+    if abertura:
+        antes = agenda.subtrair_dias_uteis(abertura, 1)
+        lim = min(lim, antes)
+    return lim.date().isoformat()
+
+
+def html_pedidos(card, info):
+    cid = card["id"]
+    hoje = date.today().isoformat()
+    ab = info.get("abertura")
+    lim_imp = next((q for t, _, q, _, _ in info.get("legais") or [] if t == "impugnacao"), None)
+    q_base = {"emp": card.get("empresa", ""), "edital": info.get("edital") or "", "orgao": card.get("orgao", ""), "processo": card.get("processo", "")}
+    linhas = ""
+    for p_ in sorted(card.get("pedidos") or [], key=lambda x: x.get("enviado", ""), reverse=True):
+        pz = p_.get("prazo_resposta", "")
+        if p_.get("respondido_em"):
+            st = f'<span class="tag ok">respondido {contratos.br(p_["respondido_em"])}</span>' + (f' <b>{e(p_.get("decisao", ""))}</b>' if p_.get("decisao") else "")
+        elif pz and pz < hoje:
+            st = '<span class="tag erro">⏰ sem resposta no prazo</span>'
+        else:
+            st = f'<span class="tag aviso">aguardando · até {contratos.br(pz)}</span>' if pz else '<span class="tag aviso">aguardando</span>'
+        resp = (f'<div class="sub" style="margin-top:4px"><b>Resposta:</b> {e(p_.get("resposta", ""))}</div>' if p_.get("resposta") else "")
+        form_r = ("" if p_.get("respondido_em") else
+                  f'<details><summary class="sub" style="cursor:pointer">registrar a resposta</summary><form method="post" action="/licitacoes/{cid}/pedido/{p_["id"]}/resposta" style="margin-top:6px">'
+                  f'<input type="hidden" name="csrf" value="{CSRF}"><div class="linha" style="gap:6px;flex-wrap:wrap">'
+                  f'<input class="campo" type="date" name="data" value="{hoje}" style="max-width:160px">'
+                  f'<select class="campo" name="decisao" style="max-width:200px"><option>respondido</option><option>deferido (acatado)</option>'
+                  f'<option>parcialmente deferido</option><option>indeferido</option></select></div>'
+                  f'<textarea class="campo" name="resposta" rows="2" placeholder="resumo da resposta do órgão"></textarea><button class="sec">Salvar resposta</button></form></details>')
+        linhas += (f'<tr><td><b>{NOME_PEDIDO.get(p_.get("tipo"), "")}</b><div class="sub">enviado {contratos.br(p_.get("enviado"))}'
+                   f'{" · " + e(p_["canal"]) if p_.get("canal") else ""}{" · protocolo " + e(p_["protocolo"]) if p_.get("protocolo") else ""}</div>'
+                   f'<div>{e(p_.get("resumo", ""))}</div>{resp}{form_r}</td><td>{st}</td>'
+                   f'<td>{botao("/licitacoes/" + cid + "/pedido/" + p_["id"] + "/excluir", "✕", "sec", "Remover este registro?")}</td></tr>')
+    limite_txt = ""
+    if lim_imp:
+        passou = lim_imp < datetime.now()
+        limite_txt = (f'<p class="sub">Prazo para pedir: até <b>{_dt_hora(lim_imp)}</b> (3 dias úteis antes da abertura – art. 164)'
+                      f'{" – <b style=color:#c62828>já passou</b>" if passou else ""}. A resposta do órgão deve sair em até 3 dias úteis.</p>')
+    return f"""<div class="form" style="max-width:none;margin-top:12px" id="pedidos"><h3 style="margin-top:0">❓ Esclarecimentos e impugnações</h3>
+{limite_txt}
+<div class="acoes"><a class="btn sec" href="/pecas?{e(urllib.parse.urlencode({**q_base, "tipo": "esclarecimento"}))}">🤖 Rascunhar esclarecimento com IA</a>
+<a class="btn sec" href="/pecas?{e(urllib.parse.urlencode({**q_base, "tipo": "impugnacao"}))}">🤖 Rascunhar impugnação com IA</a></div>
+<table><tr><th>Pedido</th><th>Situação</th><th></th></tr>{linhas or '<tr><td colspan="3" class="sub">Nenhum pedido registrado.</td></tr>'}</table>
+<details style="margin-top:8px"><summary class="sub" style="cursor:pointer"><b>➕ Registrar um pedido enviado</b></summary>
+<form method="post" action="/licitacoes/{cid}/pedido" style="margin-top:6px"><input type="hidden" name="csrf" value="{CSRF}">
+<div class="linha" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+<div><label>Tipo</label><select class="campo" name="tipo"><option value="esclarecimento">Pedido de esclarecimento</option><option value="impugnacao">Impugnação</option></select></div>
+<div><label>Enviado em</label><input class="campo" type="date" name="enviado" value="{hoje}"></div>
+<div><label>Canal</label><input class="campo" name="canal" placeholder="e-mail, sistema, protocolo…" style="max-width:200px"></div>
+<div><label>Protocolo</label><input class="campo" name="protocolo" style="max-width:160px"></div></div>
+<label>O que foi pedido (resumo)</label><textarea class="campo" name="resumo" rows="2" required></textarea>
+<div class="acoes"><button class="sec">Registrar</button></div></form></details>
+<p class="sub">O sistema calcula o prazo de resposta e avisa no Telegram se o órgão não responder. Respostas publicadas no PNCP também aparecem no aviso de edital alterado.</p></div>"""
+
+
+def cobrar_respostas(card):
+    """Pedido sem resposta depois do prazo: avisa uma vez."""
+    hoje = date.today().isoformat()
+    for p_ in card.get("pedidos") or []:
+        if not p_.get("respondido_em") and p_.get("prazo_resposta") and p_["prazo_resposta"] < hoje and not p_.get("cobrado"):
+            texto = (f"⏰ <b>Sem resposta no prazo</b> – {NOME_PEDIDO.get(p_.get('tipo'), 'Pedido')}\n{e(card.get('processo') or '')} · "
+                     f"{e((card.get('orgao') or '')[:70])}\nEnviado em {contratos.br(p_.get('enviado'))}; a resposta deveria sair até "
+                     f"{contratos.br(p_['prazo_resposta'])} (art. 164, parágrafo único).\nConfira no PNCP/sistema e, se for o caso, cobre o órgão.\n"
+                     f"<i>{e(card.get('empresa', ''))}</i>")
+            threading.Thread(target=telegram_geral, args=(texto,), kwargs={"empresas": [card.get("empresa", "")]}, daemon=True).start()
+
+            def _marca(c, pid_=p_["id"]):
+                for x in c.get("pedidos") or []:
+                    if x.get("id") == pid_:
+                        x["cobrado"] = hoje
+            kanban.atualizar(card["id"], _marca)
+
+
 def pncp_ref_cartao(card):
     ref = edital_vigia.ref_do_link(card.get("pncp_link") or card.get("link") or "")
     if ref:
@@ -3380,6 +3467,9 @@ def vigiar_edital(card, forcar=False):
         reg = {"quando": datetime.now().strftime("%d/%m/%Y %H:%M"), "itens": difs}
         novos["alteracoes"] = ([reg] + (card.get("alteracoes") or []))[:30]
         link = "https://pncp.gov.br/app/editais/{}/{}/{}".format(*ref)
+        pend = any(not x.get("respondido_em") for x in card.get("pedidos") or [])
+        if pend and any(re.search(r"esclarec|impugna|respost", d, re.I) for d in difs):
+            difs = difs + ["💡 Pode ser a resposta ao seu pedido – registre no cartão da licitação."]
         texto = (f"📝 <b>Edital alterado</b> – {e(card.get('processo') or '')}\n{e((card.get('orgao') or '')[:80])}\n"
                  + "\n".join(difs) + f"\n\n<i>{e(card.get('empresa', ''))}</i> · {link}\n"
                  "Releia o que mudou (e refaça a análise do edital, se for o caso). Os prazos legais já foram recalculados.")
@@ -3445,6 +3535,7 @@ def kanban_ciclo():
                     ab = info.get("abertura")
                     if not info.get("resultado") and (not ab or ab > datetime.now() - timedelta(days=1)):
                         vigiar_edital(card)
+                    cobrar_respostas(card)
             except Exception as ex:  # noqa: BLE001
                 print("Erro no kanban de", lg, ex, flush=True)
         _REQ.user = None
@@ -3767,6 +3858,7 @@ def pg_licitacao(cid, aviso="", erro=False):
 <div class="form" style="max-width:none;margin-top:12px"><h3 style="margin-top:0">🧭 Siga-me – passo a passo</h3><ol class="siga">{lista}</ol></div>
 {html_vigia(card)}
 {html_prazos_legais(card, info)}
+{html_pedidos(card, info)}
 {html_equipe(card)}
 <div class="form" style="max-width:none;margin-top:12px"><h3 style="margin-top:0">Ajustes</h3>
 <form method="post" action="/licitacoes/{cid}/mover" class="linha" style="gap:6px"><input type="hidden" name="csrf" value="{CSRF}">
@@ -4466,7 +4558,7 @@ def pg_pecas(q, aviso=""):
     sel_tipo = "".join(f'<option value="{k}" {"selected" if k == tipo_q else ""}>{e(t)}</option>' for k, (t, _) in pecas.TIPOS.items())
     analisados = [a for a in analise.listar() if a.get("status") == "pronto" and ve_analise(a)]
     sel_edital = ('<option value="">— nenhum (usar só o histórico e os pontos) —</option>' +
-                  "".join(f'<option value="{e(a["chave"])}">{e((a.get("titulo") or a["chave"])[:110])}</option>' for a in analisados))
+                  "".join(f'<option value="{e(a["chave"])}" {"selected" if a["chave"] == q.get("edital") else ""}>{e((a.get("titulo") or a["chave"])[:110])}</option>' for a in analisados))
     falta = [x for x in documentos.faltando(ctx) if x in ("razão social", "CNPJ")]
     linhas = "".join(
         f'<tr><td><a href="/pecas/{e(x["id"])}">{e(pecas.TIPOS.get(x.get("tipo"), (x.get("tipo"), ""))[0])}</a>'
@@ -4486,8 +4578,8 @@ protocolar – a IA marca com [CONFERIR] o que não encontrou. O sistema não en
 <div><label>Empresa</label><select class="campo" name="emp" onchange="location.href='/pecas?emp='+encodeURIComponent(this.value)">{sel_emp}</select></div>
 <div><label>Processo <small>(o histórico dele vai para a IA)</small></label><select class="campo" name="proc">{sel_proc}</select></div>
 <div><label>Edital <small>(já analisado em Editais (IA))</small></label><select class="campo" name="edital">{sel_edital}</select></div>
-<div><label>Órgão <small>(vazio = o do processo)</small></label><input class="campo" name="orgao" placeholder="ex.: MUNICÍPIO DE RUY BARBOSA"></div>
-<div><label>Nº do processo/edital <small>(vazio = o do processo)</small></label><input class="campo" name="processo" placeholder="ex.: 033/2026"></div></div>
+<div><label>Órgão <small>(vazio = o do processo)</small></label><input class="campo" name="orgao" value="{e(q.get("orgao", "")[:200])}" placeholder="ex.: MUNICÍPIO DE RUY BARBOSA"></div>
+<div><label>Nº do processo/edital <small>(vazio = o do processo)</small></label><input class="campo" name="processo" value="{e(q.get("processo", "")[:80])}" placeholder="ex.: 033/2026"></div></div>
 <label>Documentos de apoio <small>(opcional: recurso do concorrente, ata, pedido de diligência, planilha de custos, o PDF do edital… até 18 MB)</small></label>
 <input type="file" name="arquivo" multiple accept=".pdf,.docx,.zip,.txt">
 <label>O que você quer defender ou pedir <small>(quanto mais claro, melhor a peça)</small></label>
@@ -8166,6 +8258,29 @@ class Painel(BaseHTTPRequestHandler):
                                       usuario=login_atual(), link=f.get("link", "").strip()[:500] if f.get("link", "").startswith("http") else "",
                                       fim=f.get("fim", "")[:16])
                 return self.redirecionar(f"/licitacoes/{cid}")
+            m = re.fullmatch(r"/licitacoes/([0-9a-f]{12})/pedido(?:/([0-9a-f]{8})/(resposta|excluir))?", p)
+            if m and kanban.ler(m.group(1)):
+                cid, xid, acao = m.groups()
+                card = kanban.ler(cid)
+                if not xid:
+                    env = f.get("enviado", "")[:10] if re.fullmatch(r"\d{4}-\d{2}-\d{2}", f.get("enviado", "")[:10]) else date.today().isoformat()
+                    info_c = info_cartao(card, dados_monitor(), {})
+                    novo_p = {"id": kanban.novo_id(), "tipo": f.get("tipo") if f.get("tipo") in NOME_PEDIDO else "esclarecimento",
+                              "enviado": env, "canal": f.get("canal", "").strip()[:80], "protocolo": f.get("protocolo", "").strip()[:60],
+                              "resumo": f.get("resumo", "").strip()[:1500], "prazo_resposta": prazo_resposta(env, info_c.get("abertura")),
+                              "por": login_atual()}
+                    kanban.atualizar(cid, lambda c: c.setdefault("pedidos", []).append(novo_p))
+                elif acao == "excluir":
+                    kanban.atualizar(cid, lambda c: c.__setitem__("pedidos", [x for x in c.get("pedidos") or [] if x.get("id") != xid]))
+                else:
+                    def _resp(c):
+                        for x in c.get("pedidos") or []:
+                            if x.get("id") == xid:
+                                x["respondido_em"] = f.get("data", "")[:10] or date.today().isoformat()
+                                x["decisao"] = f.get("decisao", "")[:40]
+                                x["resposta"] = f.get("resposta", "").strip()[:2000]
+                    kanban.atualizar(cid, _resp)
+                return self.redirecionar(f"/licitacoes/{cid}?ok=feito#pedidos")
             m = re.fullmatch(r"/licitacoes/([0-9a-f]{12})/pncp", p)
             if m and kanban.ler(m.group(1)):
                 cid = m.group(1)
