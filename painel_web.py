@@ -42,6 +42,8 @@ import custos_ia
 import resumo
 import documentos
 import geo
+import ajuda
+import atas
 import atestados
 import kanban
 import resultados
@@ -781,7 +783,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
-{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
+{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();</script></body></html>"""
 
 
@@ -793,7 +795,9 @@ NOMES_PAGINA = [("/admin/empresas", "Admin · Empresas"), ("/admin/auditoria", "
                 ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/analise", "Análise de edital"),
                 ("/documentos", "Declarações"), ("/propostas", "Proposta comercial"), ("/pecas", "Peças com IA"), ("/empresas", "Empresas"),
                 ("/preferencias", "⚙️ Minhas configurações"), ("/meu-consumo", "Meu consumo de IA"), ("/pergunte", "Pergunte ao Licitatudo"),
-                ("/conta", "Minha conta"), ("/config", "Configurações gerais"), ("/consumo", "Consumo de IA")]
+                ("/conta", "Minha conta"), ("/config", "Configurações gerais"), ("/consumo", "Consumo de IA"),
+                ("/licitacoes", "🗂️ Licitações"), ("/atas", "Atas de registro de preço"), ("/contratos", "Contratos"), ("/ajuda", "❓ Ajuda"),
+                ("/atestados", "Atestados"), ("/relatorio", "Relatório do mês"), ("/resultado", "Por que perdi?")]
 
 
 def nome_pagina(url):
@@ -2624,6 +2628,7 @@ def pg_contratos(q, aviso="", erro=False):
     corpo = f"""<style>.barra-p{{height:5px;background:var(--borda);border-radius:3px;margin-top:3px}}.barra-p span{{display:block;height:5px;background:var(--verde);border-radius:3px}}
 .duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}}@media(max-width:700px){{.duas{{grid-template-columns:1fr}}}}</style>
 <div class="linha" style="justify-content:space-between;flex-wrap:wrap;gap:8px"><h2 style="margin:0">💼 Contratos – pós-venda</h2><a class="btn sec" href="/relatorio">📈 Relatório do mês</a></div>
+{abas_pos("con")}
 <p class="sub">Depois de vencer: acompanhe empenhos, entregas, notas fiscais e pagamentos. Você recebe aviso no Telegram quando uma
 entrega está perto do prazo ou atrasada e quando um pagamento passa do vencimento.</p>
 <div class="kpis"><div class="kpi"><div class="v">{contratos.brl(soma("contratado"))}</div><div class="l">contratado ({len(tot)} ativo(s))</div></div>
@@ -2802,6 +2807,7 @@ def info_cartao(card, mon, cache):
     if not m and np_:
         m = next((v for (pr, po), v in (mon.get(nome) or {}).items() if _norm_proc(pr) == np_), None)
     contr = next((c for c in contratos.listar() if c.get("empresa") == nome and _norm_proc(c.get("processo")) == np_ and np_), None)
+    ata = ata_da_licitacao(nome, card.get("processo"))
     itens, total = propostas.calcular(prop) if prop else ([], 0)
     conf = propostas.conferir(prop, base["ctx"], [(n, st, d) for _, n, st, d, _ in base["certs"]]) if prop else []
     edital = card.get("edital_chave") or (prop or {}).get("edital_chave", "")
@@ -2815,7 +2821,8 @@ def info_cartao(card, mon, cache):
             "proposta": prop, "proposta_ok": bool(itens) and all(i["_u"] > 0 for i in itens), "total": total,
             "conferencia_ok": bool(prop) and not any(n == "erro" for n, _ in conf), "n_erros": sum(1 for n, _ in conf if n == "erro"),
             "pacote": (prop or {}).get("pacote_gerado", ""), "no_monitor": bool(m), "monitor": m, "abertura": abertura,
-            "resultado": card.get("resultado_manual") or (resultado_monitor(m) if m else ""), "contrato": contr}
+            "resultado": card.get("resultado_manual") or (resultado_monitor(m) if m else ""), "contrato": contr or ata, "ata": ata,
+            "contrato_real": contr}
     auto = kanban.etapa_auto(info)
     manual = card.get("etapa_manual") or ""
     info["etapa"] = manual if manual and kanban.IDX.get(manual, 0) > kanban.IDX[auto] else auto
@@ -3167,7 +3174,14 @@ def pg_licitacao(cid, aviso="", erro=False):
                      f'<select class="campo" name="resultado" style="max-width:220px"><option value="">automático (monitor)</option>'
                      + "".join(f'<option value="{k}" {"selected" if card.get("resultado_manual") == k else ""}>{n}</option>' for k, n in (("ganhou", "Ganhamos"), ("perdeu", "Perdemos"), ("encerrado", "Encerrada sem vencedor")))
                      + '</select><button class="sec">Salvar</button></form>',
-        "contrato": (f'<a class="btn sec" href="/contratos/{e(info["contrato"]["id"])}">💼 Abrir o contrato</a>' if info.get("contrato") else
+        "contrato": ((f'<a class="btn sec" href="/contratos/{e(info["contrato_real"]["id"])}">💼 Abrir o contrato</a>' if info.get("contrato_real") else "")
+                     + (f'<a class="btn sec" href="/atas/{e(info["ata"]["id"])}">📑 Abrir a ata</a>' if info.get("ata") else "")
+                     if info.get("contrato") else
+                     f'<form method="post" action="/atas/nova"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="emp" value="{e(nome)}">'
+                     f'<input type="hidden" name="numero" value="{e(card.get("processo", ""))}"><input type="hidden" name="processo" value="{e(card.get("processo", ""))}">'
+                     f'<input type="hidden" name="orgao" value="{e(card.get("orgao", ""))}"><input type="hidden" name="proposta" value="{e(prop["id"] if prop else "")}">'
+                     f'<button class="sec">📑 É registro de preço: abrir a ata</button></form>' if not info.get("contrato") else "") + (
+                     "" if info.get("contrato") else
                      f'<form method="post" action="/contratos/novo"><input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="emp" value="{e(nome)}">'
                      f'<input type="hidden" name="processo" value="{e(card.get("processo", ""))}"><input type="hidden" name="orgao" value="{e(card.get("orgao", ""))}">'
                      f'<input type="hidden" name="valor" value="{e(propostas.brl(info["total"])[3:] if info.get("total") else "")}"><button>💼 Abrir o pós-venda</button></form>'),
@@ -3629,6 +3643,231 @@ Depois, para cada edital, a IA lê a qualificação técnica exigida e diz <b>qu
 <div class="acoes"><button>Salvar atestado</button></div></form></details>
 <div class="acoes">{sel_filtro}</div>{blocos}"""
     return pagina("Atestados", corpo, "/documentos", aviso, erro)
+
+
+# ------------------------------------------------------------------ atas de registro de preço
+def abas_pos(atual):
+    n_pend = sum(atas.totais(a)["pendentes"] for a in atas.listar() if a.get("status") == "ativa" and visivel(a.get("empresa"), a.get("usuario")))
+    return ('<div class="acoes" style="margin:6px 0 10px">'
+            f'<a class="btn {"" if atual == "con" else "sec"}" href="/contratos">💼 Contratos e empenhos</a>'
+            f'<a class="btn {"" if atual == "ata" else "sec"}" href="/atas">📑 Atas de registro de preço'
+            f'{f" <span class=tag>{n_pend} adesão(ões) pendente(s)</span>" if n_pend else ""}</a></div>')
+
+
+ESTILO_ATA = """<style>.barra-p{height:6px;background:var(--borda);border-radius:3px;margin-top:3px}.barra-p span{display:block;height:6px;
+background:var(--verde);border-radius:3px}.barra-p.baixo span{background:#c62828}
+.duas{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}@media(max-width:700px){.duas{grid-template-columns:1fr}}
+.qtd{max-width:110px;margin:0}td.num,th.num{text-align:right;white-space:nowrap}</style>"""
+
+
+def ata_da_licitacao(nome, processo):
+    np_ = _norm_proc(processo)
+    return next((a for a in atas.listar() if a.get("empresa") == nome and np_ and _norm_proc(a.get("processo")) == np_), None)
+
+
+def pg_atas(q, aviso="", erro=False):
+    emps = nomes_empresas()
+    lista = [a for a in atas.listar() if visivel(a.get("empresa"), a.get("usuario"))]
+    ver_enc = q.get("ver") == "encerradas"
+    mostrar = [a for a in lista if (a.get("status") != "ativa") == ver_enc]
+    ativas = [a for a in lista if a.get("status") == "ativa"]
+    tot = [atas.totais(a) for a in ativas]
+    vencendo = sum(1 for a in ativas if (atas.dias_vigencia(a) or 999) <= 60)
+    linhas = ""
+    for a in mostrar:
+        t = atas.totais(a)
+        dias = atas.dias_vigencia(a)
+        vig = "" if dias is None else ("vencida" if dias < 0 else f"{dias} dia(s)")
+        alerta = " · ".join(x for x in (f'🤝 {t["pendentes"]} adesão(ões) pendente(s)' if t["pendentes"] else "",
+                                        f'📉 {len(t["baixo"])} item(ns) com saldo baixo' if t["baixo"] else "",
+                                        "⏰ vence em breve" if dias is not None and 0 <= dias <= 60 else "") if x)
+        linhas += (f'<tr><td><a href="/atas/{e(a["id"])}"><b>Ata {e(a.get("numero") or "sem nº")}</b></a>'
+                   f'<div class="sub">{e(a.get("orgao", ""))} · processo {e(a.get("processo", ""))}</div>'
+                   f'<div class="sub" style="color:var(--erro)">{e(alerta)}</div></td><td>{e(a.get("empresa", ""))}</td>'
+                   f'<td>{contratos.br(a.get("vigencia_fim"))}<div class="sub">{vig}{" · prorrogada" if a.get("prorrogada") else ""}</div></td>'
+                   f'<td class="num">{atas.brl(t["registrado"])}</td><td class="num">{atas.brl(t["consumido"])}'
+                   f'<div class="barra-p"><span style="width:{min(100, int(t["pct"]))}%"></span></div></td><td class="num">{atas.brl(t["saldo"])}</td></tr>')
+    sel_emp = "".join(f'<option value="{e(n)}">{e(n)}</option>' for n in sorted(emps))
+    props = [p for p in propostas.listar() if visivel(p.get("empresa"), p.get("usuario")) and p.get("itens")]
+    sel_prop = '<option value="">— sem proposta (cadastro os itens depois) —</option>' + "".join(
+        f'<option value="{e(p["id"])}">{e(p.get("empresa", ""))} · {e(p.get("processo") or "sem nº")} – {e((p.get("orgao") or "")[:50])}</option>' for p in props)
+    hoje = date.today().isoformat()
+    corpo = f"""{ESTILO_ATA}<div class="linha" style="justify-content:space-between;flex-wrap:wrap;gap:8px"><h2 style="margin:0">💼 Contratos – pós-venda</h2><a class="btn sec" href="/relatorio">📈 Relatório do mês</a></div>
+{abas_pos("ata")}
+<p class="sub">Venceu um <b>registro de preço</b>? Cadastre a ata para controlar o <b>saldo de cada item</b> conforme os órgãos fazem os pedidos,
+a <b>vigência</b> (1 ano, prorrogável por mais 1 – art. 84 da Lei 14.133) e os <b>pedidos de adesão</b> (“carona”) dentro dos limites legais:
+até 50% do registrado por órgão aderente e, somadas, até o dobro do registrado (art. 86 §§ 4º e 5º). Avisos no Telegram.</p>
+<div class="kpis"><div class="kpi"><div class="v">{len(ativas)}</div><div class="l">ata(s) ativa(s)</div></div>
+<div class="kpi"><div class="v">{atas.brl(sum(t["saldo"] for t in tot))}</div><div class="l">saldo a fornecer</div></div>
+<div class="kpi"><div class="v">{atas.brl(sum(t["consumido"] for t in tot))}</div><div class="l">já pedido</div></div>
+<div class="kpi"><div class="v">{sum(t["pendentes"] for t in tot)}</div><div class="l">adesões pendentes</div></div>
+<div class="kpi"><div class="v">{vencendo}</div><div class="l">vencem em até 60 dias</div></div></div>
+<h3>{"Atas encerradas" if ver_enc else "Atas ativas"} <small class="sub"><a href="/atas{"" if ver_enc else "?ver=encerradas"}">{"ver ativas" if ver_enc else "ver encerradas"}</a></small></h3>
+<table><tr><th>Ata / órgão gerenciador</th><th>Empresa</th><th>Vigência</th><th class="num">Registrado</th><th class="num">Pedido</th><th class="num">Saldo</th></tr>
+{linhas or '<tr><td colspan="6">Nenhuma ata aqui.</td></tr>'}</table>
+<details class="form" style="max-width:none;margin-top:16px" {"open" if not lista else ""}><summary><b>➕ Cadastrar ata de registro de preço</b></summary>
+<form method="post" action="/atas/nova"><input type="hidden" name="csrf" value="{CSRF}">
+<div class="duas"><div><label>Empresa</label><select class="campo" name="emp">{sel_emp}</select></div>
+<div><label>Nº da ata</label><input class="campo" name="numero" required placeholder="ex.: 012/2026"></div>
+<div><label>Órgão gerenciador</label><input class="campo" name="orgao" required></div>
+<div><label>Nº do processo / pregão</label><input class="campo" name="processo"></div>
+<div><label>Início da vigência</label><input class="campo" type="date" name="vigencia_ini" value="{hoje}"></div>
+<div><label>Fim da vigência <small>(vazio = 1 ano)</small></label><input class="campo" type="date" name="vigencia_fim"></div></div>
+<label>Órgãos participantes <small>(opcional, separados por vírgula)</small></label><input class="campo" name="participantes" style="max-width:100%">
+<label>Objeto</label><input class="campo" name="objeto" style="max-width:100%">
+<label>Copiar os itens (quantidade e preço) de uma proposta</label><select class="campo" name="proposta">{sel_prop}</select>
+<div class="acoes"><button>Cadastrar ata</button></div></form></details>"""
+    return pagina("Atas de registro de preço", corpo, "/contratos", aviso, erro)
+
+
+def itens_da_proposta(pid):
+    p = propostas.ler(pid) if re.fullmatch(r"[0-9a-f]{12}", pid or "") else None
+    if not p or not visivel(p.get("empresa"), p.get("usuario")):
+        return []
+    return [{"id": atas.novo_id(), "item": str(it.get("item") or it.get("lote") or ""), "descricao": (it.get("descricao") or "")[:500],
+             "unidade": it.get("unidade") or "", "marca": it.get("marca") or "", "qtd": f'{it["_q"]:g}'.replace(".", ","),
+             "valor": f'{it["_u"]:.2f}'.replace(".", ",")} for it in propostas.calcular(p)[0]]
+
+
+def pg_ata(aid, aviso="", erro=False):
+    a = atas.ler(aid)
+    s = atas.saldos(a)
+    t = atas.totais(a)
+    dias = atas.dias_vigencia(a)
+    hoje = date.today().isoformat()
+    nomes_it = {x["id"]: (x.get("item") or "") for x in s}
+    l_it = ""
+    for x in s:
+        baixo = x["_reg"] and x["_saldo"] / x["_reg"] < 0.2
+        l_it += (f'<tr><td><b>{e(x.get("item", ""))}</b></td><td>{e(x.get("descricao", "")[:140])}<div class="sub">{e(x.get("unidade", ""))}'
+                 f'{" · marca " + e(x["marca"]) if x.get("marca") else ""}</div></td><td class="num">{atas.brl(x["_unit"])}</td>'
+                 f'<td class="num">{atas.fmt(x["_reg"])}</td><td class="num">{atas.fmt(x["_cons"])}</td>'
+                 f'<td class="num"><b style="{"color:#c62828" if baixo else ""}">{atas.fmt(x["_saldo"])}</b>'
+                 f'<div class="barra-p{" baixo" if baixo else ""}"><span style="width:{max(0, min(100, int(100 - x["_pct"])))}%"></span></div></td>'
+                 f'<td class="num">{atas.fmt(x["_ader"])} / {atas.fmt(x["_lim_ader_total"])}'
+                 f'{("<div class=sub>+" + atas.fmt(x["_ader_pend"]) + " pendente</div>") if x["_ader_pend"] else ""}</td>'
+                 f'<td>{botao("/atas/" + aid + "/item/" + x["id"] + "/excluir", "✕", "sec", "Remover este item da ata?") if not x["_cons"] and not x["_ader"] else ""}</td></tr>')
+
+    def caixas_qtd(prefixo):
+        return "".join(f'<tr><td><b>{e(x.get("item", ""))}</b> <span class="sub">{e(x.get("descricao", "")[:70])}</span></td>'
+                       f'<td class="num sub">saldo {atas.fmt(x["_saldo"] if prefixo == "q" else x["_saldo_ader"])}</td>'
+                       f'<td><input class="campo qtd" name="{prefixo}_{x["id"]}" placeholder="0"></td></tr>' for x in s)
+    orgaos = [a.get("orgao", "")] + [x.strip() for x in (a.get("participantes") or "").split(",") if x.strip()]
+    dl = '<datalist id="orgaos-ata">' + "".join(f'<option value="{e(o)}">' for o in orgaos) + "</datalist>"
+    l_ped = ""
+    for p in sorted(a.get("pedidos") or [], key=lambda p: p.get("data", ""), reverse=True):
+        valor = sum(atas.num(q) * next((x["_unit"] for x in s if x["id"] == iid), 0) for iid, q in (p.get("itens") or {}).items())
+        itens_txt = ", ".join(f'item {e(nomes_it.get(iid, "?"))}: {atas.fmt(atas.num(q))}' for iid, q in (p.get("itens") or {}).items() if atas.num(q))
+        acomp = (f'<form method="post" action="/contratos/novo" style="display:inline"><input type="hidden" name="csrf" value="{CSRF}">'
+                 f'<input type="hidden" name="emp" value="{e(a.get("empresa", ""))}"><input type="hidden" name="processo" value="{e(a.get("processo") or a.get("numero", ""))}">'
+                 f'<input type="hidden" name="orgao" value="{e(p.get("orgao", ""))}"><input type="hidden" name="numero" value="{e(p.get("numero", ""))}">'
+                 f'<input type="hidden" name="valor" value="{e(f"{valor:.2f}".replace(".", ","))}"><input type="hidden" name="objeto" value="{e("Pedido da ata " + (a.get("numero") or "") + ": " + itens_txt)}">'
+                 f'<button class="sec">💼 Acompanhar entrega e pagamento</button></form>')
+        l_ped += (f'<tr><td>{contratos.br(p.get("data"))}</td><td>{e(p.get("orgao", ""))}<div class="sub">{e(p.get("tipo", ""))}'
+                  f'{" · nº " + e(p["numero"]) if p.get("numero") else ""}</div></td><td>{itens_txt}</td><td class="num">{atas.brl(valor)}</td>'
+                  f'<td>{acomp} {botao("/atas/" + aid + "/pedido/" + p["id"] + "/excluir", "✕", "sec", "Remover este pedido?")}</td></tr>')
+    l_ad = ""
+    cor_st = {"pendente": ("aviso", "⏳ pendente"), "autorizada": ("ok", "✅ autorizada"), "recusada": ("parado", "recusada")}
+    for x in sorted(a.get("adesoes") or [], key=lambda x: x.get("data", ""), reverse=True):
+        cl, rot = cor_st.get(x.get("status"), ("", x.get("status", "")))
+        itens_txt = ", ".join(f'item {e(nomes_it.get(iid, "?"))}: {atas.fmt(atas.num(q))}' for iid, q in (x.get("itens") or {}).items() if atas.num(q))
+        probs = atas.conferir_adesao(a, x.get("itens") or {}, x.get("orgao", ""), ignorar=x["id"]) if x.get("status") == "pendente" else []
+        acoes = (botao(f"/atas/{aid}/adesao/{x['id']}/autorizar", "✅ Aceitar") + botao(f"/atas/{aid}/adesao/{x['id']}/recusar", "Recusar", "sec")
+                 if x.get("status") == "pendente" else "")
+        l_ad += (f'<tr><td>{contratos.br(x.get("data"))}</td><td>{e(x.get("orgao", ""))}<div class="sub">{e(x.get("obs", ""))}</div></td>'
+                 f'<td>{itens_txt}' + "".join(f'<div class="sub" style="color:#c62828">⚠️ {e(i)}: {e(p_)}</div>' for i, p_ in probs) +
+                 f'</td><td><span class="tag {cl}">{rot}</span></td><td>{acoes} {botao("/atas/" + aid + "/adesao/" + x["id"] + "/excluir", "✕", "sec", "Remover este pedido de adesão?")}</td></tr>')
+    vig_cor = "#c62828" if dias is not None and dias <= 30 else ""
+    corpo = f"""{ESTILO_ATA}{dl}<p><a href="/atas">← Atas de registro de preço</a></p>
+<h2>📑 Ata {e(a.get("numero") or "")} <small class="sub">{e(a.get("orgao", ""))} · {e(a.get("empresa", ""))}</small></h2>
+<div class="kpis"><div class="kpi"><div class="v" style="color:{vig_cor}">{contratos.br(a.get("vigencia_fim")) or "—"}</div>
+<div class="l">fim da vigência{"" if dias is None else (" · vencida" if dias < 0 else f" · {dias} dia(s)")}{" · já prorrogada" if a.get("prorrogada") else ""}</div></div>
+<div class="kpi"><div class="v">{atas.brl(t["registrado"])}</div><div class="l">registrado</div></div>
+<div class="kpi"><div class="v">{atas.brl(t["consumido"])}</div><div class="l">pedido ({t["pct"]:.0f}%)</div></div>
+<div class="kpi"><div class="v">{atas.brl(t["saldo"])}</div><div class="l">saldo a fornecer</div></div>
+<div class="kpi"><div class="v">{atas.brl(t["aderido"])}</div><div class="l">adesões autorizadas</div></div></div>
+<p class="sub">Processo {e(a.get("processo", "—"))} · vigência {contratos.br(a.get("vigencia_ini"))} a {contratos.br(a.get("vigencia_fim"))}
+{(" · participantes: " + e(a["participantes"])) if a.get("participantes") else ""}{(" · " + e(a["objeto"])) if a.get("objeto") else ""}</p>
+<h3>Itens registrados</h3>
+<table><tr><th>Item</th><th>Descrição</th><th class="num">Preço un.</th><th class="num">Registrado</th><th class="num">Pedido</th><th class="num">Saldo</th><th class="num">Adesões / limite (2x)</th><th></th></tr>
+{l_it or '<tr><td colspan="8">Nenhum item. Cadastre abaixo ou copie de uma proposta.</td></tr>'}</table>
+<details class="form" style="max-width:none;margin-top:8px"><summary><b>➕ Adicionar item</b></summary>
+<form method="post" action="/atas/{aid}/item" class="linha" style="gap:6px;flex-wrap:wrap;align-items:flex-end"><input type="hidden" name="csrf" value="{CSRF}">
+<div><label>Item</label><input class="campo" name="item" style="max-width:80px"></div><div style="flex:2;min-width:220px"><label>Descrição</label><input class="campo" name="descricao" required></div>
+<div><label>Unid.</label><input class="campo" name="unidade" style="max-width:80px"></div><div><label>Marca</label><input class="campo" name="marca" style="max-width:140px"></div>
+<div><label>Qtd registrada</label><input class="campo" name="qtd" required style="max-width:120px"></div><div><label>Preço un. (R$)</label><input class="campo" name="valor" required style="max-width:120px"></div>
+<button>Adicionar</button></form></details>
+<h3 style="margin-top:20px">📦 Pedidos (empenhos / ordens de fornecimento)</h3>
+<table><tr><th>Data</th><th>Órgão</th><th>Itens</th><th class="num">Valor</th><th></th></tr>{l_ped or '<tr><td colspan="5">Nenhum pedido ainda.</td></tr>'}</table>
+<details class="form" style="max-width:none;margin-top:8px"><summary><b>➕ Registrar pedido</b> <small class="sub">(do gerenciador ou de um participante – baixa o saldo)</small></summary>
+<form method="post" action="/atas/{aid}/pedido"><input type="hidden" name="csrf" value="{CSRF}">
+<div class="duas"><div><label>Órgão</label><input class="campo" name="orgao" list="orgaos-ata" value="{e(a.get("orgao", ""))}" required></div>
+<div><label>Tipo</label><select class="campo" name="tipo"><option>gerenciador</option><option>participante</option></select></div>
+<div><label>Data</label><input class="campo" type="date" name="data" value="{hoje}"></div><div><label>Nº do empenho / OF</label><input class="campo" name="numero"></div></div>
+<table>{caixas_qtd("q")}</table><div class="acoes"><button>Registrar pedido</button></div></form></details>
+<h3 style="margin-top:20px">🤝 Pedidos de adesão (carona)</h3>
+<p class="sub">Outro órgão quer usar a ata? O fornecedor <b>pode aceitar ou recusar</b> (art. 86 §2º). Limites: cada órgão até 50% do registrado
+por item; todas as adesões somadas até o dobro do registrado. O sistema confere antes de você aceitar.</p>
+<table><tr><th>Pedido em</th><th>Órgão aderente</th><th>Itens</th><th>Situação</th><th></th></tr>{l_ad or '<tr><td colspan="5">Nenhum pedido de adesão.</td></tr>'}</table>
+<details class="form" style="max-width:none;margin-top:8px"><summary><b>➕ Registrar pedido de adesão</b></summary>
+<form method="post" action="/atas/{aid}/adesao"><input type="hidden" name="csrf" value="{CSRF}">
+<div class="duas"><div><label>Órgão aderente</label><input class="campo" name="orgao" required></div>
+<div><label>Data do pedido</label><input class="campo" type="date" name="data" value="{hoje}"></div></div>
+<label>Observação</label><input class="campo" name="obs" placeholder="ex.: ofício 123/2026, contato…">
+<table>{caixas_qtd("a")}</table><div class="acoes"><button>Registrar (fica pendente)</button></div></form></details>
+<div class="form" style="max-width:none;margin-top:20px"><h3 style="margin-top:0">Ajustes</h3>
+<form method="post" action="/atas/{aid}/salvar"><input type="hidden" name="csrf" value="{CSRF}"><div class="duas">
+<div><label>Nº da ata</label><input class="campo" name="numero" value="{e(a.get("numero", ""))}"></div>
+<div><label>Órgão gerenciador</label><input class="campo" name="orgao" value="{e(a.get("orgao", ""))}"></div>
+<div><label>Início da vigência</label><input class="campo" type="date" name="vigencia_ini" value="{e(a.get("vigencia_ini", ""))}"></div>
+<div><label>Fim da vigência</label><input class="campo" type="date" name="vigencia_fim" value="{e(a.get("vigencia_fim", ""))}"></div></div>
+<label>Órgãos participantes</label><input class="campo" name="participantes" value="{e(a.get("participantes", ""))}" style="max-width:100%">
+<label>Objeto</label><input class="campo" name="objeto" value="{e(a.get("objeto", ""))}" style="max-width:100%">
+<div class="acoes"><button class="sec">Salvar</button></div></form>
+<div class="acoes">{botao(f"/atas/{aid}/prorrogar", "🔁 Prorrogar por mais 1 ano (art. 84)", "sec", "Prorrogar a vigência por mais 1 ano? Só vale se o órgão formalizou a prorrogação.") if not a.get("prorrogada") else ""}
+{botao(f"/atas/{aid}/encerrar", "Reativar" if a.get("status") != "ativa" else "📦 Encerrar ata", "sec")}
+{botao(f"/atas/{aid}/excluir", "🗑 Excluir ata", "perigo", "Excluir esta ata com todos os pedidos e adesões?")}</div></div>"""
+    return pagina("Ata de registro de preço", corpo, "/contratos", aviso, erro)
+
+
+# ------------------------------------------------------------------ central de ajuda
+def pg_ajuda(q):
+    de = q.get("de", "")
+    alvo = ""
+    if de:
+        cands = [(len(x["tela"]), x["id"]) for x in ajuda.SECOES if x["tela"] != "/" and (de == x["tela"] or de.startswith(x["tela"] + "/"))]
+        alvo = max(cands)[1] if cands else ajuda.secao_da_aba(de) or ("inicio" if de == "/" else "")
+    indice = "".join(f'<a class="chip" href="#{x["id"]}">{x["icone"]} {e(x["titulo"])}</a>' for x in ajuda.SECOES)
+    cards = ""
+    for x in ajuda.SECOES:
+        passos = "".join(f"<li>{p}</li>" for p in x["passos"])
+        dicas = "".join(f"<li>{d}</li>" for d in x["dicas"])
+        cards += (f'<section class="aj form" id="{x["id"]}"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">'
+                  f'<h3 style="margin:0">{x["icone"]} {e(x["titulo"])}</h3><a class="btn sec" href="{e(x["tela"])}">Abrir a tela →</a></div>'
+                  f'<p class="sub" style="margin:4px 0 8px">{e(x["resumo"])}</p><ol>{passos}</ol>'
+                  + (f'<div class="dicas"><b>💡 Dicas</b><ul>{dicas}</ul></div>' if dicas else "") + "</section>")
+    faq = "".join(f'<details class="aj form"><summary><b>{e(p)}</b></summary><p style="margin:8px 0 0">{e(r)}</p></details>' for p, r in ajuda.FAQ)
+    corpo = f"""<style>.chip{{display:inline-block;margin:3px 4px 3px 0;padding:5px 10px;border:1px solid var(--borda);border-radius:16px;
+font-size:13px;text-decoration:none;color:inherit;background:var(--card)}}.aj{{max-width:none;margin:0 0 12px}}.aj ol{{margin:0;padding-left:22px;line-height:1.65}}
+.aj .dicas{{margin-top:8px;padding:8px 12px;border-radius:8px;background:rgba(47,138,91,.08)}}.aj .dicas ul{{margin:4px 0 0;padding-left:20px;line-height:1.55}}
+.aj.alvo{{outline:2px solid var(--verde)}}.aj summary{{cursor:pointer}}</style>
+<h2>❓ Central de ajuda</h2>
+<p class="sub">Tutoriais curtos de cada tela e respostas rápidas. Não achou? Use o <b>💬 Pergunte</b> no canto da tela ou fale com o administrador.</p>
+<input class="campo" id="busca-aj" placeholder="🔎 Buscar na ajuda (ex.: certidão, prazo, Telegram, ata…)" style="max-width:520px" oninput="filtrar(this.value)">
+<div style="margin:10px 0 14px" id="indice-aj">{indice}</div>
+<div id="lista-aj">{cards}<h2 id="faq" style="margin-top:22px">Perguntas frequentes</h2>{faq}</div>
+<p class="sub" id="nada-aj" style="display:none">Nada encontrado – tente outra palavra ou pergunte no 💬 Pergunte.</p>
+<script>
+function sem(t){{return t.normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase();}}
+function filtrar(v){{const q=sem(v.trim());let n=0;
+ document.querySelectorAll('#lista-aj .aj').forEach(el=>{{const ok=!q||sem(el.textContent).includes(q);el.style.display=ok?'':'none';if(ok)n++;
+  if(q&&ok&&el.tagName==='DETAILS')el.open=true;}});
+ document.getElementById('indice-aj').style.display=q?'none':'';
+ document.getElementById('faq').style.display=[...document.querySelectorAll('#lista-aj details.aj')].some(d=>d.style.display!=='none')?'':'none';document.getElementById('nada-aj').style.display=n?'none':'';}}
+const alvo={json.dumps(alvo)};
+if(alvo){{const el=document.getElementById(alvo);if(el){{el.classList.add('alvo');el.scrollIntoView({{block:'start'}});}}}}
+</script>"""
+    return pagina("Ajuda", corpo, "/ajuda")
 
 
 def abas_doc(atual):
@@ -6184,9 +6423,12 @@ class Painel(BaseHTTPRequestHandler):
             if (caminho.startswith(ROTAS_IA) and not caminho.endswith("/telegram") or ROTAS_IA_RE.fullmatch(caminho)) and not u.get("ia", True):
                 return self.negar("O seu usuário não tem permissão para usar os recursos com IA (que têm custo). Fale com o administrador.")
         if nomes_permitidos() is not None:
-            m = re.match(r"/(agenda|certidoes|pecas|propostas|contratos|licitacoes|atestados)/([0-9a-f]{12,14})(/|$)", caminho)
+            m = re.match(r"/(agenda|certidoes|pecas|propostas|contratos|licitacoes|atestados|atas)/([0-9a-f]{12,14})(/|$)", caminho)
             if m:
-                if m.group(1) == "atestados":
+                if m.group(1) == "atas":
+                    it = atas.ler(m.group(2)) or {}
+                    dono, criador = it.get("empresa", ""), it.get("usuario")
+                elif m.group(1) == "atestados":
                     dono, criador = (atestados.ler(m.group(2)) or {}).get("empresa", ""), "?"
                 elif m.group(1) == "licitacoes":
                     it = kanban.ler(m.group(2)) or {}
@@ -6453,6 +6695,13 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_chances(q))
             if p == "/licitacoes":
                 return self.enviar(pg_licitacoes(q, AVISOS.get(q.get("ok", ""), "")))
+            if p == "/ajuda":
+                return self.enviar(pg_ajuda(q))
+            if p == "/atas":
+                return self.enviar(pg_atas(q, AVISOS.get(q.get("ok", ""), "")))
+            m = re.fullmatch(r"/atas/([0-9a-f]{12})", p)
+            if m and atas.ler(m.group(1)):
+                return self.enviar(pg_ata(m.group(1), AVISOS.get(q.get("ok", ""), "")))
             if p == "/atestados":
                 return self.enviar(pg_atestados(q, AVISOS.get(q.get("ok", ""), "")))
             m = re.fullmatch(r"/atestados/([0-9a-f]{12})/arquivo", p)
@@ -7165,6 +7414,92 @@ class Painel(BaseHTTPRequestHandler):
                 pid = propostas.nova(nome, f.get("processo", "").strip()[:80] or proc, f.get("orgao", "").strip()[:200] or prom,
                                      f.get("modalidade", "").strip()[:80], login_atual())
                 return self.redirecionar(f"/propostas/{pid}")
+            if p == "/atas/nova":
+                nome = f.get("emp", "")
+                if nome not in nomes_empresas() or not f.get("numero", "").strip():
+                    return self.redirecionar("/atas")
+                ini = f.get("vigencia_ini", "")[:10] if re.fullmatch(r"\d{4}-\d{2}-\d{2}", f.get("vigencia_ini", "")[:10]) else date.today().isoformat()
+                fim = f.get("vigencia_fim", "")[:10] if re.fullmatch(r"\d{4}-\d{2}-\d{2}", f.get("vigencia_fim", "")[:10]) else atas.mais_um_ano(ini)
+                aid = atas.novo({"empresa": nome, "usuario": login_atual(), "numero": f["numero"].strip()[:60],
+                                 "orgao": f.get("orgao", "").strip()[:200], "processo": f.get("processo", "").strip()[:80],
+                                 "participantes": f.get("participantes", "").strip()[:600], "objeto": f.get("objeto", "").strip()[:600],
+                                 "vigencia_ini": ini, "vigencia_fim": fim, "itens": itens_da_proposta(f.get("proposta", ""))})
+                self.auditar("cadastrou ata de registro de preço", f"{nome} {aid}")
+                return self.redirecionar(f"/atas/{aid}")
+            m = re.fullmatch(r"/atas/([0-9a-f]{12})/(salvar|item|pedido|adesao|prorrogar|encerrar|excluir)", p)
+            if m and atas.ler(m.group(1)):
+                aid, acao = m.groups()
+                a = atas.ler(aid)
+                data_ok = lambda x: x[:10] if re.fullmatch(r"\d{4}-\d{2}-\d{2}", (x or "")[:10]) else ""  # noqa: E731
+                if acao == "excluir":
+                    atas.excluir(aid)
+                    self.auditar("excluiu ata", aid)
+                    return self.redirecionar("/atas?ok=feito")
+                if acao == "salvar":
+                    novos = {k: f.get(k, "").strip()[:600] for k in ("numero", "orgao", "participantes", "objeto")}
+                    novos.update({k: data_ok(f.get(k, "")) for k in ("vigencia_ini", "vigencia_fim")})
+                    if novos["vigencia_fim"] != a.get("vigencia_fim"):
+                        novos["avisos"] = []
+                    atas.atualizar(aid, lambda x: x.update(novos))
+                elif acao == "item":
+                    if not f.get("descricao", "").strip() or atas.num(f.get("qtd")) <= 0:
+                        return self.enviar(pg_ata(aid, "Informe a descrição e a quantidade registrada.", True))
+                    it = {"id": atas.novo_id(), **{k: f.get(k, "").strip()[:500] for k in ("item", "descricao", "unidade", "marca", "qtd", "valor")}}
+                    atas.atualizar(aid, lambda x: x.setdefault("itens", []).append(it))
+                elif acao in ("pedido", "adesao"):
+                    pref = "q_" if acao == "pedido" else "a_"
+                    qtds = {k[2:]: f[k].strip() for k in f if k.startswith(pref) and atas.num(f[k]) > 0
+                            and any(x["id"] == k[2:] for x in a.get("itens") or [])}
+                    if not qtds or not f.get("orgao", "").strip():
+                        return self.enviar(pg_ata(aid, "Informe o órgão e a quantidade de pelo menos um item.", True))
+                    if acao == "pedido":
+                        sald = {x["id"]: x["_saldo"] for x in atas.saldos(a)}
+                        passou = [k for k, q_ in qtds.items() if atas.num(q_) > sald.get(k, 0) + 1e-9]
+                        if passou:
+                            return self.enviar(pg_ata(aid, "A quantidade passa do saldo da ata em: " + ", ".join(
+                                e(next((x.get("item") or x.get("descricao", "")[:30]) for x in a["itens"] if x["id"] == k)) for k in passou), True))
+                        reg = {"id": atas.novo_id(), "orgao": f["orgao"].strip()[:200], "tipo": f.get("tipo", "gerenciador")[:20],
+                               "data": data_ok(f.get("data", "")) or date.today().isoformat(), "numero": f.get("numero", "").strip()[:60],
+                               "itens": qtds, "por": login_atual()}
+                        atas.atualizar(aid, lambda x: x.setdefault("pedidos", []).append(reg))
+                    else:
+                        reg = {"id": atas.novo_id(), "orgao": f["orgao"].strip()[:200], "data": data_ok(f.get("data", "")) or date.today().isoformat(),
+                               "obs": f.get("obs", "").strip()[:300], "itens": qtds, "status": "pendente", "por": login_atual()}
+                        atas.atualizar(aid, lambda x: x.setdefault("adesoes", []).append(reg))
+                        probs = atas.conferir_adesao(a, qtds, reg["orgao"])
+                        if probs:
+                            return self.enviar(pg_ata(aid, "Pedido registrado como pendente, mas atenção: " + "; ".join(
+                                f"{e(i)}: {e(t_)}" for i, t_ in probs), True))
+                elif acao == "prorrogar" and not a.get("prorrogada"):
+                    atas.atualizar(aid, lambda x: x.update({"vigencia_fim": atas.mais_um_ano(x.get("vigencia_fim")), "prorrogada": True, "avisos": []}))
+                elif acao == "encerrar":
+                    atas.atualizar(aid, lambda x: x.__setitem__("status", "encerrada" if x.get("status") == "ativa" else "ativa"))
+                return self.redirecionar(f"/atas/{aid}?ok=feito")
+            m = re.fullmatch(r"/atas/([0-9a-f]{12})/(item|pedido|adesao)/([0-9a-f]{8})/(excluir|autorizar|recusar)", p)
+            if m and atas.ler(m.group(1)):
+                aid, tipo_x, xid, acao = m.groups()
+                a = atas.ler(aid)
+                lista_k = {"item": "itens", "pedido": "pedidos", "adesao": "adesoes"}[tipo_x]
+                if acao == "excluir":
+                    if tipo_x == "item" and any(atas.num(p_.get("itens", {}).get(xid)) for p_ in (a.get("pedidos") or []) + (a.get("adesoes") or [])):
+                        return self.enviar(pg_ata(aid, "Este item já tem pedidos/adesões – remova-os antes.", True))
+                    atas.atualizar(aid, lambda x: x.__setitem__(lista_k, [y for y in x.get(lista_k) or [] if y.get("id") != xid]))
+                elif tipo_x == "adesao":
+                    ad = next((y for y in a.get("adesoes") or [] if y.get("id") == xid), None)
+                    if ad and acao == "autorizar":
+                        probs = atas.conferir_adesao(a, ad.get("itens") or {}, ad.get("orgao", ""), ignorar=xid)
+                        if probs:
+                            return self.enviar(pg_ata(aid, "Não dá para aceitar – passa do limite legal: " + "; ".join(
+                                f"{e(i)}: {e(t_)}" for i, t_ in probs), True))
+
+                    def _st(x):
+                        for y in x.get("adesoes") or []:
+                            if y.get("id") == xid:
+                                y["status"] = "autorizada" if acao == "autorizar" else "recusada"
+                                y["decidido_em"] = date.today().isoformat()
+                    if ad and acao in ("autorizar", "recusar"):
+                        atas.atualizar(aid, _st)
+                return self.redirecionar(f"/atas/{aid}?ok=feito")
             m = re.fullmatch(r"/atestados/([0-9a-f]{12})/(ler|excluir)", p)
             if m and atestados.ler(m.group(1)):
                 aid, acao = m.groups()
@@ -7639,6 +7974,7 @@ if __name__ == "__main__":
     print(f"Painel em http://{HOST}:{PORTA}")
     migrar_donos()
     threading.Thread(target=contratos.ciclo, args=(lambda txt, emp: telegram_geral(txt, empresas=[emp]),), daemon=True).start()
+    threading.Thread(target=atas.ciclo, args=(lambda txt, emp: telegram_geral(txt, empresas=[emp]),), daemon=True).start()
     for _lg, _u in usuarios.carregar().items():   # liberação de empresas de outro usuário não existe mais
         if _u.get("empresas"):
             usuarios.atualizar(_lg, empresas=[])
