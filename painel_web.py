@@ -763,7 +763,44 @@ mark{background:#ffb74d;color:#000;border-radius:3px;padding:0 2px}mark.achado.a
 .ch-msg .txt{max-width:none;font-size:14px}
 @media (max-width:800px){.chat{grid-template-columns:1fr;height:auto}.ch-lado{max-height:260px}.ch-lista{max-height:none}}
 @media (max-width:700px){.ocultar{display:none}nav a{padding:12px 8px}}
+nav .area{position:relative}nav .area>a{display:block}nav .sub-m{display:none;position:absolute;left:0;top:100%;z-index:30;min-width:230px;
+background:#1d4a34;border-radius:0 0 10px 10px;box-shadow:0 8px 20px rgba(0,0,0,.25);padding:6px 0}
+nav .area:hover .sub-m,nav .area:focus-within .sub-m{display:block}nav .sub-m a{display:block;padding:9px 16px;border:0;font-size:13.5px}
+nav .sub-m a:hover,nav .sub-m a.aqui{background:rgba(255,255,255,.1);color:#fff}
+.menu-btn{display:none;background:none;border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:8px;padding:6px 11px;font-size:18px;cursor:pointer}
+@media (max-width:900px){header{gap:8px}.menu-btn{display:block;margin-left:auto}nav{display:none;width:100%;flex-direction:column;padding-bottom:10px}
+header.aberto nav{display:flex}nav .area>a{padding:10px 6px;border-bottom:1px solid rgba(255,255,255,.08)}
+nav .sub-m{display:block;position:static;box-shadow:none;background:none;padding:0 0 4px 14px;min-width:0}nav .sub-m a{padding:7px 8px;font-size:13px}}
 """
+
+AREAS = [
+    ("/", "🏠 Hoje", []),
+    ("/licitacoes", "🗂️ Licitações", [("/licitacoes", "🗂️ Minhas licitações"), ("/oportunidades", "🎯 Oportunidades"), ("/buscar", "🔍 Buscar editais"),
+                                     ("/editais", "🤖 Editais (IA)"), ("/agenda", "📅 Agenda e prazos")]),
+    ("/disputa", "🎯 Disputa", [("/mensagens", "💬 Mensagens do pregoeiro"), ("/disputa", "🎯 Disputa ao vivo"), ("/processos", "📋 Processos e classificação"),
+                               ("/concorrentes", "🥇 Concorrentes"), ("/chances", "📈 Chance de vitória")]),
+    ("/propostas", "📄 Documentos", [("/propostas", "💰 Proposta comercial"), ("/catalogo", "🏷️ Catálogo e preços"), ("/documentos", "📄 Declarações"),
+                                     ("/certidoes", "📑 Certidões"), ("/atestados", "📜 Atestados"), ("/pacote", "📦 Pacote de habilitação"),
+                                     ("/pecas", "⚖️ Peças com IA"), ("/assinatura", "✍️ Como assinar")]),
+    ("/contratos", "💼 Pós-venda", [("/contratos", "💼 Contratos"), ("/atas", "📑 Atas de registro de preço"), ("/relatorio", "📈 Relatório do mês")]),
+    ("/empresas", "⋯ Mais", [("/empresas", "🏢 Empresas"), ("/preferencias", "⚙️ Minhas configurações"), ("/meu-consumo", "💳 Custos de IA"),
+                            ("/ajuda", "❓ Ajuda"), ("/conta", "👤 Minha conta")]),
+]
+ABA_AREA = {"/documentos": "/propostas", "/mensagens": "/disputa", "/processos": "/disputa", "/concorrentes": "/disputa", "/agenda": "/licitacoes",
+            "/oportunidades": "/licitacoes", "/buscar": "/licitacoes", "/editais": "/licitacoes", "/preferencias": "/empresas", "/ajuda": "/empresas",
+            "/pergunte": "/empresas"}
+
+
+def nav_html(aba):
+    atual = ABA_AREA.get(aba, aba)
+    out = ""
+    for url, nome, subs in AREAS:
+        on = "on" if url == atual else ""
+        sub = "".join(f'<a href="{u}">{n}</a>' for u, n in subs)
+        out += (f'<div class="area"><a href="{url}" class="{on}">{nome}{" ▾" if subs else ""}</a>'
+                + (f'<div class="sub-m">{sub}</div>' if subs else "") + "</div>")
+    return out
+
 
 ABAS = [("/", "Início"), ("/licitacoes", "🗂️ Licitações"), ("/mensagens", "Mensagens"), ("/processos", "Processos"), ("/disputa", "🎯 Disputa"), ("/agenda", "Agenda"),
         ("/concorrentes", "Concorrentes"), ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais"),
@@ -782,7 +819,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     if getattr(_REQ, "admin", False) and aba in ROTAS_ADM_LAYOUT:
         return pagina_admin(titulo, corpo, aviso, erro)
     abas = ABAS
-    nav = "".join(f'<a href="{x}" class="{"on" if x == aba else ""}" title="{"Minhas configurações" if x == "/preferencias" else n}">{n}</a>' for x, n in abas)
+    nav = nav_html(aba)
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
     if False:   # troca obrigatória de senha no 1º acesso foi retirada
         msg += ('<div class="msg erro">🛡️ ' + ("Defina uma senha nova (a atual foi criada pelo administrador). " if u.get("trocar_senha") else
@@ -791,8 +828,9 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
-{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
-setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();</script></body></html>"""
+{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
+setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();
+document.querySelectorAll('nav .sub-m a').forEach(a=>{{if(a.getAttribute('href')===location.pathname)a.classList.add('aqui');}});</script></body></html>"""
 
 
 PRESENCA = {}   # chave do aparelho -> {login, area, pagina, desde, visto, visivel, ip, aparelho}
@@ -925,7 +963,7 @@ O histórico e o login atuais são mantidos.</p>
     kpi_contr = (f'<a class="kpi" href="/contratos" style="text-decoration:none;color:inherit{";border-color:#c62828" if atraso_rec else ""}">'
                  f'<div class="v">{contratos.brl(atraso_rec if atraso_rec else a_rec)}</div><div class="l">💼 '
                  f'{"a receber EM ATRASO" if atraso_rec else "a receber dos contratos"}</div></a>') if _ct else ""
-    kpis = ESTILO_KANBAN + barra_conta(compacta=True) + f"""<div class="kpis">{kpi_contr}
+    kpis = f"""<div class="kpis">{kpi_contr}
 {f'<a class="kpi" href="/consumo" style="text-decoration:none;color:inherit"><div class="v">{custos_ia.brl(custos_ia.resumo_mes(datetime.now().strftime("%Y-%m"))["total_brl"])}</div><div class="l">💳 IA neste mês</div></a>' if eh_admin() else ""}
 <a class="kpi" href="/agenda" style="text-decoration:none;color:inherit{';border-color:#c62828' if n_prazo_urg else ''}"><div class="v">{n_prazo_urg}</div><div class="l">📅 prazos atrasados ou para hoje · {n_prazo_sem} na semana</div></a>
 <a class="kpi" href="/certidoes" style="text-decoration:none;color:inherit{';border-color:#c62828' if n_cert else ''}"><div class="v">{n_cert}</div><div class="l">📑 certidões vencidas ou vencendo (15 dias)</div></a>
@@ -991,9 +1029,136 @@ O histórico e o login atuais são mantidos.</p>
                    '<table><tr><th>Posição</th><th>Empresa</th><th>Processo</th><th>Lote</th><th class="ocultar">Fase</th>'
                    f'<th>Nosso lance</th><th class="ocultar">Lance do 1º</th></tr>{linhas}</table>'
                    '<p class="sub">Só processos em andamento. Clique no processo para ver a classificação completa.</p>')
-    corpo = (kpis + (f'<div class="msg erro">{aviso}</div>' if aviso else "") + tab_pos +
-             f'<h2>Empresas</h2><div class="grid">{cards or "<p>Nenhuma empresa. <a href=/empresas/nova>Cadastrar</a></p>"}</div>')
-    return pagina("Visão geral", corpo, "/", recarregar=True)
+    corpo = (ESTILO_KANBAN + html_hoje() + barra_conta(compacta=True) + (f'<div class="msg erro">{aviso}</div>' if aviso else "") +
+             '<details style="margin-top:18px" class="visao-geral"><summary style="cursor:pointer;font-size:17px;font-weight:700">📊 Visão geral do monitor e das empresas</summary>'
+             + kpis + tab_pos +
+             f'<h2>Empresas</h2><div class="grid">{cards or "<p>Nenhuma empresa. <a href=/empresas/nova>Cadastrar</a></p>"}</div></details>')
+    return pagina("Hoje", corpo, "/", recarregar=True)
+
+
+# ------------------------------------------------------------------ tela "Hoje": tudo o que precisa de ação, em ordem de urgência
+DIAS_SEMANA = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+
+
+def pendencias(emps=None):
+    """[(nivel, icone, texto, detalhe, url, rotulo_botao)] – nivel 0 = urgente, 1 = hoje, 2 = próximos dias."""
+    agora = datetime.now()
+    hoje = agora.date()
+    hoje_s, amanha_s = hoje.isoformat(), (hoje + timedelta(days=1)).isoformat()
+    out = []
+    # monitor com problema
+    for x in emps if emps is not None else empresas():
+        cls, txt = tag_status(x)
+        if cls == "erro":
+            out.append((0, "🛑", f"Monitor com problema: {x['nome']}", txt, ue(f"/empresas/{x['id']}"), "Ver empresa"))
+    # licitações (cartões): disputa hoje/amanhã, tarefas, pedidos sem resposta, edital alterado
+    for c in kanban.listar():
+        if c.get("arquivado") or not visivel(c.get("empresa"), c.get("usuario")):
+            continue
+        url = f"/licitacoes/{c['id']}"
+        proc = c.get("processo") or "Licitação"
+        ab = c.get("abertura") or ""
+        if not c.get("resultado") and ab[:10] in (hoje_s, amanha_s) and ab >= agora.strftime("%Y-%m-%dT%H:%M"):
+            pct = c.get("progresso", 0)
+            out.append((0 if ab[:10] == hoje_s else 1, "🏁", f"Disputa {'HOJE' if ab[:10] == hoje_s else 'amanhã'} às {ab[11:16]} – {proc}",
+                        f"{c.get('orgao', '')[:60]} · {pct}% pronto" + (f" · falta: {c.get('proximo')}" if pct < 100 and c.get("proximo") else ""),
+                        url, "Abrir o siga-me"))
+        for t in c.get("tarefas") or []:
+            if not t.get("feito") and t.get("prazo") and t["prazo"] <= amanha_s:
+                nv = 0 if t["prazo"] < hoje_s else 1 if t["prazo"] == hoje_s else 2
+                out.append((nv, "☑", f"Tarefa{' ATRASADA' if nv == 0 else ''}: {t.get('texto', '')}",
+                            f"{proc} · {('👤 ' + t['resp']) if t.get('resp') else 'sem responsável'} · até {contratos.br(t['prazo'])}", url + "#equipe-bloco", "Ver tarefa"))
+        for p_ in c.get("pedidos") or []:
+            if not p_.get("respondido_em") and p_.get("prazo_resposta") and p_["prazo_resposta"] < hoje_s:
+                out.append((1, "❓", f"Órgão não respondeu: {NOME_PEDIDO.get(p_.get('tipo'), 'pedido')}", f"{proc} · prazo era {contratos.br(p_['prazo_resposta'])}",
+                            url + "#pedidos", "Registrar / cobrar"))
+        alt = (c.get("alteracoes") or [None])[0]
+        if alt:
+            try:
+                quando = datetime.strptime(alt["quando"], "%d/%m/%Y %H:%M")
+            except ValueError:
+                quando = None
+            if quando and agora - quando < timedelta(days=2):
+                out.append((1, "📝", f"Edital alterado: {proc}", re.sub(r"<[^>]+>", "", " · ".join(alt.get("itens") or []))[:140], url + "#vigia", "Ver o que mudou"))
+    # prazos da agenda
+    for pid, it in agenda.prazos()["itens"].items():
+        if not visivel(it.get("empresa"), it.get("criado_por")):
+            continue
+        st = agenda.situacao_prazo(it, agora)
+        q = datetime.fromisoformat(it["quando"])
+        if st == "atrasado" and agora - q < timedelta(days=3):
+            out.append((0, "⏰", f"Prazo vencido: {it.get('titulo', '')}", f"{it.get('empresa', '')} · era {_dt_hora(q)}", "/agenda", "Ver na agenda"))
+        elif st == "hoje":
+            out.append((0 if q - agora < timedelta(hours=3) else 1, "⏰", f"Prazo hoje às {q:%H:%M}: {it.get('titulo', '')}" if (q.hour, q.minute) != (23, 59)
+                        else f"Prazo hoje: {it.get('titulo', '')}", it.get("empresa", ""), "/agenda", "Ver na agenda"))
+        elif q.date().isoformat() == amanha_s:
+            out.append((2, "📅", f"Prazo amanhã: {it.get('titulo', '')}", it.get("empresa", ""), "/agenda", "Ver na agenda"))
+    # certidões
+    for c in agenda.certidoes()["itens"].values():
+        if not pode_empresa(c.get("empresa")):
+            continue
+        st, dias = agenda.status_cert(c)
+        if dias is None or dias > 15:
+            continue
+        nome_c = agenda.NOME_CERT.get(c.get("tipo"), "Certidão")
+        if st == "vencida":
+            if dias >= -30:
+                out.append((0, "📑", f"Certidão vencida: {nome_c}", c.get("empresa", ""), "/certidoes", "Renovar"))
+        else:
+            out.append((1 if dias <= 3 else 2, "📑", f"Certidão vence {'hoje' if dias == 0 else f'em {dias} dia(s)'}: {nome_c}", c.get("empresa", ""), "/certidoes", "Renovar"))
+    # contratos: pagamentos e entregas
+    for c in contratos.listar():
+        if c.get("status") != "ativo" or not visivel(c.get("empresa"), c.get("usuario")):
+            continue
+        url = f"/contratos/{c['id']}"
+        for n_ in c.get("notas") or []:
+            if contratos.situacao_nota(n_) == "atrasada":
+                v = contratos.vencimento(n_)
+                out.append((1, "💰", f"Pagamento atrasado: NF {n_.get('numero', '')} – {contratos.brl(contratos.num(n_.get('valor')))}",
+                            f"{c.get('orgao', '')[:60]} · venceu {v:%d/%m/%Y}" if v else c.get("orgao", ""), url, "Cobrar / registrar"))
+        for en in c.get("entregas") or []:
+            st = contratos.situacao_entrega(en)
+            if st in ("atrasada", "perto"):
+                out.append((0 if st == "atrasada" else 1, "🚚", f"Entrega {'ATRASADA' if st == 'atrasada' else 'perto do prazo'}: {en.get('descricao', '')}",
+                            f"{c.get('orgao', '')[:60]} · prazo {contratos.br(en.get('prazo'))}", url, "Ver entrega"))
+    # atas
+    for a in atas.listar():
+        if a.get("status") != "ativa" or not visivel(a.get("empresa"), a.get("usuario")):
+            continue
+        t = atas.totais(a)
+        url = f"/atas/{a['id']}"
+        if t["pendentes"]:
+            out.append((1, "🤝", f"{t['pendentes']} pedido(s) de adesão aguardando você", f"Ata {a.get('numero', '')} · {a.get('orgao', '')[:50]}", url, "Responder"))
+        d = atas.dias_vigencia(a)
+        if d is not None and 0 <= d <= 30:
+            out.append((2, "📑", f"Ata vence em {d} dia(s): {a.get('numero', '')}", a.get("orgao", "")[:60], url, "Ver a ata"))
+    return sorted(out, key=lambda x: x[0])
+
+
+def html_hoje():
+    lst = pendencias()
+    agora = datetime.now()
+    titulo = f"{DIAS_SEMANA[agora.weekday()]}, {agora.day} de {MESES_PT[agora.month - 1]}"
+    cor = {0: ("#c62828", "🔴 Urgente"), 1: ("#ef6c00", "🟠 Hoje"), 2: ("#607d8b", "🟡 Próximos dias")}
+    cont = {n: sum(1 for x in lst if x[0] == n) for n in cor}
+    blocos = ""
+    for n, (c_, rot) in cor.items():
+        itens = [x for x in lst if x[0] == n]
+        if not itens:
+            continue
+        mais = len(itens) - 12
+        linhas = "".join(f'<li style="border-left:4px solid {c_}"><span class="ic">{ic}</span><div class="tx"><b>{e(t)}</b><div class="sub">{e(d)}</div></div>'
+                         f'<a class="btn sec" href="{e(u)}">{e(b)}</a></li>' for _, ic, t, d, u, b in itens[:12])
+        blocos += (f'<h3 style="margin:14px 0 6px;color:{c_}">{rot} <small class="sub">({len(itens)})</small></h3><ul class="hoje">{linhas}</ul>'
+                   + (f'<p class="sub">+{mais} item(ns)…</p>' if mais > 0 else ""))
+    resumo = " · ".join(f"{rot.split()[0]} {cont[n]}" for n, (_, rot) in cor.items())
+    vazio = '<div class="msg" style="font-size:16px">✅ Nada pendente agora. Bom trabalho!</div>' if not lst else ""
+    return f"""<style>.hoje{{list-style:none;padding:0;margin:0}}.hoje li{{display:flex;gap:12px;align-items:center;background:var(--card);
+border:1px solid var(--borda);border-radius:10px;padding:10px 12px;margin-bottom:8px}}.hoje .ic{{font-size:22px}}.hoje .tx{{flex:1;min-width:0}}
+.hoje .btn{{white-space:nowrap}}@media(max-width:600px){{.hoje li{{flex-wrap:wrap}}.hoje .btn{{width:100%;text-align:center}}}}</style>
+<div class="linha" style="justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:baseline"><h2 style="margin:0">🏠 Hoje – {titulo}</h2>
+<span class="sub">{resumo}</span></div>
+<p class="sub">Tudo o que precisa de ação, em ordem de urgência. Clique no botão para resolver.</p>{vazio}{blocos}"""
 
 
 def urg_tag(m):
@@ -4053,7 +4218,7 @@ def pg_relatorio(q, aviso="", erro=False):
 <button class="sec" formmethod="post" formaction="/relatorio/enviar?{qs}" name="csrf" value="{CSRF}" {"" if uc.get("tg_chat") else "disabled title='Conecte o seu Telegram em ⚙️'"}>📨 Mandar no meu Telegram</button></form>
 <p class="sub">No dia 1º de cada mês o PDF do mês anterior chega sozinho no seu Telegram (dá para desligar em ⚙️ → Resumo diário).</p>
 {html_relatorio(d)}"""
-    return pagina("Relatório", corpo, "/licitacoes", aviso, erro)
+    return pagina("Relatório", corpo, "/contratos", aviso, erro)
 
 
 def enviar_relatorio_tg(login, mes, emp_f=""):
