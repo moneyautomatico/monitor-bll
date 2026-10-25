@@ -43,6 +43,8 @@ import resumo
 import documentos
 import geo
 import ajuda
+import email_aviso
+import pwa
 import planilhas
 import lixeira
 import avisos
@@ -774,6 +776,8 @@ nav .sub-m a:hover,nav .sub-m a.aqui{background:rgba(255,255,255,.1);color:#fff}
 @media (max-width:900px){header{gap:8px}.menu-btn{display:block;margin-left:auto}nav{display:none;width:100%;flex-direction:column;padding-bottom:10px}
 header.aberto nav{display:flex}nav .area>a{padding:10px 6px;border-bottom:1px solid rgba(255,255,255,.08)}
 nav .sub-m{display:block;position:static;box-shadow:none;background:none;padding:0 0 4px 14px;min-width:0}nav .sub-m a{padding:7px 8px;font-size:13px}}
+@media (max-width:700px){main table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}main{padding:12px 10px 70px}.kpi .v{font-size:19px}
+.acoes .btn,.acoes button{margin-bottom:4px}}
 """
 
 AREAS = [
@@ -838,9 +842,11 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#173f2c"><link rel="apple-touch-icon" href="/icone-192.png">
 {TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="tema" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header><main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();
-document.querySelectorAll('nav .sub-m a').forEach(a=>{{if(a.getAttribute('href')===location.pathname)a.classList.add('aqui');}});</script></body></html>"""
+document.querySelectorAll('nav .sub-m a').forEach(a=>{{if(a.getAttribute('href')===location.pathname)a.classList.add('aqui');}});
+if('serviceWorker' in navigator){{navigator.serviceWorker.register('/sw.js').catch(()=>{{}});}}</script></body></html>"""
 
 
 PRESENCA = {}   # chave do aparelho -> {login, area, pagina, desde, visto, visivel, ip, aparelho}
@@ -1487,6 +1493,116 @@ def importar_planilha(tipo, alvo, nome_arq, dados, substituir=False):
         propostas.gravar(alvo, p)
         return len(novos), ""
     return 0, "tipo desconhecido"
+
+
+# ------------------------------------------------------------------ agenda no Google Agenda / Outlook (link de calendário)
+def _ics_txt(t):
+    return str(t or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")[:900]
+
+
+def ics_usuario():
+    """Calendário .ics com prazos, disputas, tarefas e vigência de atas do usuário atual (_REQ.user)."""
+    agora = datetime.now()
+    desde = agora - timedelta(days=7)
+    eventos = []
+
+    def ev(uid, quando, titulo, desc="", dia_todo=False):
+        if dia_todo or (quando.hour, quando.minute) == (23, 59):
+            ini = f"DTSTART;VALUE=DATE:{quando:%Y%m%d}"
+            fim = f"DTEND;VALUE=DATE:{(quando + timedelta(days=1)):%Y%m%d}"
+        else:
+            ini = f"DTSTART:{quando:%Y%m%dT%H%M00}"
+            fim = f"DTEND:{(quando + timedelta(hours=1)):%Y%m%dT%H%M00}"
+        eventos.append("\r\n".join(["BEGIN:VEVENT", f"UID:{uid}@licitatudo", f"DTSTAMP:{agora:%Y%m%dT%H%M%S}", ini, fim,
+                                    f"SUMMARY:{_ics_txt(titulo)}", f"DESCRIPTION:{_ics_txt(desc)}",
+                                    "BEGIN:VALARM", "ACTION:DISPLAY", "DESCRIPTION:Lembrete", "TRIGGER:-PT2H", "END:VALARM", "END:VEVENT"]))
+    for pid, it in agenda.prazos()["itens"].items():
+        if it.get("status") != "aberto" or not visivel(it.get("empresa"), it.get("criado_por")):
+            continue
+        q = datetime.fromisoformat(it["quando"])
+        if q >= desde:
+            ev(f"prazo-{pid}", q, "⏰ " + it.get("titulo", ""), f"{it.get('empresa', '')} · {it.get('promotor', '')}")
+    for c in kanban.listar():
+        if c.get("arquivado") or not visivel(c.get("empresa"), c.get("usuario")):
+            continue
+        ab = c.get("abertura") or ""
+        if ab and not c.get("resultado"):
+            try:
+                q = datetime.strptime(ab[:16], "%Y-%m-%dT%H:%M")
+                if q >= desde:
+                    ev(f"disputa-{c['id']}", q, f"🏁 Disputa – {c.get('processo', '')}", f"{c.get('orgao', '')} · {c.get('empresa', '')}")
+            except ValueError:
+                pass
+        for t in c.get("tarefas") or []:
+            if not t.get("feito") and t.get("prazo"):
+                try:
+                    ev(f"tarefa-{t['id']}", datetime.strptime(t["prazo"], "%Y-%m-%d"), f"☑ {t.get('texto', '')}",
+                       f"{c.get('processo', '')} · {t.get('resp', '')}", True)
+                except ValueError:
+                    pass
+    for a in atas.listar():
+        if a.get("status") == "ativa" and visivel(a.get("empresa"), a.get("usuario")) and a.get("vigencia_fim"):
+            try:
+                ev(f"ata-{a['id']}", datetime.strptime(a["vigencia_fim"], "%Y-%m-%d"), f"📑 Fim da ata {a.get('numero', '')}", a.get("orgao", ""), True)
+            except ValueError:
+                pass
+    return ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Licitatudo//Agenda//PT\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\n"
+            "X-WR-CALNAME:Licitatudo\r\nX-WR-TIMEZONE:America/Sao_Paulo\r\n" + "\r\n".join(eventos) + "\r\nEND:VCALENDAR\r\n")
+
+
+def cartao_agenda_email(lg, uc):
+    tok = uc.get("ics_token", "")
+    g = CFG_ATUAL()
+    email_ok = email_aviso.configurado(g)
+    ck = lambda k, padrao=False: "checked" if uc.get(k, padrao) else ""  # noqa: E731
+    if tok:
+        ics_html = f"""<input class="campo" id="ics-link" readonly onclick="this.select()" style="max-width:100%">
+<div class="acoes"><button type="button" class="sec" onclick="navigator.clipboard.writeText(document.getElementById('ics-link').value);this.textContent='✅ Copiado'">📋 Copiar o link</button>
+{botao("/preferencias/ics", "🔄 Gerar um link novo (o antigo para de funcionar)", "sec")}</div>
+<script>document.getElementById('ics-link').value=location.origin+'/agenda.ics?t={tok}';</script>
+<p class="sub"><b>Google Agenda</b> (no computador): Outras agendas → ➕ → <i>Do URL</i> → cole o link. <b>iPhone</b>: Ajustes → Calendário → Contas → Adicionar → Outra → Calendário assinado.
+<b>Outlook</b>: Adicionar calendário → Assinar da Web. Não compartilhe o link: quem tiver ele vê a sua agenda.</p>"""
+    else:
+        ics_html = botao("/preferencias/ics", "📅 Criar o meu link de calendário")
+    return f"""<div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">📅 Agenda no celular (Google Agenda / Outlook / iPhone)</h3>
+<p class="sub">Um link de calendário com prazos, disputas, prazos legais, tarefas e fim das atas. Ele se atualiza sozinho no seu calendário.</p>
+{ics_html}
+</div>
+<div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">✉️ Avisos por e-mail</h3>
+{'' if email_ok else '<p class="msg">O envio de e-mail ainda não foi configurado pelo administrador do sistema.</p>'}
+<form method="post" action="/preferencias/email"><input type="hidden" name="csrf" value="{CSRF}">
+<label>Seu e-mail</label><input class="campo" type="email" name="email" value="{e(uc.get("email", ""))}" placeholder="voce@empresa.com.br">
+<label class="ck"><input type="checkbox" name="email_resumo" value="1" {ck("email_resumo")}> Resumo do dia</label>
+<label class="ck"><input type="checkbox" name="email_relatorio" value="1" {ck("email_relatorio")}> Relatório do mês (PDF) no dia 1º</label>
+<label class="ck"><input type="checkbox" name="email_avisos" value="1" {ck("email_avisos")}> Todos os avisos (prazos, certidões, contratos, edital alterado…)</label>
+<div class="acoes"><button>Salvar</button>{'<button class="sec" name="acao" value="teste">📨 Enviar um e-mail de teste</button>' if email_ok else ''}</div></form>
+<p class="sub">As mensagens do pregoeiro (alarme) continuam pelo Telegram/ntfy, que chegam na hora.</p></div>"""
+
+
+def donos_de(empresas):
+    out = set()
+    lista = {x.strip().upper() for x in empresas if x}
+    for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
+        c = ler_env(a)
+        if (c.get("EMPRESA_NOME") or a.stem).upper().strip() in lista and c.get("EMPRESA_DONO"):
+            out.add(c["EMPRESA_DONO"].lower())
+    return out
+
+
+def email_avisos(texto, empresas=(), usuario=""):
+    """Manda o aviso também por e-mail para os donos que pediram 'todos os avisos'."""
+    g = CFG_ATUAL()
+    if not email_aviso.configurado(g):
+        return
+    logins = donos_de(empresas) if empresas else ({usuario} if usuario else set())
+    assunto = re.sub(r"<[^>]+>", "", (texto or "").split("\n", 1)[0])[:120] or "Aviso do Licitatudo"
+    for lg in logins:
+        uc = usuarios.cfg(lg)
+        if uc.get("email") and uc.get("email_avisos"):
+            try:
+                email_aviso.enviar(g, uc["email"], "Licitatudo – " + assunto, texto)
+            except Exception as ex:  # noqa: BLE001
+                print("e-mail de aviso:", ex, flush=True)
 
 
 def urg_tag(m):
@@ -4616,13 +4732,19 @@ def relatorio_mensal():
                 for lg in list(usuarios.carregar()):
                     u = usuarios.obter(lg)
                     c = (u or {}).get("cfg") or {}
-                    if not u or not u.get("ativo", True) or u["papel"] == "admin" or not c.get("tg_chat") \
-                            or not c.get("relatorio_mensal", True) or c.get("relatorio_ultimo") == mes:
+                    quer_tg = bool(c.get("tg_chat") and c.get("relatorio_mensal", True))
+                    quer_em = bool(c.get("email") and c.get("email_relatorio") and email_aviso.configurado(CFG_ATUAL()))
+                    if not u or not u.get("ativo", True) or u["papel"] == "admin" or not (quer_tg or quer_em) or c.get("relatorio_ultimo") == mes:
                         continue
                     _REQ.user, _REQ.perm, _REQ.admin = u, None, False
                     try:
                         if nomes_empresas():
-                            enviar_relatorio_tg(lg, mes)
+                            if quer_tg:
+                                enviar_relatorio_tg(lg, mes)
+                            if quer_em:
+                                email_aviso.enviar(CFG_ATUAL(), c["email"], f"Licitatudo – relatório de {nome_mes(mes)}",
+                                                   f"📈 <b>Relatório de {nome_mes(mes)}</b>\nSegue o PDF em anexo.",
+                                                   [(f"relatorio-licitacoes-{mes}.pdf", pdf_relatorio(dados_relatorio(mes)), "application/pdf")])
                         usuarios.salvar_cfg(lg, {"relatorio_ultimo": mes})
                     except Exception as ex:  # noqa: BLE001
                         print("Relatório mensal de", lg, ex, flush=True)
@@ -6169,6 +6291,7 @@ No celular, este link já abre o app: <a href="ntfy://ntfy.sh/{e(topico)}">ntfy:
 O texto “Sobre a empresa” e as instruções da análise ficam em <a href="/editais">Editais</a>.</p>
 {form_ia}</div>
 {cartao_meu_consumo(lg, uc)}
+{cartao_agenda_email(lg, uc)}
 <div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">🔑 Conta e segurança</h3>
 <p class="sub">Login <b>{e(lg)}</b> · {tag_papel(u["papel"])} · aparelhos conectados: <b>{sum(1 for v in _sessoes().values() if v[1] == lg)}</b></p>
 <div class="acoes"><a class="btn sec" href="/conta">Trocar minha senha</a><a class="btn sec" href="/empresas">Minhas empresas</a>
@@ -6412,6 +6535,17 @@ Usados para calcular o custo de cada uso e o comunicado aos licitantes. <a href=
 <div><label>Acréscimo no repasse %</label><input class="campo" name="IA_ACRESCIMO_PCT" value="{g('IA_ACRESCIMO_PCT', '0')}" style="width:110px"></div></div>
 <label style="font-weight:400;display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" name="IA_COBRAR" value="1" {"checked" if c.get("IA_COBRAR", "1") != "0" else ""}>
 O custo da IA é repassado ao licitante (mostrar o “valor ao licitante”, com o acréscimo, nos avisos e no comunicado)</label>
+<div class="acoes"><button>Salvar</button></div></form></div>
+<h2 style="margin-top:22px">✉️ E-mail (SMTP) para os avisos</h2><div class="form">
+<form method="post" action="/config/email"><input type="hidden" name="csrf" value="{CSRF}">
+<p class="sub">Para os usuários receberem resumo, relatório e avisos por e-mail. Use o SMTP do seu provedor (ex.: Hostinger, Gmail com senha de app, Brevo).
+{"<b>✅ Configurado.</b>" if email_aviso.configurado(c) else "Ainda não configurado."}</p>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 14px">
+<div><label>Servidor SMTP</label><input class="campo" name="SMTP_HOST" value="{g('SMTP_HOST')}" placeholder="smtp.hostinger.com"></div>
+<div><label>Porta</label><input class="campo" name="SMTP_PORTA" value="{g('SMTP_PORTA', '587')}" placeholder="587 ou 465"></div>
+<div><label>Usuário</label><input class="campo" name="SMTP_USUARIO" value="{g('SMTP_USUARIO')}" autocomplete="off"></div>
+<div><label>Senha <small>({"configurada; " if c.get("SMTP_SENHA") else ""}vazio = manter)</small></label><input class="campo" type="password" name="SMTP_SENHA" autocomplete="new-password"></div>
+<div><label>Remetente (e-mail)</label><input class="campo" name="SMTP_REMETENTE" value="{g('SMTP_REMETENTE')}" placeholder="avisos@seudominio.com.br"></div></div>
 <div class="acoes"><button>Salvar</button></div></form></div>
 <h2 style="margin-top:22px">☀️ Resumo diário no Telegram</h2><div class="form">
 <form method="post" action="/config/resumo"><input type="hidden" name="csrf" value="{CSRF}">
@@ -7317,7 +7451,13 @@ def destinos_alerta(nomes, criador=""):
 
 
 agenda.ROTEAR = destinos_alerta
-agenda.AO_ENVIAR = lambda nomes, criador, txt: avisos.registrar(txt, [x.strip() for x in (nomes or "").split(",") if x.strip()], criador or "")
+def _ao_enviar_agenda(nomes, criador, txt):
+    emps = [x.strip() for x in (nomes or "").split(",") if x.strip()]
+    avisos.registrar(txt, emps, criador or "")
+    threading.Thread(target=email_avisos, args=(txt, emps, criador or ""), daemon=True).start()
+
+
+agenda.AO_ENVIAR = _ao_enviar_agenda
 
 
 def ntfy_em_uso(topico, login):
@@ -7415,7 +7555,8 @@ def resumo_usuarios():
                 c = u.get("cfg") or {}
                 g = CFG_ATUAL()
                 padrao_ativo = g.get("RESUMO_ATIVO", "1") != "0"   # quem nunca mexeu recebe (padrão do administrador)
-                if u.get("papel") == "admin" or not (u.get("ativo", True) and c.get("resumo_ativo", padrao_ativo) and c.get("tg_chat")):
+                quer_email = bool(c.get("email") and c.get("email_resumo") and email_aviso.configurado(g))
+                if u.get("papel") == "admin" or not u.get("ativo", True) or not ((c.get("resumo_ativo", padrao_ativo) and c.get("tg_chat")) or quer_email):
                     continue   # o administrador não recebe resumo com empresas dos usuários
                 try:
                     hora_u = int(c.get("resumo_hora", g.get("RESUMO_HORA", "7")) or 7)
@@ -7426,7 +7567,13 @@ def resumo_usuarios():
                 tok = c.get("tg_token") or CFG_ATUAL().get("TELEGRAM_TOKEN", "")
                 txt_r = resumo.montar(agora, nomes_do_usuario(lg), lg)
                 avisos.registrar(txt_r, [], lg)
-                resumo.enviar_partes(lambda t: telegram_para(tok, c["tg_chat"], t), txt_r)
+                if c.get("tg_chat") and c.get("resumo_ativo", padrao_ativo):
+                    resumo.enviar_partes(lambda t: telegram_para(tok, c["tg_chat"], t), txt_r)
+                if quer_email:
+                    try:
+                        email_aviso.enviar(g, c["email"], f"Licitatudo – resumo do dia {agora:%d/%m}", txt_r)
+                    except Exception as ex:  # noqa: BLE001
+                        print("e-mail do resumo:", ex, flush=True)
                 usuarios.salvar_cfg(lg, {"resumo_ultimo": hoje})
         except Exception as ex:  # noqa: BLE001
             print("Erro no resumo dos usuários:", ex, flush=True)
@@ -7452,6 +7599,7 @@ def telegram_geral(texto, usuario=None, empresas=None):
     """Sem destino: avisos do sistema (Telegram geral, se houver). Com empresas/usuário: vai para o bot do dono."""
     if empresas or usuario is not None:
         avisos.registrar(texto, list(empresas or []), usuario or "")
+        threading.Thread(target=email_avisos, args=(texto, list(empresas or []), usuario or ""), daemon=True).start()
     if empresas:
         for tok, chat in destinos_alerta(", ".join(empresas))[0]:
             telegram_para(tok, chat, texto)
@@ -7803,8 +7951,44 @@ class Painel(BaseHTTPRequestHandler):
         self.cabecalhos_seguranca()
         self.end_headers()
 
+    def calendario(self):
+        q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
+        tok = q0.get("t", "")
+        lg_ok = next((lg for lg, u in usuarios.carregar().items() if tok and len(tok) >= 20 and u.get("ativo", True)
+                      and hmac.compare_digest((u.get("cfg") or {}).get("ics_token", ""), tok)), None)
+        if not lg_ok:
+            self.send_response(404)
+            self.end_headers()
+            return
+        _REQ.user, _REQ.perm, _REQ.admin = usuarios.obter(lg_ok), None, False
+        try:
+            dados_c = ics_usuario().encode("utf-8")
+        finally:
+            _REQ.user = None
+        self.send_response(200)
+        self.send_header("Content-Type", "text/calendar; charset=utf-8")
+        self.send_header("Content-Disposition", 'inline; filename="licitatudo.ics"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(dados_c)))
+        self.end_headers()
+        self.wfile.write(dados_c)
+
     def do_GET(self):
         caminho = urllib.parse.urlparse(self.path).path.rstrip("/")
+        if caminho in ("/manifest.webmanifest", "/sw.js", "/icone-192.png", "/icone-512.png"):   # app no celular (público, sem dados)
+            dados_p, tipo_p = {"/manifest.webmanifest": (json.dumps(pwa.MANIFESTO, ensure_ascii=False).encode(), "application/manifest+json"),
+                               "/sw.js": (pwa.SW.encode(), "application/javascript"), "/icone-192.png": (pwa.ICONE_192, "image/png"),
+                               "/icone-512.png": (pwa.ICONE_512, "image/png")}[caminho]
+            self.send_response(200)
+            self.send_header("Content-Type", tipo_p)
+            self.send_header("Cache-Control", "public, max-age=86400" if caminho.endswith(".png") else "no-cache")
+            self.send_header("Content-Length", str(len(dados_p)))
+            self.cabecalhos_seguranca()
+            self.end_headers()
+            self.wfile.write(dados_p)
+            return
+        if caminho == "/agenda.ics":
+            return self.calendario()
         if caminho == "/login":
             q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
             return self.enviar(pg_login("", q0.get("destino", "/")))
@@ -8660,6 +8844,14 @@ class Painel(BaseHTTPRequestHandler):
                 volta = f.get("voltar", "/disputa")
                 return self.redirecionar((volta if volta.startswith("/") and not volta.startswith("//") else "/disputa")
                                          + ("&" if "?" in volta else "?") + "ok=piso")
+            if p == "/config/email":
+                v_e = {k: f.get(k, "").strip()[:200] for k in ("SMTP_HOST", "SMTP_USUARIO", "SMTP_REMETENTE")}
+                v_e["SMTP_PORTA"] = re.sub(r"\D", "", f.get("SMTP_PORTA", "587"))[:5] or "587"
+                if f.get("SMTP_SENHA", "").strip():
+                    v_e["SMTP_SENHA"] = f["SMTP_SENHA"].strip()[:200]
+                gravar_env(CONFIG, v_e)
+                self.auditar("alterou o e-mail (SMTP)", v_e.get("SMTP_HOST", ""))
+                return self.redirecionar("/config?ok=config")
             if p == "/config/resumo":
                 gravar_env(CONFIG, {"RESUMO_ATIVO": "1" if f.get("RESUMO_ATIVO") else "0",
                                     "RESUMO_HORA": re.sub(r"\D", "", f.get("RESUMO_HORA", "7"))[:2] or "7"})
@@ -9426,6 +9618,22 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
             mod = re.sub(r"[^\w.-]", "", f.get("gemini_modelo", ""))[:60]
             usuarios.salvar_cfg(lg, {"gemini_key": None if f.get("tirar_chave") else (k or uc.get("gemini_key") or None),
                                      "gemini_modelo": mod or None})
+            return self.redirecionar("/preferencias?ok=pref")
+        if p == "/preferencias/ics":
+            usuarios.salvar_cfg(lg, {"ics_token": secrets.token_urlsafe(24)})
+            return self.redirecionar("/preferencias?ok=pref")
+        if p == "/preferencias/email":
+            em = f.get("email", "").strip()[:120]
+            if em and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", em):
+                return self.enviar(pg_preferencias("E-mail inválido.", True))
+            usuarios.salvar_cfg(lg, {"email": em or None, "email_resumo": f.get("email_resumo") == "1",
+                                     "email_relatorio": f.get("email_relatorio") == "1", "email_avisos": f.get("email_avisos") == "1"})
+            if f.get("acao") == "teste" and em:
+                try:
+                    email_aviso.enviar(CFG_ATUAL(), em, "Licitatudo – e-mail de teste", "✅ <b>Funcionou!</b>\nOs avisos que você escolheu vão chegar neste e-mail.")
+                    return self.enviar(pg_preferencias("📨 E-mail de teste enviado – confira a caixa de entrada (e o spam)."))
+                except Exception as ex:  # noqa: BLE001
+                    return self.enviar(pg_preferencias(f"Não consegui enviar: {e(str(ex)[:200])}", True))
             return self.redirecionar("/preferencias?ok=pref")
         if p == "/preferencias/resumo":
             try:
