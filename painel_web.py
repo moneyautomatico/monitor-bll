@@ -3036,6 +3036,16 @@ def vencidos_monitor(nomes_ok):
     return out
 
 
+def margem_txt(c):
+    if not c.get("custos"):
+        return ""
+    lu = contratos.lucro(c, catalogo.num(catalogo.param(c.get("empresa", "")).get("impostos")))
+    if lu["margem"] is None:
+        return ""
+    return (f'<div class="sub" style="{"color:#c62828" if lu["margem"] < 0 else ""}">💰 lucro {contratos.brl(lu["lucro"])} · margem '
+            + f'{lu["margem"]:.1f}%'.replace(".", ",") + "</div>")
+
+
 def pg_contratos(q, aviso="", erro=False):
     emps = nomes_empresas()
     lista = [c for c in contratos.listar() if visivel(c.get("empresa"), c.get("usuario"))]
@@ -3052,7 +3062,7 @@ def pg_contratos(q, aviso="", erro=False):
                                         f'⏰ {t["entregas_perto"]} entrega(s) perto do prazo' if t["entregas_perto"] else ""] if x)
         linhas += (f'<tr><td><a href="/contratos/{e(c["id"])}"><b>{e(c.get("processo") or "sem nº")}</b></a>'
                    f'{" · contrato " + e(c["numero"]) if c.get("numero") else ""}<div class="sub">{link_orgao(c.get("orgao", ""))}</div>'
-                   f'<div class="sub" style="color:var(--erro)">{e(alerta)}</div></td><td>{e(c.get("empresa", ""))}</td>'
+                   f'<div class="sub" style="color:var(--erro)">{e(alerta)}</div>{margem_txt(c)}</td><td>{e(c.get("empresa", ""))}</td>'
                    f'<td>{contratos.brl(t["contratado"])}</td><td class="ocultar">{contratos.brl(t["faturado"])}</td>'
                    f'<td>{contratos.brl(t["recebido"])}<div class="barra-p"><span style="width:{pct}%"></span></div></td>'
                    f'<td style="{"color:var(--erro);font-weight:700" if t["atrasado"] else ""}">{contratos.brl(t["a_receber"])}</td></tr>')
@@ -3154,6 +3164,7 @@ def pg_contrato(cid, aviso="", erro=False):
 <form method="post" action="/contratos/{cid}/empenho" class="mini-f"><input type="hidden" name="csrf" value="{CSRF}">
 <div><label>Nº do empenho</label><input class="campo" name="numero" required></div><div><label>Data</label><input class="campo" type="date" name="data" value="{hoje}"></div>
 <div><label>Valor (R$)</label><input class="campo" name="valor" placeholder="0,00"></div><button>+ Empenho</button></form></div></div>
+{html_lucro(cid, c)}
 <div class="form" style="max-width:none;margin-top:14px"><h3 style="margin-top:0">Dados do contrato</h3>
 <form method="post" action="/contratos/{cid}/salvar"><input type="hidden" name="csrf" value="{CSRF}">
 <div class="duas"><div><label>Nº do contrato / ata</label><input class="campo" name="numero" value="{e(c.get("numero", ""))}"></div>
@@ -3166,6 +3177,50 @@ def pg_contrato(cid, aviso="", erro=False):
 <div class="acoes">{botao(f"/contratos/{cid}/encerrar", "Reabrir contrato" if c.get("status") != "ativo" else "Encerrar contrato", "sec")}
 {botao(f"/contratos/{cid}/excluir", "🗑 Excluir", "perigo", "Excluir este contrato e todo o histórico dele?")}</div></div>"""
     return pagina("Contrato", corpo, "/contratos", aviso, erro)
+
+
+def html_lucro(cid, c):
+    imp_padrao = catalogo.num(catalogo.param(c.get("empresa", "")).get("impostos"))
+    lu = contratos.lucro(c, imp_padrao)
+    hoje = date.today().isoformat()
+    np_ = _norm_proc(c.get("processo"))
+    prop = next((p for p in propostas.listar() if p.get("empresa") == c.get("empresa") and np_ and _norm_proc(p.get("processo")) == np_
+                 and not p.get("readequada_para")), None)
+    prev = ""
+    if prop:
+        its, tot = propostas.calcular(prop)
+        custo_prev = sum(i["_q"] * (catalogo.num(i.get("custo")) + catalogo.num(i.get("frete"))) for i in its if i.get("custo"))
+        if custo_prev and tot:
+            m_prev = 100 * (tot - custo_prev) / tot - lu["imposto_pct"]
+            pct1 = f"{m_prev:.1f}".replace(".", ",")
+            pct2 = f'{lu["imposto_pct"]:.1f}'.replace(".", ",")
+            prev = (f'<p class="sub">📐 Previsto na <a href="/propostas/{e(prop["id"])}">proposta</a>: custo {contratos.brl(custo_prev)} para {contratos.brl(tot)} '
+                    f'→ margem prevista ~{pct1}% (depois dos impostos de {pct2}%).</p>')
+    linhas = "".join(
+        f'<tr><td>{contratos.br(x.get("data"))}</td><td>{e(x.get("descricao", ""))}</td><td>{e(contratos.TIPOS_CUSTO.get(x.get("tipo"), ""))}</td>'
+        f'<td class="num">{contratos.brl(contratos.num(x.get("valor")))}</td><td>{botao("/contratos/" + cid + "/remover/custos/" + x["id"], "✕", "sec", "Remover este custo?")}</td></tr>'
+        for x in sorted(c.get("custos") or [], key=lambda x: x.get("data", "")))
+    opc = "".join(f'<option value="{k}">{n}</option>' for k, n in contratos.TIPOS_CUSTO.items())
+    cor = "#c62828" if lu["margem"] is not None and lu["margem"] < 0 else ""
+    imp_txt = ("guias lançadas como custo" if lu["tem_guia"] else f'{lu["imposto_pct"]:.2f}% do faturado (estimado)').replace(".", ",")
+    return f"""<div class="form" style="max-width:none;margin-top:14px" id="lucro"><h3 style="margin-top:0">💰 Lucro real do contrato</h3>
+<div class="kpis"><div class="kpi"><div class="v">{contratos.brl(lu["faturado"])}</div><div class="l">faturado</div></div>
+<div class="kpi"><div class="v">{contratos.brl(lu["custos"])}</div><div class="l">custos lançados</div></div>
+<div class="kpi"><div class="v">{contratos.brl(lu["impostos"])}</div><div class="l">impostos · {imp_txt}</div></div>
+<div class="kpi" style="{"border-color:#c62828" if cor else ""}"><div class="v" style="color:{cor}">{contratos.brl(lu["lucro"])}</div>
+<div class="l">lucro{(" · margem " + f'{lu["margem"]:.1f}%'.replace(".", ",")) if lu["margem"] is not None else ""}</div></div></div>
+{prev}
+<table><tr><th>Data</th><th>Descrição</th><th>Tipo</th><th class="num">Valor</th><th></th></tr>{linhas or '<tr><td colspan="5">Nenhum custo lançado.</td></tr>'}</table>
+<form method="post" action="/contratos/{cid}/custo" class="mini-f"><input type="hidden" name="csrf" value="{CSRF}">
+<div><label>Data</label><input class="campo" type="date" name="data" value="{hoje}"></div>
+<div><label>Descrição</label><input class="campo" name="descricao" required placeholder="ex.: NF fornecedor 1234"></div>
+<div><label>Tipo</label><select class="campo" name="tipo">{opc}</select></div>
+<div><label>Valor (R$)</label><input class="campo" name="valor" required placeholder="0,00"></div><button>+ Custo</button></form>
+<form method="post" action="/contratos/{cid}/imposto" class="mini-f"><input type="hidden" name="csrf" value="{CSRF}">
+<div><label>Impostos sobre o faturado (%)</label><input class="campo" name="imposto_pct" value="{e(str(c.get("imposto_pct", "")))}" placeholder="{e(f"{imp_padrao:g}")} (padrão da empresa)" style="max-width:200px"></div>
+<button class="sec">Salvar %</button></form>
+<p class="sub">Lance aqui o que você gastou para atender este contrato (compra, frete, comissão…). Se lançar a guia de imposto como custo, o sistema
+para de estimar o imposto. O padrão de impostos vem de Documentos → Catálogo e preços.</p></div>"""
 
 
 # ------------------------------------------------------------------ minhas licitações: kanban + siga-me
@@ -3775,6 +3830,7 @@ def dados_relatorio(mes, emp_f=""):
         p["perdidas"] += info.get("resultado") == "perdeu"
         p["valor_ganho"] += valor
     fat = rec = a_receber = atrasado = 0.0
+    custos_mes = impostos_mes = 0.0
     n_atras = 0
     novos_contr = []
     for c in contratos.listar():
@@ -3794,6 +3850,10 @@ def dados_relatorio(mes, emp_f=""):
                     pe(c.get("empresa", ""))["recebido"] += vp
                 if n["pago_em"][:7] in hist:
                     hist[n["pago_em"][:7]]["recebido"] += vp
+        lu_m = contratos.lucro(c, catalogo.num(catalogo.param(c.get("empresa", "")).get("impostos")), mes)
+        custos_mes += lu_m["custos"]
+        impostos_mes += lu_m["impostos"]
+        pe(c.get("empresa", ""))["custos"] = pe(c.get("empresa", "")).get("custos", 0) + lu_m["custos"] + lu_m["impostos"]
         t = contratos.totais(c)
         if c.get("status") == "ativo":
             a_receber += t["a_receber"]
@@ -3814,6 +3874,7 @@ def dados_relatorio(mes, emp_f=""):
             "encerradas": sum(1 for x in lic if x["resultado"] == "encerrado"), "andamento": sum(1 for x in lic if not x["resultado"]),
             "taxa": (100 * ganhas / (ganhas + perdidas)) if ganhas + perdidas else None,
             "valor_ganho": sum(x["valor"] for x in lic), "faturado": fat, "recebido": rec, "a_receber": a_receber,
+            "custos": custos_mes, "impostos": impostos_mes, "lucro": fat - custos_mes - impostos_mes,
             "atrasado": atrasado, "n_atrasadas": n_atras, "novos_contratos": novos_contr, "propostas": len(props),
             "certidoes": sorted(certs), "hist": [(m, hist[m]) for m in meses], "por_emp": por_emp}
 
@@ -3864,7 +3925,8 @@ def html_relatorio(d):
 <div class="kp"><div><span>Disputadas</span><b>{len(d["lic"])}</b></div><div><span>Ganhas</span><b>{d["ganhas"]}</b></div>
 <div><span>Taxa de vitória</span><b>{taxa}</b></div><div><span>Valor ganho</span><b>{brl(d["valor_ganho"])}</b></div>
 <div><span>Faturado no mês</span><b>{brl(d["faturado"])}</b></div><div><span>Recebido no mês</span><b>{brl(d["recebido"])}</b></div>
-<div><span>A receber (total)</span><b>{brl(d["a_receber"])}</b></div><div><span>Em atraso</span><b class="{"ruim" if d["atrasado"] else ""}">{brl(d["atrasado"])}</b></div></div>
+<div><span>A receber (total)</span><b>{brl(d["a_receber"])}</b></div><div><span>Em atraso</span><b class="{"ruim" if d["atrasado"] else ""}">{brl(d["atrasado"])}</b></div>
+{f'<div><span>Custos + impostos do mês</span><b>{brl(d["custos"] + d["impostos"])}</b></div><div><span>Lucro do mês</span><b class="{"ruim" if d["lucro"] < 0 else "ok"}">{brl(d["lucro"])}</b></div>' if d["custos"] else ""}</div>
 <p class="sub" style="margin-top:8px">{d["perdidas"]} perdida(s) · {d["encerradas"]} encerrada(s) sem vencedor · {d["andamento"]} ainda sem resultado ·
 {d["propostas"]} proposta(s) montada(s) no mês{f' · <b class="ruim">{d["n_atrasadas"]} nota(s) com pagamento atrasado</b>' if d["n_atrasadas"] else ""}.
 A taxa de vitória considera só as licitações com resultado (ganhas ÷ ganhas + perdidas).</p>
@@ -8195,7 +8257,7 @@ class Painel(BaseHTTPRequestHandler):
                                       "valor": f.get("valor", "").strip()[:30], "vigencia_fim": f.get("vigencia_fim", "")[:10],
                                       "objeto": f.get("objeto", "").strip()[:600]})
                 return self.redirecionar(f"/contratos/{cid}")
-            m = re.fullmatch(r"/contratos/([0-9a-f]{12})/(salvar|empenho|entrega|nota|encerrar|excluir|entregue|pagar|remover)(?:/(\w+))?(?:/(\w+))?", p)
+            m = re.fullmatch(r"/contratos/([0-9a-f]{12})/(salvar|empenho|entrega|nota|encerrar|excluir|entregue|pagar|remover|custo|imposto)(?:/(\w+))?(?:/(\w+))?", p)
             if m and contratos.ler(m.group(1)):
                 cid, acao, a1, a2 = m.groups()
                 c = contratos.ler(cid)
@@ -8239,13 +8301,22 @@ class Painel(BaseHTTPRequestHandler):
                         if n["id"] == a1:
                             n["pago_em"] = f.get("pago_em", "")[:10] or date.today().isoformat()
                             n["valor_pago"] = f.get("valor_pago", "").strip()[:30]
-                elif acao == "remover" and a1 in ("empenhos", "entregas", "notas"):
+                elif acao == "custo":
+                    if contratos.num(f.get("valor")) <= 0:
+                        return self.enviar(pg_contrato(cid, "Informe o valor do custo.", True))
+                    c.setdefault("custos", []).append({"id": contratos.novo_id(), "data": f.get("data", "")[:10] or date.today().isoformat(),
+                                                        "descricao": f.get("descricao", "").strip()[:200],
+                                                        "tipo": f.get("tipo") if f.get("tipo") in contratos.TIPOS_CUSTO else "outro",
+                                                        "valor": f.get("valor", "").strip()[:30]})
+                elif acao == "imposto":
+                    c["imposto_pct"] = f.get("imposto_pct", "").strip()[:10]
+                elif acao == "remover" and a1 in ("empenhos", "entregas", "notas", "custos"):
                     for x in c.get(a1) or []:
                         if x["id"] == a2 and x.get("agenda"):
                             agenda.excluir(x["agenda"])
                     c[a1] = [x for x in c.get(a1) or [] if x["id"] != a2]
                 contratos.gravar(cid, c)
-                return self.redirecionar(f"/contratos/{cid}?ok=feito")
+                return self.redirecionar(f"/contratos/{cid}?ok=feito" + ("#lucro" if acao in ("custo", "imposto") or a1 == "custos" else ""))
             m = re.fullmatch(r"/propostas/([0-9a-f]{12})/precos", p)
             if m and propostas.ler(m.group(1)):
                 prop = propostas.ler(m.group(1))

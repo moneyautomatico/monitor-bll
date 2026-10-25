@@ -178,3 +178,24 @@ def ciclo(enviar):
         except Exception as ex:  # noqa: BLE001
             print("Erro nos avisos de contratos:", ex, flush=True)
         time.sleep(1800)
+
+
+# ------------------------------------------------------------------ lucro real
+TIPOS_CUSTO = {"produto": "Compra do produto", "frete": "Frete / entrega", "imposto": "Imposto pago (guia)", "comissao": "Comissão",
+               "outro": "Outro"}
+
+
+def lucro(c, imposto_pct=0.0, mes=None):
+    """Lucro = faturado − custos lançados − impostos. Se a guia de imposto foi lançada como custo ('imposto'), não estima de novo.
+    mes = 'AAAA-MM' limita faturado e custos àquele mês."""
+    notas = [n for n in c.get("notas") or [] if not mes or (n.get("emissao") or "")[:7] == mes]
+    custos = [x for x in c.get("custos") or [] if not mes or (x.get("data") or "")[:7] == mes]
+    fat = sum(num(n.get("valor")) for n in notas)
+    tot_custos = sum(num(x.get("valor")) for x in custos)
+    tem_guia = any(x.get("tipo") == "imposto" for x in c.get("custos") or [])
+    pct = num(c.get("imposto_pct")) if c.get("imposto_pct") not in (None, "") else float(imposto_pct or 0)
+    impostos = 0.0 if tem_guia else fat * pct / 100
+    luc = fat - tot_custos - impostos
+    return {"faturado": fat, "custos": tot_custos, "impostos": impostos, "imposto_pct": pct, "lucro": luc,
+            "margem": (100 * luc / fat) if fat else None, "tem_guia": tem_guia,
+            "por_tipo": {k: sum(num(x.get("valor")) for x in custos if x.get("tipo") == k) for k in TIPOS_CUSTO}}
