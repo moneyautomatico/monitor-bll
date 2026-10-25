@@ -58,7 +58,8 @@ EMPRESAS = PASTA / "empresas"
 CONFIG = PASTA / "config.env"
 PY = PASTA / "venv" / "bin" / "python"
 CSRF = secrets.token_hex(16)
-AVISOS = {"migrado": "Convertido! Agora você pode cadastrar outras empresas.",
+AVISOS = {"readequada": "📝 Proposta readequada criada (a original foi mantida). Confira os preços e baixe em Word/PDF.",
+          "migrado": "Convertido! Agora você pode cadastrar outras empresas.",
           "pref": "Configurações salvas.", "pref_aplicadas": "Configurações salvas e aplicadas em todas as suas empresas (monitores reiniciados).",
           "pref_chat": "Pronto! Conversa ligada e aplicada em todas as suas empresas – chegou uma mensagem de confirmação no seu Telegram.",
           "pref_bot": "Bot conectado! Agora faça o passo 2: abra o bot e toque em Iniciar.",
@@ -2138,6 +2139,7 @@ details.dica ul{{padding-left:14px;margin:4px 0}}
 <p><a href="/propostas">← Minhas propostas</a></p>
 <h2 style="margin-top:4px">💰 Proposta – {e(p.get("processo") or "sem nº")} <small class="sub">{e(p.get("empresa", ""))}</small></h2>
 {aviso_falta}{bloco_ia}
+{html_readequar(pid, p, itens)}
 {ESTILO_CONF}<details class="op-perfil" id="conferencia" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if itens else ""}>
 <summary style="display:block;cursor:pointer;padding:10px 14px">✅ <b>Conferência antes de enviar</b> –
 {sum(1 for n, _ in conf if n == "erro")} erro(s) · {sum(1 for n, _ in conf if n == "atencao")} atenção</summary>
@@ -2219,6 +2221,73 @@ function novaLinha(){{const tb=document.getElementById('itens');const tr=documen
         p["visto_ia"] = ia.get("quando", "")
         propostas.gravar(pid, p)
     return pagina("Proposta comercial", corpo, "/documentos", aviso, erro)
+
+
+# ------------------------------------------------------------------ proposta readequada ao lance final
+def lances_finais(p):
+    """{'3': {"valor", "pos", "descricao"}} – nosso lance final por lote/item, lido da classificação do monitor."""
+    out = {}
+    np_ = _norm_proc(p.get("processo"))
+    if not np_:
+        return out
+    for eid in nomes_empresas().get(p.get("empresa", ""), []):
+        db = EMPRESAS / eid / "bll_monitor.db"
+        if not db.exists():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+            rows = con.execute("SELECT processo, lote, descricao, nossa_pos, nosso_lance FROM classificacao").fetchall()
+            con.close()
+        except sqlite3.Error:
+            continue
+        for pr, lote, desc, pos, lance in rows:
+            n = re.sub(r"\D", "", str(lote or "")).lstrip("0")
+            v = resultados.valor(lance)
+            if _norm_proc(pr) == np_ and n and v:
+                out[n] = {"valor": v, "pos": pos, "descricao": desc or ""}
+    return out
+
+
+def html_readequar(pid, p, itens):
+    if not itens:
+        return ""
+    lances = lances_finais(p)
+    gs = propostas.grupos(itens)
+    linhas, achou = "", 0
+    for chave, idxs in gs.items():
+        if not chave:
+            continue
+        n = chave[1:]
+        tot = round(sum(itens[i]["_t"] for i in idxs), 2)
+        lc = lances.get(n)
+        achou += bool(lc)
+        v = lc["valor"] if lc else 0
+        unit_prov = len(idxs) == 1 and v and abs(v - itens[idxs[0]]["_u"]) <= abs(v - tot)
+        rot = f'{"Lote" if chave[0] == "L" else "Item"} {n}'
+        pos = (f'<div class="sub">{lc["pos"]}º lugar no monitor</div>' if lc and lc.get("pos") else
+               '<div class="sub">lance do monitor</div>' if lc else "")
+        linhas += (f'<tr><td><b>{rot}</b><div class="sub">{len(idxs)} item(ns)</div></td><td class="num">{propostas.brl(tot)}</td>'
+                   f'<td><input class="campo" name="v_{chave}" value="{propostas.unit_txt(v) if v else ""}" placeholder="lance final" style="max-width:150px;margin:0">{pos}</td>'
+                   f'<td><select class="campo" name="t_{chave}" style="max-width:170px;margin:0"><option value="total">total do {"lote" if chave[0] == "L" else "item"}</option>'
+                   f'<option value="unit" {"selected" if unit_prov else ""} {"" if len(idxs) == 1 else "disabled"}>preço unitário</option></select></td></tr>')
+    if not linhas:
+        return ""
+    origem = ""
+    if (p.get("readequada") or {}).get("de"):
+        origem = (f'<div class="msg">📝 Esta é a <b>proposta readequada</b> (criada em {e(p["readequada"].get("quando", ""))}). '
+                  f'<a href="/propostas/{e(p["readequada"]["de"])}">Ver a original</a>.'
+                  f'<div class="sub">{e(p.get("resumo_readequacao", ""))}</div></div>')
+    return f"""{origem}<details class="op-perfil" id="readequar" style="margin:10px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"open" if achou and not p.get("readequada") else ""}>
+<summary style="display:block;cursor:pointer;padding:10px 14px">🏁 <b>Readequar ao lance final</b> – depois da disputa
+{f'<span class="tag ok">{achou} lance(s) lido(s) pelo monitor</span>' if achou else ''}</summary>
+<form method="post" action="/propostas/{pid}/readequar" style="padding:0 14px 12px"><input type="hidden" name="csrf" value="{CSRF}">
+<p class="sub">Informe o lance final de cada lote/item que você ganhou (o monitor preenche sozinho quando leu a classificação). O sistema distribui o desconto
+<b>proporcionalmente</b> entre os itens, nunca sobe nenhum preço e deixa o total <b>igual ou logo abaixo</b> do lance. Cria uma <b>cópia</b> da proposta
+(a original fica guardada) – depois é só baixar em Word/PDF, conferir e enviar no prazo do pregoeiro. Deixe vazio o que não precisa readequar.</p>
+<table><tr><th>Lote / item</th><th class="num">Total na proposta</th><th>Lance final (R$)</th><th>O lance é…</th></tr>{linhas}</table>
+<div class="linha" style="gap:8px;align-items:center;margin-top:8px"><label style="margin:0">Casas decimais do preço unitário</label>
+<select class="campo" name="casas" style="max-width:90px;margin:0"><option>2</option><option>3</option><option>4</option></select>
+<button>📝 Gerar a proposta readequada</button></div></form></details>"""
 
 
 def chave_preco(it):
@@ -3172,6 +3241,7 @@ def pg_licitacao(cid, aviso="", erro=False):
                     f'<a class="btn sec" href="/disputa">🎯 Disputa ao vivo</a>' if m else '<a class="btn sec" href="/empresas">Conferir empresa/plataforma no monitor</a>'),
         "resultado": ((f'<a class="btn sec" href="/classificacao?' + urllib.parse.urlencode({"empresa": m.get("eid", ""), "processo": card.get("processo", ""), "promotor": card.get("orgao", "")}) + '">📊 Classificação</a>'
                        f'<a class="btn{"" if info.get("resultado") == "perdeu" else " sec"}" href="/resultado?' + urllib.parse.urlencode({"empresa": m.get("eid", ""), "processo": card.get("processo", ""), "promotor": card.get("orgao", "")}) + '">🔎 Por que perdi?</a>') if m else "") +
+                     (f'<a class="btn" href="/propostas/{e(prop["id"])}#readequar">📝 Proposta readequada ao lance</a>' if prop and info.get("resultado") == "ganhou" else "") +
                      f'<form method="post" action="/licitacoes/{cid}/resultado" class="linha" style="gap:6px;margin-top:6px"><input type="hidden" name="csrf" value="{CSRF}">'
                      f'<select class="campo" name="resultado" style="max-width:220px"><option value="">automático (monitor)</option>'
                      + "".join(f'<option value="{k}" {"selected" if card.get("resultado_manual") == k else ""}>{n}</option>' for k, n in (("ganhou", "Ganhamos"), ("perdeu", "Perdemos"), ("encerrado", "Encerrada sem vencedor")))
@@ -7706,6 +7776,36 @@ class Painel(BaseHTTPRequestHandler):
                     propostas.gravar(m.group(1), prop)
                     threading.Thread(target=buscar_precos, args=(m.group(1),), daemon=True).start()
                 return self.redirecionar(f"/propostas/{m.group(1)}")
+            m = re.fullmatch(r"/propostas/([0-9a-f]{12})/readequar", p)
+            if m and propostas.ler(m.group(1)):
+                pid = m.group(1)
+                orig = propostas.ler(pid)
+                itens_o, tot_o = propostas.calcular(orig)
+                casas = int(f.get("casas", "2")) if f.get("casas") in ("2", "3", "4") else 2
+                alvos = {k[2:]: (propostas.num(v), f.get("t_" + k[2:], "total")) for k, v in f.items()
+                         if k.startswith("v_") and propostas.num(v) > 0}
+                if not alvos:
+                    return self.enviar(pg_proposta(pid, "Informe o lance final de pelo menos um lote/item.", True))
+                novos, rel = propostas.readequar(itens_o, alvos, casas)
+                copia = {k: v for k, v in orig.items() if k not in ("id", "conferencia_ia", "precos", "ia", "pacote_gerado", "readequada_para")}
+                copia["itens"] = [dict({k: v for k, v in it.items() if not k.startswith("_")},
+                                       **({"unit": propostas.unit_txt(novos[i], casas)} if i in novos else {}))
+                                  for i, it in enumerate(itens_o)]
+                copia["readequada"] = {"de": pid, "quando": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                                       "lances": {k: v[0] for k, v in alvos.items()}}
+                copia["criado"] = datetime.now().strftime("%Y-%m-%dT%H:%M")
+                copia["usuario"] = login_atual()
+                nid = secrets.token_hex(6)
+                propostas.gravar(nid, copia)
+                orig["readequada_para"] = nid
+                propostas.gravar(pid, orig)
+                self.auditar("gerou proposta readequada", f"{pid} -> {nid}")
+                resumo_r = "; ".join(f'{"lote" if k[0] == "L" else "item"} {k[1:]}: {propostas.brl(a)} → {propostas.brl(d)} (lance {propostas.brl(alv)})'
+                                     for k, a, alv, d in rel)
+                novo_c = propostas.ler(nid)
+                novo_c["resumo_readequacao"] = resumo_r
+                propostas.gravar(nid, novo_c)
+                return self.redirecionar(f"/propostas/{nid}?ok=readequada")
             m = re.fullmatch(r"/propostas/([0-9a-f]{12})/(salvar|importar|excluir)", p)
             if m and propostas.ler(m.group(1)):
                 pid, acao = m.groups()

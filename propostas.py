@@ -380,3 +380,71 @@ Verifique: itens/lotes faltando ou sobrando; descrição, unidade ou quantidade 
 validade, prazo de entrega e pagamento compatíveis; exigência de marca/modelo, catálogo, amostra ou planilha de custos;
 documentos e declarações que o edital pede junto da proposta. Não invente: se o edital não falar de algo, não aponte.
 No máximo 25 achados, os mais importantes primeiro."""
+
+
+# ------------------------------------------------------------------ proposta readequada ao lance final
+def grupo_item(it):
+    """Chave do grupo disputado: 'L3' (lote 3) ou 'I7' (item 7, quando a disputa é por item)."""
+    lote = re.sub(r"\D", "", str(it.get("lote") or "")).lstrip("0")
+    if lote:
+        return "L" + lote
+    item = re.sub(r"\D", "", str(it.get("item") or "")).lstrip("0")
+    return "I" + item if item else ""
+
+
+def grupos(itens):
+    """{chave: [índices]} na ordem dos itens (itens = calcular(p)[0])."""
+    g = {}
+    for i, it in enumerate(itens):
+        g.setdefault(grupo_item(it), []).append(i)
+    return g
+
+
+def readequar(itens, alvos, casas=2):
+    """Distribui o lance final entre os itens de cada grupo, proporcional ao preço da proposta.
+    alvos = {chave_grupo: (valor, 'total' | 'unit')}. Nunca sobe preço; o total do grupo fica <= lance (o mais perto possível).
+    Devolve (novos_unitarios: {índice: float}, relatorio: [(chave, total_antes, alvo_total, total_depois)])."""
+    import math
+    passo = 10 ** -casas
+    novos, rel = {}, []
+    for chave, idxs in grupos(itens).items():
+        if chave not in alvos:
+            continue
+        valor, tipo = alvos[chave]
+        antes = round(sum(itens[i]["_t"] for i in idxs), 2)
+        if tipo == "unit" and len(idxs) == 1:
+            i = idxs[0]
+            u = min(itens[i]["_u"], math.floor(valor / passo + 1e-9) * passo)
+            novos[i] = round(u, casas)
+            rel.append((chave, antes, round(valor * itens[i]["_q"], 2), round(itens[i]["_q"] * novos[i], 2)))
+            continue
+        alvo = valor
+        if not antes or alvo >= antes:
+            for i in idxs:
+                novos[i] = itens[i]["_u"]
+            rel.append((chave, antes, alvo, antes))
+            continue
+        f = alvo / antes
+        for i in idxs:
+            novos[i] = math.floor(itens[i]["_u"] * f / passo + 1e-9) * passo
+
+        def total():
+            return round(sum(round(itens[i]["_q"] * novos[i], 2) for i in idxs), 2)
+        # sobe de “passo” em “passo” (sem passar do lance e sem passar do preço original) para chegar o mais perto possível
+        for i in sorted(idxs, key=lambda i: -itens[i]["_q"]) + sorted(idxs, key=lambda i: itens[i]["_q"]):
+            q = itens[i]["_q"]
+            if not q:
+                continue
+            folga = alvo - total()
+            k = int(math.floor(folga / (q * passo) + 1e-9)) if folga > 0 else 0
+            k = min(k, int(math.floor((itens[i]["_u"] - novos[i]) / passo + 1e-9)))
+            if k > 0:
+                novos[i] += k * passo
+        for i in idxs:
+            novos[i] = round(novos[i], casas)
+        rel.append((chave, antes, alvo, total()))
+    return novos, rel
+
+
+def unit_txt(v, casas=2):
+    return f"{v:,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
