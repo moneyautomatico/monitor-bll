@@ -59,6 +59,7 @@ import pecas
 import pacote
 import precos
 import propostas
+import trava_teste
 
 PASTA = Path(__file__).resolve().parent
 EMPRESAS = PASTA / "empresas"
@@ -1542,6 +1543,43 @@ def situacao_teste(u):
     return {"ate": ate, "dias": resta, "acabou": resta < 0}
 
 
+def trava_teste_msg(lg, cnpj="", plat="", login_plat="", ignorar_eid=None):
+    """Bloqueio do teste grátis: '' se pode; senão a mensagem. A mesma empresa (CNPJ) ou o mesmo login de plataforma
+    não faz um segundo teste em outra conta – nem entra no teste se já é empresa de outra conta."""
+    cv = cfg_vendas()
+    contato = (" Fale com a gente pelo WhatsApp (" + cv["whatsapp"] + ") para assinar." if cv["whatsapp"] else " Fale com a gente para assinar.")
+    if trava_teste.conflito(trava_teste.chaves(cnpj, plat, login_plat), lg):
+        return "Esta empresa já usou o teste grátis do Licitatudo em outra conta – o teste é 1 por empresa." + contato
+    c14 = trava_teste.so_digitos(cnpj)
+    lp = (login_plat or "").strip().lower()
+    for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
+        c = ler_env(a)
+        if a.stem == ignorar_eid or (c.get("EMPRESA_DONO") or "").lower() == lg:
+            continue
+        mesmo_cnpj = len(c14) == 14 and c14 in (trava_teste.so_digitos(c.get("EMPRESA_CNPJ")),
+                                                 trava_teste.so_digitos(documentos.dados(c.get("EMPRESA_NOME") or a.stem).get("cnpj")))
+        mesmo_login = lp and (c.get("BLL_EMAIL") or "").strip().lower() == lp and (c.get("PLATAFORMA") or "bll").lower() == (plat or "bll")
+        if mesmo_cnpj or mesmo_login:
+            return "Esta empresa já está cadastrada no Licitatudo em outra conta, por isso não entra no teste grátis." + contato
+    return ""
+
+
+def registrar_testes_existentes():
+    """Na subida do painel: marca as empresas das contas de teste que já existem (para a trava valer para elas também)."""
+    try:
+        us = usuarios.carregar()
+        for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
+            c = ler_env(a)
+            dono = (c.get("EMPRESA_DONO") or "").lower()
+            if not ((us.get(dono) or {}).get("cfg") or {}).get("teste_ate"):
+                continue
+            nome = c.get("EMPRESA_NOME") or a.stem
+            cn = c.get("EMPRESA_CNPJ") or documentos.dados(nome).get("cnpj", "")
+            trava_teste.registrar(trava_teste.chaves(cn, c.get("PLATAFORMA", "bll"), c.get("BLL_EMAIL", "")), dono, nome)
+    except Exception as ex:  # noqa: BLE001
+        print("Erro ao registrar testes existentes:", ex, flush=True)
+
+
 def pausar_testes_vencidos():
     """Teste grátis acabou: pausa os monitores das empresas da conta (os dados ficam). Volta ao virar assinante/estender."""
     for lg, u in usuarios.carregar().items():
@@ -2348,9 +2386,9 @@ def form_empresa(eid=None):
 <input class="campo" type="password" name="senha" {"" if eid else "required"} autocomplete="new-password">
 <div class="so-bll"><label>Perfil a escolher após o login <small>(parte do nome, ex.: OPERADOR EMPRESA X)</small></label>
 <input class="campo" name="perfil" value="{g('BLL_PERFIL', 'OPERADOR')}"></div>
-<div class="so-ln"><label>CNPJ da empresa <small>(o mesmo login pode ter várias empresas; escolhemos esta)</small></label>
-<input class="campo" name="cnpj" value="{g('EMPRESA_CNPJ')}" placeholder="00.000.000/0000-00">
-<label>Tipo de funcionário <small>(opcional; vazio = primeira opção, ex.: Representante Legal)</small></label>
+<label>CNPJ da empresa <small>{"(obrigatório no teste grátis – o teste é 1 por empresa)" if situacao_teste(usuario_atual()) else ""}<span class="so-ln"> Licitanet: o mesmo login pode ter várias empresas; escolhemos esta</span></small></label>
+<input class="campo" name="cnpj" value="{g('EMPRESA_CNPJ')}" placeholder="00.000.000/0000-00" {"required" if situacao_teste(usuario_atual()) else ""}>
+<div class="so-ln"><label>Tipo de funcionário <small>(opcional; vazio = primeira opção, ex.: Representante Legal)</small></label>
 <input class="campo" name="funcao" value="{g('LICITANET_FUNCAO')}"></div>
 <h3>Alertas</h3>{aviso_alertas}
 <label>Para onde vão os alertas</label><select class="campo" name="enviar_para">
@@ -6549,7 +6587,16 @@ Novos testes avisam no seu Telegram.</p>
 <div><label>Empresas no teste (máx.)</label><input class="campo" name="TESTE_MAX_EMPRESAS" value="{g('TESTE_MAX_EMPRESAS', '2')}"></div>
 <div><label>WhatsApp de vendas <small>(com DDI e DDD)</small></label><input class="campo" name="VENDAS_WHATSAPP" value="{g('VENDAS_WHATSAPP')}" placeholder="5575999999999"></div></div>
 <label class="ck"><input type="checkbox" name="TESTE_IA" value="1" {"checked" if c.get("TESTE_IA", "1") != "0" else ""}> Liberar os recursos com IA no teste (têm custo – acompanhe em Consumo de IA)</label>
-<div class="acoes"><button>Salvar</button></div></form></div>
+<div class="acoes"><button>Salvar</button></div></form>
+<form method="post" action="/config/teste-liberar" style="margin-top:16px;border-top:1px solid var(--borda);padding-top:12px"><input type="hidden" name="csrf" value="{CSRF}">
+<p class="sub"><b>🔒 Trava do teste:</b> cada CNPJ e cada login de plataforma só faz o teste uma vez, mesmo criando outra conta
+({trava_teste.total()} conta(s) de teste registradas; só um resumo cifrado do dado é guardado). Para liberar um novo teste, informe abaixo.</p>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0 14px">
+<div><label>CNPJ</label><input class="campo" name="cnpj" placeholder="00.000.000/0000-00"></div>
+<div><label>Plataforma</label><select class="campo" name="plataforma"><option value="bll">BLL</option><option value="bnc">BNC</option><option value="pcp">Portal de Compras Públicas</option><option value="licitanet">Licitanet</option></select></div>
+<div><label>Login na plataforma</label><input class="campo" name="login_plataforma"></div>
+<div><label>Ou tudo de uma conta (login no painel)</label><input class="campo" name="conta"></div></div>
+<div class="acoes"><button class="sec">Liberar novo teste</button></div></form></div>
 <h2 style="margin-top:22px">☀️ Resumo diário no Telegram</h2><div class="form">
 <form method="post" action="/config/resumo"><input type="hidden" name="csrf" value="{CSRF}">
 <label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" name="RESUMO_ATIVO" value="1" {"checked" if c.get("RESUMO_ATIVO", "1") != "0" else ""}>
@@ -7621,6 +7668,13 @@ def salvar_empresa(f, eid=None):
         meus = sum(1 for a in EMPRESAS.glob("*.env") if (ler_env(a).get("EMPRESA_DONO") or "").lower() == login_atual()) if EMPRESAS.exists() else 0
         if meus >= lim:
             return f"No teste grátis dá para cadastrar até {lim} empresa(s). Fale com a gente para liberar mais."
+    if st_t:
+        if not propostas.cnpj_valido(f.get("cnpj", "")):
+            return "No teste grátis, informe o CNPJ da empresa (o teste é 1 por empresa)."
+        bloqueio = trava_teste_msg(login_atual(), f.get("cnpj", ""), (f.get("plataforma") or "bll").lower(), f.get("email", ""), eid)
+        if bloqueio:
+            usuarios.auditar(login_atual(), "", "teste grátis: empresa recusada (já fez o teste/já cadastrada)", nome)
+            return bloqueio
     dono = (f.get("dono", "").strip().lower() if eh_admin() and usuarios.obter(f.get("dono", "")) else "") or \
         (dono_empresa(eid) if eid else login_atual())
     for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
@@ -7664,6 +7718,8 @@ def salvar_empresa(f, eid=None):
 
     v["TELEGRAM_DESTINO"] = v["NTFY_DESTINO"] = ""   # o formulário manda; as "Minhas configurações" do dono (se houver) sobrepõem
     gravar_env(arq, v)
+    if st_t:
+        trava_teste.registrar(trava_teste.chaves(v["EMPRESA_CNPJ"], plat, v["BLL_EMAIL"]), dono, nome)
     if usuarios.cfg(dono).get("tg_chat") or usuarios.cfg(dono).get("ntfy"):
         aplicar_alertas_usuario(dono, eid)
     login_mudou = (senha or antigo.get("BLL_EMAIL") != v["BLL_EMAIL"] or antigo.get("BLL_PERFIL") != v["BLL_PERFIL"]
@@ -8918,6 +8974,11 @@ class Painel(BaseHTTPRequestHandler):
                                     "VENDAS_WHATSAPP": re.sub(r"\D", "", f.get("VENDAS_WHATSAPP", ""))[:15]})
                 self.auditar("alterou a página de vendas / teste grátis")
                 return self.redirecionar("/config?ok=config")
+            if p == "/config/teste-liberar":
+                n = trava_teste.liberar(f.get("cnpj", ""), f.get("plataforma", "bll"), f.get("login_plataforma", "") if f.get("login_plataforma", "").strip() else "",
+                                        f.get("conta", "").strip().lower())
+                self.auditar("liberou novo teste grátis", f"{n} registro(s)")
+                return self.redirecionar("/config?ok=config")
             if p == "/config/resumo":
                 gravar_env(CONFIG, {"RESUMO_ATIVO": "1" if f.get("RESUMO_ATIVO") else "0",
                                     "RESUMO_HORA": re.sub(r"\D", "", f.get("RESUMO_HORA", "7"))[:2] or "7"})
@@ -9461,6 +9522,10 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
                 return self.redirecionar(f"/propostas/{pid}?ok=itens")
             if p == "/documentos/dados":
                 nome = f.get("emp", "")
+                st_d = situacao_teste(usuario_atual())
+                bloqueio = trava_teste_msg(login_atual(), f.get("cnpj", "")) if st_d and nome in nomes_empresas() else ""
+                if bloqueio:
+                    return self.enviar(pg_documentos({"emp": nome}, e(bloqueio)))
                 if nome in nomes_empresas():
                     valores = dict(f)
                     valores["timbrado"] = (multi.get("timbrado") or ["1"])[-1]   # caixa marcada manda "0" e "1": vale o último
@@ -9470,6 +9535,9 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
                 nome = f.get("emp", "")
                 if nome not in nomes_empresas():
                     return self.redirecionar("/documentos")
+                bloqueio = trava_teste_msg(login_atual(), f.get("cnpj", "")) if situacao_teste(usuario_atual()) else ""
+                if bloqueio:
+                    return self.enviar(pg_documentos({"emp": nome}, e(bloqueio)))
                 try:
                     novo = documentos.consultar_cnpj(f.get("cnpj", ""))
                 except Exception as ex:  # noqa: BLE001
@@ -9717,6 +9785,7 @@ if __name__ == "__main__":
             usuarios.atualizar(_lg, trocar_senha=False)
     threading.Thread(target=resumo_usuarios, daemon=True).start()
     threading.Thread(target=kanban_ciclo, daemon=True).start()
+    threading.Thread(target=registrar_testes_existentes, daemon=True).start()
     threading.Thread(target=relatorio_mensal, daemon=True).start()
     threading.Thread(target=buscas.ciclo, args=(telegram_geral, minutos_busca), daemon=True).start()
     threading.Thread(target=vigiar, daemon=True).start()

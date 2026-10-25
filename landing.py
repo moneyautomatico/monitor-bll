@@ -47,6 +47,8 @@ FAQ = [
      "Serve. O assistente guia cada passo, as dicas explicam os termos técnicos e o siga-me mostra o que fazer em cada licitação – inclusive os direitos de ME/EPP, como o empate ficto."),
     ("Por que não usar só os portais gratuitos?",
      "Os portais mostram cada pregão separado e não avisam no celular. O Licitatudo junta todos, lê o chat por você, calcula prazos, monta documentos e mostra o que fazer hoje."),
+    ("Posso fazer o teste mais de uma vez?",
+     "Não. O teste grátis é um por empresa: o mesmo CNPJ ou o mesmo login de plataforma não faz um segundo teste, mesmo em outra conta."),
     ("E depois dos {dias} dias?", "Seus dados continuam guardados. É só falar com a gente para escolher o plano e seguir de onde parou."),
 ]
 
