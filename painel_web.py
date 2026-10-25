@@ -43,6 +43,8 @@ import resumo
 import documentos
 import geo
 import ajuda
+import planilhas
+import lixeira
 import avisos
 import edital_vigia
 import atas
@@ -785,7 +787,7 @@ AREAS = [
                                      ("/pecas", "⚖️ Peças com IA"), ("/assinatura", "✍️ Como assinar")]),
     ("/contratos", "💼 Pós-venda", [("/contratos", "💼 Contratos"), ("/atas", "📑 Atas de registro de preço"), ("/relatorio", "📈 Relatório do mês")]),
     ("/empresas", "⋯ Mais", [("/empresas", "🏢 Empresas"), ("/preferencias", "⚙️ Minhas configurações"), ("/meu-consumo", "💳 Custos de IA"),
-                            ("/avisos", "🔔 Avisos"), ("/bem-vindo", "🚀 Primeiros passos"), ("/ajuda", "❓ Ajuda"), ("/conta", "👤 Minha conta")]),
+                            ("/avisos", "🔔 Avisos"), ("/bem-vindo", "🚀 Primeiros passos"), ("/lixeira", "🗑 Lixeira"), ("/ajuda", "❓ Ajuda"), ("/conta", "👤 Minha conta")]),
 ]
 ABA_AREA = {"/documentos": "/propostas", "/mensagens": "/disputa", "/processos": "/disputa", "/concorrentes": "/disputa", "/agenda": "/licitacoes",
             "/oportunidades": "/licitacoes", "/buscar": "/licitacoes", "/editais": "/licitacoes", "/preferencias": "/empresas", "/ajuda": "/empresas",
@@ -1384,6 +1386,107 @@ def pg_bem_vindo(q):
 <a class="btn sec" href="/ajuda#inicio">❓ Ver o tutorial</a></div>
 <p class="sub">Você pode voltar a este assistente quando quiser pelo menu ⋯ Mais → Primeiros passos.</p></div>"""
     return pagina("Bem-vindo", corpo, "/")
+
+
+# ------------------------------------------------------------------ lixeira
+MODULOS_LIXEIRA = {"proposta": (propostas, "/propostas/"), "contrato": (contratos, "/contratos/"), "ata": (atas, "/atas/"), "licitacao": (kanban, "/licitacoes/")}
+
+
+def pg_lixeira(q, aviso=""):
+    itens = [x for x in lixeira.listar() if visivel(x.get("empresa"), x.get("usuario"))]
+    linhas = ""
+    for x in itens:
+        dias = max(0, lixeira.DIAS - (datetime.now() - datetime.strptime(x["quando"], "%Y-%m-%dT%H:%M")).days)
+        linhas += (f'<tr><td>{lixeira.NOMES.get(x["tipo"], x["tipo"])}</td><td><b>{e(x["titulo"])}</b><div class="sub">{e(x.get("empresa", ""))}</div></td>'
+                   f'<td>{e(x["quando"][8:10] + "/" + x["quando"][5:7] + " " + x["quando"][11:16])}<div class="sub">por {e(x.get("por", ""))} · some em {dias} dia(s)</div></td>'
+                   f'<td>{botao("/lixeira/" + x["id"] + "/restaurar", "↩ Restaurar")} {botao("/lixeira/" + x["id"] + "/apagar", "Apagar de vez", "perigo", "Apagar de vez? Não dá para desfazer.")}</td></tr>')
+    corpo = f"""<h2>🗑 Lixeira</h2><p class="sub">Propostas, contratos, atas e cartões de licitação excluídos ficam aqui por {lixeira.DIAS} dias.
+Restaurar traz de volta com o mesmo conteúdo (anexos de cartões e lembretes de entrega da agenda não voltam).</p>
+<table><tr><th>Tipo</th><th>Item</th><th>Excluído em</th><th></th></tr>{linhas or '<tr><td colspan="4">A lixeira está vazia.</td></tr>'}</table>"""
+    return pagina("Lixeira", corpo, "/empresas", aviso)
+
+
+# ------------------------------------------------------------------ planilhas (exportar / importar)
+def btn_planilha(url, rotulo="⬇ Planilha"):
+    sep = "&" if "?" in url else "?"
+    x = f'<a class="btn sec" href="{e(url + sep)}f=xlsx">{rotulo} (Excel)</a>' if planilhas.tem_xlsx() else ""
+    return x + f'<a class="btn sec" href="{e(url)}">{rotulo} (CSV)</a>'
+
+
+def dados_planilha(tipo, q):
+    """(nome_arquivo, cabeçalho, linhas) – só com o que o usuário pode ver."""
+    if tipo == "proposta":
+        p = propostas.ler(q.get("id", ""))
+        if not p or not visivel(p.get("empresa"), p.get("usuario")):
+            return None
+        its, _ = propostas.calcular(p)
+        return (f"proposta-{re.sub(r'[^0-9A-Za-z]+', '-', p.get('processo') or 'itens')}",
+                ["Lote", "Item", "Descrição", "Marca/modelo", "Unidade", "Quantidade", "Valor unitário", "Valor total", "Custo unitário", "Frete unitário"],
+                [[i.get("lote", ""), i.get("item", ""), i.get("descricao", ""), i.get("marca", ""), i.get("unidade", ""), i["_q"], i["_u"], i["_t"],
+                  propostas.num(i.get("custo")) or None, propostas.num(i.get("frete")) or None] for i in its])
+    if tipo == "contratos":
+        ls = [c for c in contratos.listar() if visivel(c.get("empresa"), c.get("usuario"))]
+        out = []
+        for c in ls:
+            t = contratos.totais(c)
+            lu = contratos.lucro(c, catalogo.num(catalogo.param(c.get("empresa", "")).get("impostos")))
+            out.append([c.get("empresa", ""), c.get("processo", ""), c.get("numero", ""), c.get("orgao", ""), c.get("status", ""), t["contratado"],
+                        t["faturado"], t["recebido"], t["a_receber"], t["atrasado"], lu["custos"], lu["lucro"]])
+        return ("contratos", ["Empresa", "Processo", "Contrato", "Órgão", "Situação", "Contratado", "Faturado", "Recebido", "A receber",
+                              "Em atraso", "Custos", "Lucro"], out)
+    if tipo == "relatorio":
+        mes = _mes_valido(q.get("mes", ""))
+        emp = q.get("emp", "") if q.get("emp", "") in nomes_empresas() else ""
+        d = dados_relatorio(mes, emp)
+        return (f"relatorio-{mes}", ["Data", "Processo", "Órgão", "Empresa", "Resultado", "Valor ganho", "Responsável"],
+                [[x["data"].strftime("%d/%m/%Y %H:%M"), x["processo"], x["orgao"], x["empresa"], x["resultado"] or "em andamento",
+                  x["valor"] or None, x.get("resp", "")] for x in d["lic"]])
+    if tipo == "catalogo":
+        emp = q.get("emp", "")
+        if emp not in nomes_empresas():
+            return None
+        return (f"catalogo-{re.sub(r'[^0-9A-Za-z]+', '-', emp)}", ["Nome", "Marca", "Modelo", "Unidade", "Custo", "Fornecedor", "Código", "Descrição", "Palavras"],
+                [[x.get(k, "") if k != "custo" else (catalogo.num(x.get("custo")) or None) for k in
+                  ("nome", "marca", "modelo", "unidade", "custo", "fornecedor", "codigo", "descricao", "palavras")] for x in catalogo.listar(emp)])
+    return None
+
+
+def importar_planilha(tipo, alvo, nome_arq, dados, substituir=False):
+    """Devolve (quantidade, aviso)."""
+    try:
+        linhas = planilhas.ler(nome_arq, dados)
+    except Exception as ex:  # noqa: BLE001
+        return 0, f"Não consegui ler a planilha ({str(ex)[:120]}). Use CSV (separado por ;) ou Excel .xlsx com cabeçalho na 1ª linha."
+    if not linhas:
+        return 0, "A planilha está vazia ou sem cabeçalho na 1ª linha."
+    pg = planilhas.pegar
+    if tipo == "catalogo":
+        n = 0
+        for ln in linhas[:2000]:
+            nome = pg(ln, "nome", "produto", "descricao")
+            if not nome:
+                continue
+            catalogo.salvar("", {"empresa": alvo, "nome": nome[:200], "marca": pg(ln, "marca")[:100], "modelo": pg(ln, "modelo")[:100],
+                                 "unidade": pg(ln, "unidade", "un")[:20], "custo": pg(ln, "custo", "preco de custo", "valor")[:20],
+                                 "fornecedor": pg(ln, "fornecedor")[:120], "codigo": pg(ln, "codigo", "cod")[:40],
+                                 "descricao": pg(ln, "descricao", "especificacao")[:1500], "palavras": pg(ln, "palavras")[:300]})
+            n += 1
+        return n, ""
+    if tipo == "proposta":
+        p = propostas.ler(alvo)
+        novos = []
+        for ln in linhas[:600]:
+            desc = pg(ln, "descricao", "especificacao", "objeto", "produto")
+            if not desc:
+                continue
+            novos.append({"lote": pg(ln, "lote")[:20], "item": pg(ln, "item")[:20], "descricao": desc[:3000], "marca": pg(ln, "marca")[:200],
+                          "unidade": pg(ln, "unidade", "un")[:30], "qtd": pg(ln, "quantidade", "qtd", "quant")[:20],
+                          "unit": pg(ln, "valor unitario", "preco unitario", "unitario", "valor unit", "preco")[:20],
+                          "ref": pg(ln, "referencia", "valor de referencia", "estimado")[:20], "custo": pg(ln, "custo")[:20]})
+        p["itens"] = novos if substituir else (p.get("itens") or []) + novos
+        propostas.gravar(alvo, p)
+        return len(novos), ""
+    return 0, "tipo desconhecido"
 
 
 def urg_tag(m):
@@ -2572,7 +2675,11 @@ details.dica ul{{padding-left:14px;margin:4px 0}}
 <select class="campo" name="edital">{sel_edital}</select></div><div><label>…ou envie o PDF do edital/termo de referência</label>
 <input type="file" name="arquivo" accept=".pdf,.docx,.zip" multiple></div></div>
 <label class="ck"><input type="checkbox" name="substituir" value="1" checked> Substituir os itens atuais</label>
-<div class="acoes"><button class="sec" {"disabled" if ia.get("status") == "gerando" else ""}>🤖 Ler os itens</button></div></form></div></details></div>
+<div class="acoes"><button class="sec" {"disabled" if ia.get("status") == "gerando" else ""}>🤖 Ler os itens</button></div></form>
+<form method="post" action="/propostas/{pid}/planilha" enctype="multipart/form-data" style="margin-top:10px"><input type="hidden" name="csrf" value="{CSRF}">
+<label>📊 …ou importe de uma planilha <small>(CSV ou Excel com as colunas: item, lote, descrição, unidade, quantidade, valor unitário, marca)</small></label>
+<div class="linha" style="gap:8px;flex-wrap:wrap;align-items:center"><input type="file" name="arquivo" accept=".csv,.xlsx" required>
+<label class="ck" style="margin:0"><input type="checkbox" name="substituir" value="1"> Substituir os itens atuais</label><button class="sec">Importar</button></div></form></div></details></div>
 <form method="post" action="/propostas/{pid}/salvar" id="fprop"><input type="hidden" name="csrf" value="{CSRF}">
 <div class="etapa" data-e="3"><div class="form" style="max-width:none"><div class="duas">
 <div><label>Órgão</label><input class="campo" name="orgao" value="{e(p.get("orgao", ""))}"></div>
@@ -2589,7 +2696,7 @@ details.dica ul{{padding-left:14px;margin:4px 0}}
 <button type="submit" class="sec" form="fprecos" {"disabled" if (p.get("precos") or {}).get("status") == "gerando" or not itens else ""}>💡 Buscar preços pagos no PNCP</button></div>
 {status_precos(p)}
 <div class="total-box">Total: <span id="total">{propostas.brl(total)}</span><small id="ext">{e(propostas.extenso(total))}</small></div>
-<div class="acoes"><button class="sec" name="voltar" value="1">💾 Salvar itens</button><button type="button" onclick="irEtapa(2)">Próximo: custos e cotação →</button></div></div>
+<div class="acoes"><button class="sec" name="voltar" value="1">💾 Salvar itens</button>{btn_planilha(f"/propostas/{pid}/planilha", "⬇ Itens")}<button type="button" onclick="irEtapa(2)">Próximo: custos e cotação →</button></div></div>
 <div class="etapa" data-e="3"><div class="duas"><div class="form" style="max-width:none"><h3 style="margin-top:0">Condições</h3>
 <label>Validade da proposta (dias)</label><input class="campo" name="validade" value="{e(c["validade"])}" style="max-width:120px">
 <label>Prazo de entrega/execução</label><input class="campo" name="entrega" value="{e(c["entrega"])}">
@@ -2756,6 +2863,12 @@ O <b>lance mínimo</b> usa a margem mínima. Impostos: no Simples, a alíquota e
 <label>Palavras para achar no edital <small>(opcional)</small></label><input class="campo" name="palavras">
 <label>Ficha técnica <small>(PDF ou imagem – entra no pacote de habilitação)</small></label><input type="file" name="ficha" accept=".pdf,.png,.jpg,.jpeg">
 <div class="acoes"><button>Cadastrar</button></div></form></details>
+<details class="form" style="max-width:none;margin:10px 0"><summary><b>📊 Importar / exportar planilha</b></summary>
+<form method="post" action="/catalogo/importar" enctype="multipart/form-data" class="linha" style="gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="empresa" value="{e(emp)}"><input type="file" name="arquivo" accept=".csv,.xlsx" required>
+<button class="sec">📥 Importar produtos</button></form>
+<p class="sub">Colunas (1ª linha): nome, marca, modelo, unidade, custo, fornecedor, código, descrição, palavras. CSV separado por ; ou Excel .xlsx.</p>
+<div class="acoes">{btn_planilha("/catalogo/planilha?emp=" + urllib.parse.quote(emp), "⬇ Exportar catálogo")}</div></details>
 <form method="get" action="/catalogo" class="acoes"><input type="hidden" name="emp" value="{e(emp)}"><input class="campo" name="q" value="{e(busca)}" placeholder="Buscar produto…" style="max-width:320px"><button class="sec">Buscar</button></form>
 <table><tr><th>Produto</th><th>Marca / modelo</th><th>Unid.</th><th class="num">Custo</th><th class="num">Preço calculado</th><th>Ficha</th><th></th></tr>
 {linhas or '<tr><td colspan="7">Nenhum produto cadastrado.</td></tr>'}</table>"""
@@ -3508,6 +3621,7 @@ entrega está perto do prazo ou atrasada e quando um pagamento passa do vencimen
 <div class="kpi" style="{"border-color:#c62828" if soma("atrasado") else ""}"><div class="v">{contratos.brl(soma("atrasado"))}</div><div class="l">❗ pagamentos atrasados</div></div>
 <div class="kpi"><div class="v">{contratos.brl(soma("saldo"))}</div><div class="l">saldo a faturar</div></div></div>
 {f'<h3>🏆 Vencidos pelo monitor – comece a acompanhar</h3><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">{sug_html}</div>' if sug_html else ''}
+<div class="acoes">{btn_planilha("/contratos/planilha", "⬇ Contratos")}</div>
 <h3>{"Contratos encerrados" if ver_enc else "Contratos ativos"} <small class="sub"><a href="/contratos{"" if ver_enc else "?ver=encerrados"}">{"ver ativos" if ver_enc else "ver encerrados"}</a></small></h3>
 <table><tr><th>Processo / órgão</th><th>Empresa</th><th>Contratado</th><th class="ocultar">Faturado</th><th>Recebido</th><th>A receber</th></tr>
 {linhas or '<tr><td colspan="6">Nenhum contrato aqui.</td></tr>'}</table>
@@ -4466,7 +4580,7 @@ def pg_relatorio(q, aviso="", erro=False):
     corpo = f"""<style>{CSS_RELATORIO}</style><h2>📈 Relatório do mês</h2>
 <form method="get" action="/relatorio" class="acoes" style="align-items:center"><select class="campo" name="mes" style="max-width:220px">{opc_m}</select>
 <select class="campo" name="emp" style="max-width:260px">{opc_e}</select><button class="sec">Ver</button>
-<a class="btn" href="/relatorio/pdf?{qs}">⬇ Baixar PDF</a>
+<a class="btn" href="/relatorio/pdf?{qs}">⬇ Baixar PDF</a>{btn_planilha("/relatorio/planilha?" + qs, "⬇ Licitações do mês")}
 <button class="sec" formmethod="post" formaction="/relatorio/enviar?{qs}" name="csrf" value="{CSRF}" {"" if uc.get("tg_chat") else "disabled title='Conecte o seu Telegram em ⚙️'"}>📨 Mandar no meu Telegram</button></form>
 <p class="sub">No dia 1º de cada mês o PDF do mês anterior chega sozinho no seu Telegram (dá para desligar em ⚙️ → Resumo diário).</p>
 {html_relatorio(d)}"""
@@ -7836,6 +7950,19 @@ class Painel(BaseHTTPRequestHandler):
                 tipo_a = mimetypes.guess_type(arq_a.name)[0] or "application/octet-stream"
                 nome_h = re.sub(r"[^A-Za-z0-9._ -]", "_", unicodedata.normalize("NFKD", arq_a.name).encode("ascii", "ignore").decode()) or "atestado"
                 return self.baixar(arq_a.read_bytes(), nome_h, tipo_a, na_tela=True)
+            m = re.fullmatch(r"/(propostas/([0-9a-f]{12})|contratos|relatorio|catalogo)/planilha", p)
+            if m:
+                tipo = "proposta" if m.group(2) else m.group(1)
+                d_pl = dados_planilha(tipo, {**q, "id": m.group(2) or ""})
+                if not d_pl:
+                    return self.enviar(pagina("Planilha", "<h2>Nada para exportar</h2>", "/"), 404)
+                nome_pl, cab, linhas_pl = d_pl
+                if q.get("f") == "xlsx" and planilhas.tem_xlsx():
+                    return self.baixar(planilhas.xlsx_bytes(cab, linhas_pl, nome_pl), f"{nome_pl}.xlsx",
+                                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                return self.baixar(planilhas.csv_bytes(cab, linhas_pl), f"{nome_pl}.csv", "text/csv; charset=utf-8")
+            if p == "/lixeira":
+                return self.enviar(pg_lixeira(q))
             if p == "/avisos":
                 return self.enviar(pg_avisos(q))
             if p == "/bem-vindo":
@@ -8024,6 +8151,27 @@ class Painel(BaseHTTPRequestHandler):
                                           '<p><a class="btn sec" href="/processos">Voltar</a></p>', "/processos"))
             return self.redirecionar("/classificacao?" + urllib.parse.urlencode(
                 {"empresa": eid, "processo": chave[0], "promotor": chave[1]}))
+        m_pl = re.fullmatch(r"/(catalogo/importar|propostas/([0-9a-f]{12})/planilha)", self.path.rstrip("/").split("?")[0])
+        if m_pl:
+            if tam > 10 * 1024 * 1024:
+                return self.enviar(pagina("Erro", "<h2>Planilha grande demais (máx. 10 MB).</h2>"), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido(self.path.rstrip("/"), campos):
+                return
+            arq = next(((n, d) for n, d in arqs if d), None)
+            if m_pl.group(2):
+                pid = m_pl.group(2)
+                if not propostas.ler(pid) or not arq:
+                    return self.redirecionar(f"/propostas/{pid}")
+                n, msg = importar_planilha("proposta", pid, arq[0], arq[1], campos.get("substituir") == "1")
+                return self.enviar(pg_proposta(pid, e(msg) if msg else f"📥 {n} item(ns) importado(s) da planilha.", bool(msg)))
+            nome = campos.get("empresa", "")
+            if nome not in nomes_empresas() or not arq:
+                return self.redirecionar("/catalogo")
+            n, msg = importar_planilha("catalogo", nome, arq[0], arq[1])
+            return self.enviar(pg_catalogo({"emp": nome}, e(msg) if msg else f"📥 {n} produto(s) importado(s).", bool(msg)))
         if self.path.rstrip("/") == "/catalogo/salvar":
             if tam > 20 * 1024 * 1024:
                 return self.enviar(pg_catalogo({}, "Arquivo grande demais (máx. 20 MB).", True), 413)
@@ -8588,6 +8736,7 @@ class Painel(BaseHTTPRequestHandler):
                 a = atas.ler(aid)
                 data_ok = lambda x: x[:10] if re.fullmatch(r"\d{4}-\d{2}-\d{2}", (x or "")[:10]) else ""  # noqa: E731
                 if acao == "excluir":
+                    lixeira.guardar("ata", aid, a, f"Ata {a.get('numero', '')} – {a.get('orgao', '')}", login_atual())
                     atas.excluir(aid)
                     self.auditar("excluiu ata", aid)
                     return self.redirecionar("/atas?ok=feito")
@@ -8780,6 +8929,7 @@ class Painel(BaseHTTPRequestHandler):
                 cid, acao = m.groups()
                 card = kanban.ler(cid)
                 if acao == "excluir":
+                    lixeira.guardar("licitacao", cid, card, f"{card.get('processo', '')} – {card.get('orgao', '')}", login_atual())
                     kanban.excluir(cid)
                     agenda.sincronizar_cartao(cid, [], {})   # tira os prazos legais da agenda
                     return self.redirecionar("/licitacoes?ok=feito")
@@ -8818,6 +8968,7 @@ class Painel(BaseHTTPRequestHandler):
                     for en in c.get("entregas") or []:
                         if en.get("agenda"):
                             agenda.excluir(en["agenda"])
+                    lixeira.guardar("contrato", cid, c, f"{c.get('processo', '')} – {c.get('orgao', '')}", login_atual())
                     contratos.excluir(cid)
                     return self.redirecionar("/contratos?ok=feito")
                 if acao == "salvar":
@@ -8878,6 +9029,23 @@ class Painel(BaseHTTPRequestHandler):
                     propostas.gravar(m.group(1), prop)
                     threading.Thread(target=buscar_precos, args=(m.group(1),), daemon=True).start()
                 return self.redirecionar(f"/propostas/{m.group(1)}")
+            m = re.fullmatch(r"/lixeira/([0-9a-f]{12})/(restaurar|apagar)", p)
+            if m and lixeira.ler(m.group(1)):
+                x = lixeira.ler(m.group(1))
+                if not visivel(x.get("empresa"), x.get("usuario")):
+                    return self.negar("Você não tem acesso a este item.")
+                if m.group(2) == "restaurar":
+                    mod, url = MODULOS_LIXEIRA[x["tipo"]]
+                    if mod.ler(x["oid"]):
+                        return self.enviar(pg_lixeira({}, "Já existe um item com o mesmo código – nada foi alterado."))
+                    if x["tipo"] == "licitacao":
+                        x["dados"]["legais_sig"] = ""   # refaz os prazos legais na agenda
+                    mod.gravar(x["oid"], x["dados"])
+                    lixeira.remover(m.group(1))
+                    self.auditar("restaurou da lixeira", f'{x["tipo"]} {x["oid"]}')
+                    return self.redirecionar(url + x["oid"])
+                lixeira.remover(m.group(1))
+                return self.redirecionar("/lixeira")
             if p == "/bem-vindo/pular":
                 usuarios.salvar_cfg(login_atual(), {"assistente_visto": True})
                 return self.redirecionar("/")
@@ -8991,6 +9159,7 @@ class Painel(BaseHTTPRequestHandler):
                 pid, acao = m.groups()
                 prop = propostas.ler(pid)
                 if acao == "excluir":
+                    lixeira.guardar("proposta", pid, prop, f"{prop.get('processo', '')} – {prop.get('orgao', '')}", login_atual())
                     propostas.excluir(pid)
                     return self.redirecionar("/propostas?ok=feito")
                 if acao == "salvar":
