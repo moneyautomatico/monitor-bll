@@ -84,15 +84,15 @@ def _get_prazo(urls, fim):
                 r = subprocess.run(["curl", "-s", "--compressed", "-m", str(t), "-A", UA["User-Agent"], "-H", "Accept: application/json",
                                     "-w", "\\n%{http_code}", url], capture_output=True, text=True, timeout=t + 3)
                 corpo, _, cod = r.stdout.rpartition("\n")
-                if cod.strip() == "204":
+                if cod.strip() in ("204", "404"):
                     return []
                 if r.returncode == 0 and cod.strip() == "200":
                     return json.loads(corpo or "null")
                 ultimo = RuntimeError(f"curl código {r.returncode} http {cod.strip()}")
             except urllib.error.HTTPError as ex:
-                if ex.code == 204:
+                if ex.code in (204, 404):   # 404 = a compra não tem itens publicados neste endereço
                     return []
-                ultimo = ex
+                ultimo = RuntimeError(f"PNCP respondeu HTTP {ex.code}")
             except Exception as ex:  # noqa: BLE001
                 ultimo = ex
     raise ultimo

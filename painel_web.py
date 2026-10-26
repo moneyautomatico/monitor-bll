@@ -8241,9 +8241,11 @@ def tabela_itens_pncp(q):
     cnpj, ano, seq = (re.sub(r"\D", "", q.get(k, "")) for k in ("cnpj", "ano", "seq"))
     try:
         return tabela_itens(buscas.listar_itens(cnpj, ano, seq, prazo=40))
-    except Exception:  # noqa: BLE001
+    except Exception as ex:  # noqa: BLE001
+        print("Itens PNCP:", cnpj, ano, seq, repr(ex)[:200], flush=True)
         return ('<div class="msg erro">O PNCP não respondeu agora (o site do governo está lento ou fora do ar). '
-                '<button onclick="window.itensDeNovo()">Tentar de novo</button> ou abra o edital no PNCP.</div>')
+                '<button onclick="window.itensDeNovo()">Tentar de novo</button> ou abra o edital no PNCP.'
+                f'<div class="sub" style="margin-top:6px">Detalhe técnico: {e(str(ex)[:160])}</div></div>')
 
 
 def botao_analisar(cnpj, ano, seq, titulo):
