@@ -949,7 +949,7 @@ def tag_status(emp):
 
 
 def botao(acao, texto, classe="", confirmar=""):
-    js = f' onclick="return confirm({json.dumps(confirmar)})"' if confirmar else ""
+    js = f' onclick="return confirm({e(json.dumps(confirmar))})"' if confirmar else ""
     return (f'<form method="post" action="{acao}"><input type="hidden" name="csrf" value="{CSRF}">'
             f'<button class="{classe}"{js}>{texto}</button></form>')
 
@@ -1581,17 +1581,23 @@ def registrar_testes_existentes():
 
 
 def pausar_testes_vencidos():
-    """Teste grátis acabou: pausa os monitores das empresas da conta (os dados ficam). Volta ao virar assinante/estender."""
+    pausar_contas_bloqueadas()
+
+
+def pausar_contas_bloqueadas():
+    """Teste acabou, assinatura vencida (depois da carência) ou conta suspensa: pausa os monitores das empresas da conta
+    (os dados ficam). Voltam ao ativar/renovar/estender/reativar."""
     for lg, u in usuarios.carregar().items():
         uu = dict(u, login=lg)
-        st = situacao_teste(uu)
+        sc = situacao_conta(uu)
         c = u.get("cfg") or {}
-        if st and st["acabou"] and not c.get("pausados_teste"):
+        if sc["bloq"] and not c.get("pausados_teste"):
             eids = [a.stem for a in EMPRESAS.glob("*.env") if (ler_env(a).get("EMPRESA_DONO") or "").lower() == lg] if EMPRESAS.exists() else []
             for eid in eids:
                 sh("systemctl", "disable", "--now", f"monitor-bll@{eid}")
             usuarios.salvar_cfg(lg, {"pausados_teste": eids or ["-"]})
-            usuarios.auditar(lg, "", "teste grátis encerrado: monitores pausados", ", ".join(eids))
+            usuarios.auditar(lg, "", {"teste_fim": "teste grátis encerrado", "vencida": "assinatura vencida", "suspenso": "conta suspensa"}.get(sc["cod"], "conta bloqueada")
+                             + ": monitores pausados (ativação)", ", ".join(eids))
 
 
 def religar_depois_teste(lg):
@@ -1618,6 +1624,14 @@ Para continuar de onde parou, fale com a gente e escolha o plano.</p>
 
 
 def faixa_teste(u):
+    sc = situacao_conta(u)
+    if sc["cod"] in ("vencendo", "carencia"):
+        wa = link_whatsapp(f"Olá! Quero renovar a assinatura do Licitatudo (login {u.get('login', '')}).")
+        d = sc["dias"]
+        txt = (("vence <b>hoje</b>" if d == 0 else f"vence em <b>{d} dia(s)</b>") + f" ({sc['ate']:%d/%m})") if d >= 0 else \
+            f"<b>venceu</b> em {sc['ate']:%d/%m} – o acesso é bloqueado em {carencia_dias() + d + 1} dia(s)"
+        return (f'<div style="background:#fff4e0;color:#7a4b00;font-size:13px;padding:7px 16px;text-align:center">🔑 Sua assinatura {txt}.'
+                f'{(" <a href=" + chr(34) + e(wa) + chr(34) + " target=_blank rel=noopener style=color:#7a4b00;font-weight:700>Renovar →</a>") if wa else ""}</div>')
     st = situacao_teste(u)
     if not st or st["acabou"]:
         return ""
@@ -1625,6 +1639,268 @@ def faixa_teste(u):
     txt = "último dia" if st["dias"] == 0 else f"faltam {st['dias']} dia(s)"
     return (f'<div style="background:#fff4e0;color:#7a4b00;font-size:13px;padding:7px 16px;text-align:center">🎁 Teste grátis – <b>{txt}</b> '
             f'(até {st["ate"]:%d/%m}).{(" <a href=" + chr(34) + e(wa) + chr(34) + " target=_blank rel=noopener style=color:#7a4b00;font-weight:700>Quero assinar →</a>") if wa else ""}</div>')
+
+
+# ------------------------------------------------------------------ controle de ativação (planos das contas)
+ROT_CONTA = {"teste": ("🎁 Em teste", "aviso"), "teste_fim": ("⏳ Teste encerrado", "erro"), "assinante": ("✅ Assinante", "ok"),
+             "vencendo": ("⚠️ Assinatura vence logo", "aviso"), "carencia": ("⚠️ Vencida – em carência", "aviso"),
+             "vencida": ("⛔ Assinatura vencida", "erro"), "suspenso": ("🚫 Suspensa", "erro"), "livre": ("Acesso livre (sem plano)", ""),
+             "admin": ("Administrador", "")}
+PERIODOS = (("1", "1 mês"), ("3", "3 meses"), ("6", "6 meses"), ("12", "12 meses"), ("0", "Sem vencimento"))
+
+
+def carencia_dias():
+    try:
+        return max(0, min(30, int(CFG_ATUAL().get("ASSINATURA_CARENCIA", "3") or 3)))
+    except ValueError:
+        return 3
+
+
+def situacao_conta(u):
+    """Situação da conta para a ativação: {"cod", "ate": date|None, "dias": int|None, "bloq": bool}.
+    cod: admin, livre, teste, teste_fim, assinante, vencendo, carencia, vencida, suspenso."""
+    u = u or {}
+    c = u.get("cfg") or {}
+    if u.get("papel") == "admin":
+        return {"cod": "admin", "ate": None, "dias": None, "bloq": False}
+    if c.get("suspenso"):
+        return {"cod": "suspenso", "ate": None, "dias": None, "bloq": True}
+    if c.get("plano") == "assinante":
+        try:
+            ate = date.fromisoformat(c.get("assinatura_ate") or "")
+        except ValueError:
+            return {"cod": "assinante", "ate": None, "dias": None, "bloq": False}
+        dias = (ate - date.today()).days
+        if dias > 7:
+            cod = "assinante"
+        elif dias >= 0:
+            cod = "vencendo"
+        elif -dias <= carencia_dias():
+            cod = "carencia"
+        else:
+            cod = "vencida"
+        return {"cod": cod, "ate": ate, "dias": dias, "bloq": cod == "vencida"}
+    st = situacao_teste(u)
+    if st:
+        return {"cod": "teste_fim" if st["acabou"] else "teste", "ate": st["ate"], "dias": st["dias"], "bloq": st["acabou"]}
+    return {"cod": "livre", "ate": None, "dias": None, "bloq": False}
+
+
+def mais_meses(d, n):
+    m = d.month - 1 + n
+    a, m = d.year + m // 12, m % 12 + 1
+    dias_mes = [31, 29 if a % 4 == 0 and (a % 100 or a % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+    return date(a, m, min(d.day, dias_mes))
+
+
+def tag_conta(sc):
+    rot, cl = ROT_CONTA.get(sc["cod"], (sc["cod"], ""))
+    ate = ""
+    if sc.get("ate"):
+        d = sc["dias"]
+        quando = "vence hoje" if d == 0 else (f"faltam {d} dia(s)" if d > 0 else f"venceu há {-d} dia(s)")
+        ate = f'<div class="sub">até {sc["ate"]:%d/%m/%Y} · {quando}</div>'
+    return f'<span class="tag {cl}">{e(rot)}</span>{ate}'
+
+
+def avisos_planos():
+    """No ciclo: avisa o cliente (no bot dele) e o administrador quando o teste/assinatura está acabando. Uma vez por marco."""
+    for lg, u in usuarios.carregar().items():
+        sc = situacao_conta(dict(u, login=lg))
+        if sc["cod"] not in ("teste", "vencendo", "carencia") or sc["dias"] is None:
+            continue
+        c = u.get("cfg") or {}
+        feitos = c.get("avisos_plano") or []
+        d = sc["dias"]
+        nome = e(u.get("nome") or lg)
+        if sc["cod"] == "teste":
+            marco = "t1" if d <= 1 else None
+            chave = f"{marco}|{sc['ate']}"
+            if marco and chave not in feitos:
+                telegram_geral(f"📞 <b>Teste grátis acaba {'hoje' if d == 0 else 'amanhã'}</b>\n{nome} (login <b>{e(lg)}</b>) – "
+                               f"{e(c.get('empresa_nome', ''))}\nWhatsApp: {e(c.get('whatsapp', '') or '—')}\nAtivar em 🛡️ Admin → 🔑 Ativação.")
+                usuarios.salvar_cfg(lg, {"avisos_plano": (feitos + [chave])[-20:]})
+            continue
+        marco = next((m for m in (0, 1, 3, 7) if d <= m), None) if d >= 0 else "venceu"
+        chave = f"a{marco}|{sc['ate']}"
+        if marco is None or chave in feitos:
+            continue
+        if d >= 0:
+            txt = f"vence {'HOJE' if d == 0 else f'em {d} dia(s)'} ({sc['ate']:%d/%m/%Y})"
+        else:
+            txt = f"venceu em {sc['ate']:%d/%m/%Y} – o acesso é bloqueado em {carencia_dias() + d + 1} dia(s)"
+        telegram_geral(f"🔑 <b>Sua assinatura do Licitatudo {txt}.</b>\nFale com a gente para renovar e não ficar sem os alertas.", usuario=lg)
+        telegram_geral(f"🔑 <b>Assinatura {txt}</b>\n{nome} (login <b>{e(lg)}</b>) – {e(c.get('empresa_nome', ''))}\n"
+                       f"WhatsApp: {e(c.get('whatsapp', '') or '—')}\nRenovar em 🛡️ Admin → 🔑 Ativação.")
+        usuarios.salvar_cfg(lg, {"avisos_plano": (feitos + [chave])[-20:]})
+
+
+def pg_conta_bloqueada():
+    u = usuario_atual() or {}
+    sc = situacao_conta(u)
+    if sc["cod"] == "teste_fim":
+        return pg_teste_encerrado()
+    if sc["cod"] == "suspenso":
+        tit, txt = "🚫 Acesso suspenso", "O acesso desta conta está suspenso no momento."
+        msg_wa = f"Olá! Meu acesso ao Licitatudo está suspenso (login {u.get('login', '')}). Pode me ajudar?"
+    else:
+        tit = "⏳ Sua assinatura venceu"
+        txt = f"A assinatura venceu em {sc['ate']:%d/%m/%Y}." if sc.get("ate") else "A assinatura venceu."
+        msg_wa = f"Olá! Quero renovar a assinatura do Licitatudo (login {u.get('login', '')})."
+    wa = link_whatsapp(msg_wa)
+    corpo = f"""<div style="max-width:620px;margin:40px auto;text-align:center"><h2 style="font-size:26px">{tit}</h2>
+<p>{txt} Os seus dados (empresas, licitações, propostas e documentos) continuam guardados e voltam assim que o acesso for reativado.</p>
+{f'<p><a class="btn" href="{e(wa)}" target="_blank" rel="noopener" style="font-size:16px;padding:12px 20px">💬 Falar no WhatsApp</a></p>' if wa else '<p><b>Fale com o administrador do sistema.</b></p>'}
+<p class="sub">Enquanto isso, os monitores das suas empresas ficam pausados.</p></div>"""
+    return pagina("Acesso bloqueado", corpo, "/")
+
+
+def pg_ativacao(q, aviso=""):
+    us = usuarios.carregar()
+    filtro = q.get("st", "")
+    busca = buscas.norm(q.get("q", ""))[:60]
+    eids_por = {}
+    for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
+        eids_por.setdefault((ler_env(a).get("EMPRESA_DONO") or "").lower(), []).append(a.stem)
+    linhas, cont = [], {}
+    for lg, u in us.items():
+        if u.get("papel") == "admin":
+            continue
+        sc = situacao_conta(dict(u, login=lg))
+        cont[sc["cod"]] = cont.get(sc["cod"], 0) + 1
+        c = u.get("cfg") or {}
+        grupo = {"vencendo": "vencendo", "carencia": "vencendo", "vencida": "bloq", "suspenso": "bloq"}.get(sc["cod"], sc["cod"])
+        if filtro and grupo != filtro:
+            continue
+        if busca and busca not in buscas.norm(" ".join((lg, u.get("nome", ""), c.get("empresa_nome", ""), c.get("whatsapp", "")))):
+            continue
+        ordem = {"vencendo": 0, "carencia": 0, "teste": 1, "teste_fim": 2, "vencida": 3, "assinante": 4, "suspenso": 5, "livre": 6}.get(sc["cod"], 7)
+        linhas.append((ordem, sc["dias"] if sc["dias"] is not None else 9999, lg, u, sc, c))
+    linhas.sort(key=lambda t: t[:3])
+    hoje_s = date.today().isoformat()
+
+    def form(acao, lg, dentro, rotulo, cls="", confirmar=""):
+        js = f' onsubmit="return confirm({e(json.dumps(confirmar))})"' if confirmar else ""
+        return (f'<form method="post" action="/admin/ativacao/{e(lg)}/{acao}" class="ativ-f"{js}><input type="hidden" name="csrf" value="{CSRF}">'
+                f'{dentro}<button class="{cls}">{rotulo}</button></form>')
+    sel_p = '<select class="campo" name="periodo">' + "".join(f'<option value="{k}"{" selected" if k == "1" else ""}>{n}</option>' for k, n in PERIODOS) + "</select>"
+    tr = ""
+    for _, _, lg, u, sc, c in linhas:
+        eids = eids_por.get(lg, [])
+        lig = sum(1 for x in eids if ativo(x))
+        zap = c.get("whatsapp", "")
+        zap_l = (f' · <a href="https://wa.me/{e(zap if zap.startswith("55") else "55" + zap)}" target="_blank" rel="noopener">💬 {e(zap)}</a>' if zap else "")
+        assin = c.get("plano") == "assinante" and sc["cod"] != "suspenso"
+        acoes = form("ativar", lg, sel_p, "🔄 Renovar" if assin else "✅ Ativar assinatura")
+        if not assin and sc["cod"] != "suspenso":
+            acoes += form("estender", lg, '<input class="campo" type="number" name="dias" value="7" min="1" max="60" style="width:80px">', "➕ Dias de teste", "sec")
+        if sc["cod"] == "suspenso":
+            acoes += form("reativar", lg, "", "▶️ Reativar")
+        else:
+            acoes += form("suspender", lg, '<input class="campo" name="motivo" placeholder="motivo (opcional)" maxlength="120">', "🚫 Suspender", "perigo",
+                          "Suspender esta conta? O acesso é bloqueado e os monitores pausados (os dados ficam).")
+        if assin and c.get("assinatura_ate"):
+            acoes += form("data", lg, f'<input class="campo" type="date" name="ate" value="{e(c.get("assinatura_ate", ""))}" min="{hoje_s[:4]}-01-01">', "📅 Mudar vencimento", "sec")
+        acoes += form("nota", lg, f'<input class="campo" name="nota" value="{e(c.get("nota_admin", ""))}" placeholder="anotação (plano, valor, contato…)" maxlength="200">',
+                      "💾 Anotar", "sec")
+        suspenso_txt = (f'<div class="sub">motivo: {e(c.get("suspenso_motivo", "") or "—")}</div>' if sc["cod"] == "suspenso" else "")
+        tr += (f'<tr><td><a href="/admin/usuario/{e(lg)}"><b>{e(lg)}</b></a><div class="sub">{e(u.get("nome", ""))}{zap_l}</div>'
+               f'<div class="sub">{e(c.get("empresa_nome", ""))}</div>{(chr(10) + "<div class=sub>📝 " + e(c.get("nota_admin", "")) + "</div>") if c.get("nota_admin") else ""}</td>'
+               f'<td>{tag_conta(sc)}{suspenso_txt}</td><td>{len(eids)}<div class="sub">{lig} ligado(s)</div></td>'
+               f'<td class="ocultar">{e(u.get("ultimo_acesso") or "nunca")}<div class="sub">desde {e((u.get("criado") or "")[:10])}</div></td>'
+               f'<td><details class="ativ-d"><summary class="btn sec">Ações</summary><div class="ativ-box">{acoes}</div></details></td></tr>')
+    if not tr:
+        tr = '<tr><td colspan="5" class="sub">Nenhuma conta neste filtro.</td></tr>'
+    n = lambda *k: sum(cont.get(x, 0) for x in k)   # noqa: E731
+    acabando = sum(1 for *_, sc, _c in linhas if sc["cod"] == "teste" and sc["dias"] is not None and sc["dias"] <= 2) if not filtro else None
+    chips = "".join(f'<a class="btn {"" if filtro == k else "sec"}" href="/admin/ativacao{("?st=" + k) if k else ""}">{r} ({v})</a>' for k, r, v in (
+        ("", "Todas", sum(cont.values()) - cont.get("admin", 0)), ("teste", "🎁 Em teste", n("teste")), ("teste_fim", "⏳ Teste encerrado", n("teste_fim")),
+        ("assinante", "✅ Assinantes", n("assinante")), ("vencendo", "⚠️ Vencendo/carência", n("vencendo", "carencia")),
+        ("bloq", "⛔ Bloqueadas", n("vencida", "suspenso")), ("livre", "Sem plano", n("livre"))))
+    hist = "".join(f'<tr><td>{e(r["quando"][8:10] + "/" + r["quando"][5:7] + " " + r["quando"][11:16])}</td><td>{e(r["usuario"])}</td>'
+                   f'<td>{e(r["acao"])}</td><td>{e(r.get("detalhe", ""))}</td></tr>' for r in usuarios.auditoria(25, "ativação"))
+    corpo = f"""{ESTILO_ADM}<h2>🔑 Controle de ativação</h2>{abas_admin("atv")}
+<style>.ativ-d summary{{list-style:none;cursor:pointer}}.ativ-d summary::-webkit-details-marker{{display:none}}
+.ativ-box{{display:grid;gap:8px;margin-top:8px;min-width:280px}}.ativ-f{{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0}}
+.ativ-f .campo{{margin:0;width:auto;flex:1;min-width:120px}}.chips{{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}}</style>
+<div class="kpis"><a class="kpi" href="/admin/ativacao?st=teste" style="text-decoration:none;color:inherit"><div class="v">{n("teste")}</div><div class="l">🎁 em teste{f" · {acabando} acabando" if acabando else ""}</div></a>
+<a class="kpi" href="/admin/ativacao?st=teste_fim" style="text-decoration:none;color:inherit"><div class="v">{n("teste_fim")}</div><div class="l">⏳ testes encerrados (oportunidade)</div></a>
+<a class="kpi" href="/admin/ativacao?st=assinante" style="text-decoration:none;color:inherit"><div class="v">{n("assinante", "vencendo", "carencia")}</div><div class="l">✅ assinantes ativos</div></a>
+<a class="kpi" href="/admin/ativacao?st=vencendo" style="text-decoration:none;color:inherit{';border-color:#e0a000' if n("vencendo", "carencia") else ''}"><div class="v">{n("vencendo", "carencia")}</div><div class="l">⚠️ vencendo em 7 dias / carência</div></a>
+<a class="kpi" href="/admin/ativacao?st=bloq" style="text-decoration:none;color:inherit"><div class="v">{n("vencida", "suspenso")}</div><div class="l">⛔ bloqueadas</div></a></div>
+<p class="sub">Ativar assinatura libera o acesso, religa os monitores e conta o período a partir de hoje (ou do vencimento atual, ao renovar).
+Vencida a assinatura, a conta tem <b>{carencia_dias()} dia(s) de carência</b> (com aviso) e depois o acesso é bloqueado e os monitores pausados – os dados ficam.
+O cliente e você recebem aviso no Telegram 7, 3 e 1 dia antes. Carência e dias de teste em ⚙️ Configurações → 🛒.</p>
+<form method="get" action="/admin/ativacao" class="linha" style="gap:8px;max-width:520px"><input type="hidden" name="st" value="{e(filtro)}">
+<input class="campo" name="q" value="{e(q.get("q", ""))}" placeholder="🔍 login, nome, empresa ou WhatsApp" style="margin:0"><button class="sec">Buscar</button></form>
+<div class="chips">{chips}</div>
+<table><tr><th>Conta</th><th>Situação</th><th>Empresas</th><th class="ocultar">Último acesso</th><th></th></tr>{tr}</table>
+<h3 style="margin-top:22px">📜 Histórico de ativação</h3>
+<table><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Conta</th></tr>{hist or '<tr><td colspan="4" class="sub">Nada ainda.</td></tr>'}</table>"""
+    return pagina("Ativação", corpo, "/admin", aviso)
+
+
+def acao_ativacao(lg, acao, f):
+    """Aplica a ação do controle de ativação. Devolve o texto para a auditoria."""
+    c = usuarios.cfg(lg)
+    hoje = date.today()
+    if acao == "ativar":
+        try:
+            meses = int(f.get("periodo", "1"))
+        except ValueError:
+            meses = 1
+        meses = meses if meses in (0, 1, 3, 6, 12) else 1
+        if meses == 0:
+            ate = None
+        else:
+            try:
+                atual = date.fromisoformat(c.get("assinatura_ate") or "")
+            except ValueError:
+                atual = None
+            base = atual if (c.get("plano") == "assinante" and atual and atual >= hoje) else hoje
+            ate = mais_meses(base, meses).isoformat()
+        usuarios.salvar_cfg(lg, {"plano": "assinante", "assinatura_ate": ate, "suspenso": None, "suspenso_motivo": None,
+                                 "assinante_desde": c.get("assinante_desde") or hoje.isoformat()})
+        religar_depois_teste(lg)
+        return f"assinatura ativada/renovada – {'sem vencimento' if not ate else 'até ' + ate[8:10] + '/' + ate[5:7] + '/' + ate[:4]}"
+    if acao == "estender":
+        try:
+            dias = max(1, min(60, int(f.get("dias", "7"))))
+        except ValueError:
+            dias = 7
+        try:
+            atual = date.fromisoformat(c.get("teste_ate") or "")
+        except ValueError:
+            atual = hoje
+        ate = max(hoje, atual) + timedelta(days=dias)
+        usuarios.salvar_cfg(lg, {"plano": "teste", "teste_ate": ate.isoformat()})
+        religar_depois_teste(lg)
+        return f"teste estendido +{dias} dia(s) – até {ate:%d/%m/%Y}"
+    if acao == "suspender":
+        usuarios.salvar_cfg(lg, {"suspenso": True, "suspenso_motivo": f.get("motivo", "").strip()[:120]})
+        pausar_contas_bloqueadas()
+        return "conta suspensa" + (f" – {f.get('motivo', '').strip()[:80]}" if f.get("motivo", "").strip() else "")
+    if acao == "reativar":
+        usuarios.salvar_cfg(lg, {"suspenso": None, "suspenso_motivo": None})
+        if not situacao_conta(usuarios.obter(lg))["bloq"]:
+            religar_depois_teste(lg)
+        return "conta reativada"
+    if acao == "data":
+        try:
+            ate = date.fromisoformat(f.get("ate", ""))
+        except ValueError:
+            return ""
+        usuarios.salvar_cfg(lg, {"assinatura_ate": ate.isoformat()})
+        sc = situacao_conta(usuarios.obter(lg))
+        if sc["bloq"]:
+            pausar_contas_bloqueadas()
+        else:
+            religar_depois_teste(lg)
+        return f"vencimento alterado para {ate:%d/%m/%Y}"
+    if acao == "nota":
+        usuarios.salvar_cfg(lg, {"nota_admin": f.get("nota", "").strip()[:200] or None})
+        return "anotação atualizada"
+    return ""
 
 
 def urg_tag(m):
@@ -4196,6 +4472,7 @@ def kanban_ciclo():
     while True:
         try:
             pausar_testes_vencidos()
+            avisos_planos()
         except Exception as ex:  # noqa: BLE001
             print("Erro ao pausar testes vencidos:", ex, flush=True)
         for lg in list(usuarios.carregar()):
@@ -6090,7 +6367,7 @@ def abas_admin(atual):
     return '<div class="adm-tab">' + "".join(
         f'<a href="{u}" class="{"on" if k == atual else ""}">{n}</a>' for k, u, n in (
             ("usu", "/admin", "👥 Usuários"), ("avi", "/admin/preferencias", "📣 Meus avisos"), ("aud", "/admin/auditoria", "📜 Auditoria"), ("emp", "/admin/empresas", "🏢 Empresas"),
-            ("cfg", "/config", "⚙️ Configurações"), ("ia", "/consumo", "💳 Consumo de IA"))) + "</div>"
+            ("atv", "/admin/ativacao", "🔑 Ativação"), ("cfg", "/config", "⚙️ Configurações"), ("ia", "/consumo", "💳 Consumo de IA"))) + "</div>"
 
 
 def abas_admin_topo(corpo, atual):
@@ -6122,7 +6399,7 @@ def pg_conta(aviso="", erro=False):
     corpo = f"""{ESTILO_ADM}<h2>👤 Minha conta</h2>
 <div class="form"><p><b>{e(u.get("nome", ""))}</b> · login <b>{e(u["login"])}</b> · {tag_papel(u["papel"])}</p>
 <p class="sub">Empresas que você vê: <b>{e(emps)}</b> · Recursos com IA: <b>{"liberados" if u.get("ia", True) and u["papel"] != "leitura" else "não liberados"}</b>
-· Último acesso: {e(u.get("ultimo_acesso") or "—")}</p>
+· Último acesso: {e(u.get("ultimo_acesso") or "—")}</p>{("<p>Plano: " + tag_conta(situacao_conta(u)) + "</p>") if u["papel"] != "admin" else ""}
 <h3>Trocar a minha senha</h3>
 <form method="post" action="/conta/senha"><input type="hidden" name="csrf" value="{CSRF}">
 <label>Senha atual</label><input class="campo" type="password" name="atual" required autocomplete="current-password">
@@ -6434,6 +6711,17 @@ def pg_admin(q, aviso="", erro=False, f=None):
 
 def html_plano_admin(lg, u):
     c = u.get("cfg") or {}
+    if u.get("papel") == "admin":
+        return ""
+    sc = situacao_conta(dict(u, login=lg))
+    return (f'<div style="border:1px solid var(--borda);border-radius:10px;padding:10px 12px;margin:8px 0"><b>Plano:</b> {tag_conta(sc)}'
+            + (f'<div class="sub">Empresa informada: {e(c.get("empresa_nome", ""))} · WhatsApp: {e(c.get("whatsapp", ""))}</div>' if c.get("whatsapp") else "")
+            + (f'<div class="sub">📝 {e(c.get("nota_admin", ""))}</div>' if c.get("nota_admin") else "")
+            + f'<div class="acoes" style="margin-top:6px"><a class="btn" href="/admin/ativacao?q={urllib.parse.quote(lg)}">🔑 Ativar, renovar ou suspender</a></div></div>')
+
+
+def _html_plano_admin_antigo(lg, u):
+    c = u.get("cfg") or {}
     if not c.get("teste_ate") and c.get("plano") != "assinante":
         return ""
     st = situacao_teste(u)
@@ -6585,6 +6873,7 @@ Novos testes avisam no seu Telegram.</p>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 14px">
 <div><label>Dias de teste</label><input class="campo" name="TESTE_DIAS" value="{g('TESTE_DIAS', '7')}"></div>
 <div><label>Empresas no teste (máx.)</label><input class="campo" name="TESTE_MAX_EMPRESAS" value="{g('TESTE_MAX_EMPRESAS', '2')}"></div>
+<div><label>Carência após vencer a assinatura (dias)</label><input class="campo" name="ASSINATURA_CARENCIA" value="{g('ASSINATURA_CARENCIA', '3')}"></div>
 <div><label>WhatsApp de vendas <small>(com DDI e DDD)</small></label><input class="campo" name="VENDAS_WHATSAPP" value="{g('VENDAS_WHATSAPP')}" placeholder="5575999999999"></div></div>
 <label class="ck"><input type="checkbox" name="TESTE_IA" value="1" {"checked" if c.get("TESTE_IA", "1") != "0" else ""}> Liberar os recursos com IA no teste (têm custo – acompanhe em Consumo de IA)</label>
 <div class="acoes"><button>Salvar</button></div></form>
@@ -7906,11 +8195,11 @@ class Painel(BaseHTTPRequestHandler):
         if u and u.get("ativo", True):
             _REQ.user = u
             caminho = urllib.parse.urlparse(self.path).path.rstrip("/") or "/"
-            st_t = situacao_teste(u)
-            if st_t and st_t["acabou"] and not caminho.startswith(("/teste-encerrado", "/ping", "/conta", "/sair")):
+            sc_u = situacao_conta(u)
+            if sc_u["bloq"] and not caminho.startswith(("/teste-encerrado", "/conta-bloqueada", "/ping", "/conta", "/sair")):
                 if self.command == "GET":
-                    return self.redirecionar("/teste-encerrado") and False
-                return self.negar("O seu teste grátis terminou. Fale com a gente para continuar.")
+                    return self.redirecionar("/teste-encerrado" if sc_u["cod"] == "teste_fim" else "/conta-bloqueada") and False
+                return self.negar("O acesso desta conta está bloqueado (teste encerrado, assinatura vencida ou conta suspensa).")
             q0 = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
             return self.permitido(caminho, q0)
         _REQ.user = None
@@ -8204,6 +8493,8 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_admin(q, AVISOS.get(q.get("ok", ""), "")))
             if p == "/admin/auditoria":
                 return self.enviar(pg_auditoria(q))
+            if p == "/admin/ativacao":
+                return self.enviar(pg_ativacao(q, AVISOS.get(q.get("ok", ""), "")))
             m = re.fullmatch(r"/admin/usuario/([a-z0-9._-]{3,32})", p)
             if m and usuarios.obter(m.group(1)):
                 return self.enviar(pg_usuario(m.group(1), AVISOS.get(q.get("ok", ""), "")))
@@ -8257,6 +8548,8 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_lixeira(q))
             if p == "/teste-encerrado":
                 return self.enviar(pg_teste_encerrado())
+            if p == "/conta-bloqueada":
+                return self.enviar(pg_conta_bloqueada())
             if p == "/avisos":
                 return self.enviar(pg_avisos(q))
             if p == "/bem-vindo":
@@ -8792,6 +9085,14 @@ class Painel(BaseHTTPRequestHandler):
                 except ValueError as ex:
                     return self.enviar(pg_admin({}, str(ex), True, f))
                 return self.redirecionar("/admin?ok=usuario_criado")
+            m = re.fullmatch(r"/admin/ativacao/([a-z0-9._-]{3,32})/(ativar|estender|suspender|reativar|data|nota)", p)
+            if m and usuarios.obter(m.group(1)) and usuarios.obter(m.group(1))["papel"] != "admin":
+                lg_a, acao_a = m.groups()
+                feito = acao_ativacao(lg_a, acao_a, f)
+                if feito:
+                    self.auditar("ativação: " + feito, lg_a)
+                volta = f.get("voltar", "")
+                return self.redirecionar(volta if volta.startswith("/admin/") else "/admin/ativacao?ok=feito")
             m = re.fullmatch(r"/admin/usuario/([a-z0-9._-]{3,32})/(assinante|estender)", p)
             if m and usuarios.obter(m.group(1)):
                 lg_p, acao_p = m.groups()
@@ -8971,6 +9272,7 @@ class Painel(BaseHTTPRequestHandler):
                 gravar_env(CONFIG, {"CADASTRO_ABERTO": "1" if f.get("CADASTRO_ABERTO") == "1" else "0", "TESTE_IA": "1" if f.get("TESTE_IA") == "1" else "0",
                                     "TESTE_DIAS": re.sub(r"\D", "", f.get("TESTE_DIAS", "7"))[:2] or "7",
                                     "TESTE_MAX_EMPRESAS": re.sub(r"\D", "", f.get("TESTE_MAX_EMPRESAS", "2"))[:2] or "2",
+                                    "ASSINATURA_CARENCIA": re.sub(r"\D", "", f.get("ASSINATURA_CARENCIA", "3"))[:2] or "0",
                                     "VENDAS_WHATSAPP": re.sub(r"\D", "", f.get("VENDAS_WHATSAPP", ""))[:15]})
                 self.auditar("alterou a página de vendas / teste grátis")
                 return self.redirecionar("/config?ok=config")
