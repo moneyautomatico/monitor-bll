@@ -58,7 +58,7 @@ def _get(url, timeout=25):
             ultimo = ex
             time.sleep(1)
     try:
-        r = subprocess.run(["curl", "-s", "--compressed", "-m", str(timeout), "-A", UA["User-Agent"],
+        r = subprocess.run(["curl", "-4", "-s", "--compressed", "-m", str(timeout), "-A", UA["User-Agent"],
                             "-H", "Accept: application/json", url], capture_output=True, text=True, timeout=timeout + 5)
         if r.returncode == 0 and r.stdout.strip():
             return json.loads(r.stdout)
@@ -81,7 +81,7 @@ def _get_prazo(urls, fim):
                 if modo == "urllib":
                     with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=t) as r:
                         return json.loads(r.read().decode("utf-8") or "null")
-                r = subprocess.run(["curl", "-s", "--compressed", "-m", str(t), "-A", UA["User-Agent"], "-H", "Accept: application/json",
+                r = subprocess.run(["curl", "-4", "-s", "--compressed", "-m", str(t), "-A", UA["User-Agent"], "-H", "Accept: application/json",
                                     "-w", "\\n%{http_code}", url], capture_output=True, text=True, timeout=t + 3)
                 corpo, _, cod = r.stdout.rpartition("\n")
                 if cod.strip() in ("204", "404"):
@@ -96,6 +96,21 @@ def _get_prazo(urls, fim):
             except Exception as ex:  # noqa: BLE001
                 ultimo = ex
     raise ultimo
+
+
+# ------------------------------------------------------------------ rede: preferir IPv4
+# Em vários VPS a rota IPv6 existe mas não funciona: a conexão com o PNCP fica parada até estourar o tempo.
+# Aqui os endereços IPv4 vêm primeiro (o IPv6 continua como reserva).
+import socket as _socket
+_getaddrinfo_orig = _socket.getaddrinfo
+
+
+def _getaddrinfo_ipv4_primeiro(*a, **k):
+    res = _getaddrinfo_orig(*a, **k)
+    return sorted(res, key=lambda r: r[0] != _socket.AF_INET)
+
+
+_socket.getaddrinfo = _getaddrinfo_ipv4_primeiro
 
 
 # ------------------------------------------------------------------ busca
