@@ -2,6 +2,16 @@
 Texto em HTML simples (sem dados de usuário). O painel mostra em /ajuda, com busca, e liga cada tela à sua seção."""
 
 SECOES = [
+    {"id": "aprender", "icone": "🎓", "titulo": "Começando em licitações (Aprender)", "tela": "/iniciante",
+     "resumo": "Para quem nunca licitou: checagem da empresa, trilha em 7 passos, simulador, modelos e evolução.",
+     "passos": ["Em <b>🎓 Aprender → ✅ Estou pronto?</b>, veja o placar da empresa e resolva os itens de peso maior.",
+                "Siga <b>🧭 Minha primeira licitação</b>: 7 passos, cada um levando à tela certa (vários se marcam sozinhos).",
+                "Em <b>Oportunidades</b>, use o filtro <b>🌱 Bom para começar</b> (dispensas, valor baixo, perto, exclusivas ME/EPP).",
+                "Analise o edital e clique em <b>🌱 Explicar para iniciante</b>: resumo simples e semáforo de “vale a pena?”.",
+                "Treine no <b>🎮 Simulador de disputa</b> e use os <b>📝 Modelos prontos</b> para responder ao pregoeiro.",
+                "No chat do pregoeiro, clique em <b>❓ O que significa?</b> embaixo da mensagem para saber o que fazer."],
+     "dicas": ["Comece por compras pequenas e perto de você – a primeira vitória ensina mais que qualquer curso.",
+               "Nunca dê lance abaixo do seu lance mínimo: ganhar com prejuízo é pior que perder."]},
     {"id": "inicio", "icone": "🚀", "titulo": "Primeiros passos", "tela": "/licitacoes",
      "resumo": "O que configurar no primeiro dia para o sistema trabalhar por você.",
      "passos": ["Em <b>Empresas</b>, cadastre cada empresa com o login da plataforma de licitação (é com ele que o monitor lê o chat e a disputa).",
@@ -210,6 +220,8 @@ SECOES = [
 ]
 
 FAQ = [
+    ("Nunca participei de licitação. Por onde começo?",
+     "Abra 🎓 Aprender → Central do iniciante: faça a checagem “Estou pronto?”, siga a trilha de 7 passos e treine no simulador antes da primeira disputa."),
     ("O sistema dá lance, envia mensagem ou documentos na plataforma?",
      "Não. O monitor só lê. Propostas, declarações, pacotes e peças são arquivos/rascunhos – o envio é sempre feito por você."),
     ("Não estou recebendo os alertas no Telegram. O que fazer?",

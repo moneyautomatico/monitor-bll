@@ -60,6 +60,7 @@ import pacote
 import precos
 import propostas
 import trava_teste
+import iniciante
 
 PASTA = Path(__file__).resolve().parent
 EMPRESAS = PASTA / "empresas"
@@ -793,12 +794,16 @@ AREAS = [
                                      ("/certidoes", "📑 Certidões"), ("/atestados", "📜 Atestados"), ("/pacote", "📦 Pacote de habilitação"),
                                      ("/pecas", "⚖️ Peças com IA"), ("/assinatura", "✍️ Como assinar")]),
     ("/contratos", "💼 Pós-venda", [("/contratos", "💼 Contratos"), ("/atas", "📑 Atas de registro de preço"), ("/relatorio", "📈 Relatório do mês")]),
+    ("/iniciante", "🎓 Aprender", [("/iniciante", "🎓 Central do iniciante"), ("/pronto", "✅ Estou pronto para licitar?"),
+                                  ("/trilha", "🧭 Minha primeira licitação"), ("/simulador", "🎮 Simulador de disputa"),
+                                  ("/modelos", "📝 Modelos prontos"), ("/evolucao", "📈 Minha evolução")]),
     ("/empresas", "⋯ Mais", [("/empresas", "🏢 Empresas"), ("/preferencias", "⚙️ Minhas configurações"), ("/meu-consumo", "💳 Custos de IA"),
                             ("/avisos", "🔔 Avisos"), ("/bem-vindo", "🚀 Primeiros passos"), ("/lixeira", "🗑 Lixeira"), ("/ajuda", "❓ Ajuda"), ("/conta", "👤 Minha conta")]),
 ]
 ABA_AREA = {"/documentos": "/propostas", "/mensagens": "/disputa", "/processos": "/disputa", "/concorrentes": "/disputa", "/agenda": "/licitacoes",
             "/oportunidades": "/licitacoes", "/buscar": "/licitacoes", "/editais": "/licitacoes", "/preferencias": "/empresas", "/ajuda": "/empresas",
-            "/pergunte": "/empresas"}
+            "/pergunte": "/empresas", "/pronto": "/iniciante", "/trilha": "/iniciante", "/simulador": "/iniciante", "/modelos": "/iniciante",
+            "/evolucao": "/iniciante"}
 
 
 def nav_html(aba):
@@ -1151,6 +1156,18 @@ def pendencias(emps=None):
         d = atas.dias_vigencia(a)
         if d is not None and 0 <= d <= 30:
             out.append((2, "📑", f"Ata vence em {d} dia(s): {a.get('numero', '')}", a.get("orgao", "")[:60], url, "Ver a ata"))
+    # iniciante: trilha da primeira licitação ainda incompleta (contas novas)
+    u_ = usuario_atual() or {}
+    if u_.get("papel") != "admin" and not (u_.get("cfg") or {}).get("trilha_oculta"):
+        try:
+            criado_ = datetime.strptime((u_.get("criado") or "")[:10], "%d/%m/%Y")
+        except ValueError:
+            criado_ = None
+        if criado_ and agora - criado_ < timedelta(days=60):
+            feitos_, pct_ = progresso_trilha()
+            if pct_ < 100:
+                prox_ = next((t for k, t, *_ in iniciante.TRILHA if not feitos_[k]), "")
+                out.append((2, "🎓", f"Primeira licitação: {pct_}% da trilha", f"Próximo passo: {prox_}", "/trilha", "Continuar"))
     return sorted(out, key=lambda x: x[0])
 
 
@@ -1903,6 +1920,628 @@ def acao_ativacao(lg, acao, f):
     return ""
 
 
+# ------------------------------------------------------------------ licitante iniciante (aprender)
+ESTILO_INI = """<style>
+.ini-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin:12px 0}
+.ini-c{display:block;background:var(--card);border:1px solid var(--borda);border-radius:14px;padding:16px;text-decoration:none;color:inherit}
+.ini-c:hover{border-color:var(--verde,#2e7d32)}.ini-c b{display:block;font-size:16px;margin:6px 0 4px}.ini-c .ico{font-size:26px}
+.ini-c .sub{display:block}.pbar2{height:8px;background:var(--borda);border-radius:6px;overflow:hidden;margin-top:8px}
+.pbar2 span{display:block;height:100%;background:linear-gradient(90deg,#2e7d32,#66bb6a)}
+.pr-it{display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:start;border:1px solid var(--borda);border-radius:12px;padding:12px;margin:8px 0;background:var(--card)}
+.pr-it .st{font-size:20px;line-height:1}.pr-it .peso{font-size:11px;color:var(--sub)}.pr-it .op{display:flex;gap:6px;flex-wrap:wrap}
+.pr-it .op label{display:flex;gap:4px;align-items:center;font-weight:400;margin:0;border:1px solid var(--borda);border-radius:999px;padding:3px 10px;cursor:pointer}
+.placar{display:flex;gap:18px;align-items:center;flex-wrap:wrap;background:var(--card);border:1px solid var(--borda);border-radius:14px;padding:16px;margin:10px 0}
+.placar .n{font-size:40px;font-weight:800}.tr-p{border:1px solid var(--borda);border-radius:14px;background:var(--card);margin:10px 0}
+.tr-p>summary{list-style:none;cursor:pointer;padding:14px 16px;display:flex;gap:12px;align-items:center}.tr-p>summary::-webkit-details-marker{display:none}
+.tr-p .num{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:var(--borda);font-weight:800;flex:none}
+.tr-p.ok .num{background:#2e7d32;color:#fff}.tr-p .corpo{padding:0 16px 16px 62px}.tr-p .dica{background:#fff8e1;color:#5d4300;border-radius:10px;padding:8px 12px;margin-top:8px}
+.sem{display:inline-block;width:18px;height:18px;border-radius:50%;vertical-align:-3px;margin-right:6px}
+.sem.verde{background:#2e7d32}.sem.amarelo{background:#f9a825}.sem.vermelho{background:#c62828}
+.semaforo{border-radius:14px;padding:16px;margin:10px 0;border:2px solid}.semaforo.verde{border-color:#2e7d32;background:#e8f5e9;color:#1b4d20}
+.semaforo.amarelo{border-color:#f9a825;background:#fff8e1;color:#5d4300}.semaforo.vermelho{border-color:#c62828;background:#ffebee;color:#7f1d1d}
+.semaforo h3{margin:0 0 6px}.exp-g{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+.exp-g div{background:var(--card);border:1px solid var(--borda);border-radius:12px;padding:12px}.exp-g b{display:block;font-size:12px;color:var(--sub);text-transform:uppercase;letter-spacing:.5px}
+.cm-exp{margin-top:6px}.cm-exp>summary{cursor:pointer;color:var(--verde,#2e7d32);font-weight:700;font-size:13px}
+.cm-exp .bx{background:var(--bg);border:1px solid var(--borda);border-radius:10px;padding:10px 12px;margin-top:6px;font-size:13.5px}
+.cm-exp .bx p{margin:4px 0}.cm-exp .bx .acoes{margin-top:6px}
+</style>"""
+
+
+def ctx_iniciante():
+    """Dados do usuário usados pelas checagens automáticas."""
+    lg = login_atual()
+    uc = usuarios.cfg(lg)
+    emps = nomes_empresas()
+    nomes = list(emps)
+    dados = {n: dados_doc(n, emps[n]) for n in nomes}
+    certs = [c for c in agenda.certidoes()["itens"].values() if c.get("empresa") in emps]
+    return {"lg": lg, "uc": uc, "emps": emps, "nomes": nomes, "dados": dados, "certs": certs}
+
+
+def auto_pronto(cx):
+    """{chave: True/False} das checagens que o sistema consegue fazer sozinho."""
+    nomes, dados, certs = cx["nomes"], cx["dados"], cx["certs"]
+
+    def valida(tipo):
+        for c in certs:
+            if c.get("tipo") == tipo:
+                st, _ = agenda.status_cert(c)
+                if st != "vencida":
+                    return True
+        return False
+
+    def tem(tipo):
+        return any(c.get("tipo") == tipo for c in certs)
+    d0 = [dados[n] for n in nomes]
+    return {
+        "dados": bool(d0) and any(not documentos.faltando(d) for d in d0),
+        "porte": any((d.get("porte") or "").strip() for d in d0),
+        "cert_basicas": all(valida(t) for t in ("federal", "fgts", "trabalhista")),
+        "cert_locais": valida("estadual") and valida("municipal"),
+        "falencia": valida("falencia"),
+        "contrato": tem("contrato") or None,
+        "balanco": tem("balanco") or None,
+        "plataforma": bool(nomes),
+        "atestado": any(atestados.listar(n) for n in nomes),
+        "conta_pj": any(d.get("conta") and d.get("banco") for d in d0),
+        "custos": any(catalogo.listar(n) for n in nomes),
+        "alertas": bool(cx["uc"].get("tg_chat") or cx["uc"].get("ntfy")),
+    }
+
+
+def placar_pronto(cx=None):
+    cx = cx or ctx_iniciante()
+    auto = auto_pronto(cx)
+    resp = cx["uc"].get("pronto") or {}
+    total = feito = 0
+    itens = []
+    for k, tit, peso, por, como, link, eh_auto in iniciante.PRONTO:
+        a = auto.get(k) if eh_auto else None
+        ok = True if a else (resp.get(k) == "sim")
+        if eh_auto and a is False:
+            ok = False
+        total += peso
+        feito += peso if ok else 0
+        itens.append((k, tit, peso, por, como, link, eh_auto, a, ok, resp.get(k, "")))
+    pct = int(round(100 * feito / total)) if total else 0
+    return pct, itens
+
+
+def pg_pronto(aviso=""):
+    pct, itens = placar_pronto()
+    rot, frase = iniciante.nivel_pronto(pct)
+    falta = [x for x in itens if not x[8]]
+    falta.sort(key=lambda x: -x[2])
+    linhas = ""
+    for k, tit, peso, por, como, link, eh_auto, a, ok, r in itens:
+        st = "✅" if ok else ("⬜" if not eh_auto or a is None else "❌")
+        if eh_auto and a is not None:
+            esc = f'<span class="sub">{"verificado pelo sistema" if a else "o sistema ainda não encontrou"}</span>'
+        else:
+            esc = ('<div class="op">' + "".join(
+                f'<label><input type="radio" name="{k}" value="{v}"{" checked" if r == v else ""}> {rt}</label>'
+                for v, rt in (("sim", "Sim"), ("nao", "Ainda não"), ("", "Não sei"))) + "</div>")
+        lk = (f' <a href="{e(link)}"{" target=_blank rel=noopener" if link.startswith("http") else ""}>Como resolver →</a>' if link and not ok else "")
+        linhas += (f'<div class="pr-it"><span class="st">{st}</span><div><b>{e(tit)}</b> <span class="peso">peso {peso}</span>'
+                   f'<div class="sub">{e(por)}</div>{"" if ok else "<div class=sub><b>Como:</b> " + e(como) + lk + "</div>"}</div>{esc}</div>')
+    prox = (f'<p><b>Próximo passo:</b> {e(falta[0][1])} – {e(falta[0][4])}</p>' if falta else "<p>🎉 Tudo certo. Vá para a <a href='/trilha'>trilha</a> e ache a primeira licitação.</p>")
+    corpo = f"""{ESTILO_INI}<h2>✅ Estou pronto para licitar?</h2>
+<p class="sub">Uma checagem rápida do que uma empresa precisa ter para participar com segurança. Parte é conferida sozinha pelo sistema; o resto é só responder.</p>
+<div class="placar"><div class="n">{pct}%</div><div><b style="font-size:18px">{rot}</b><div class="sub">{e(frase)}</div>
+<div class="pbar2" style="width:260px"><span style="width:{pct}%"></span></div></div></div>{prox}
+<form method="post" action="/pronto/salvar"><input type="hidden" name="csrf" value="{CSRF}">{linhas}
+<div class="acoes"><button>💾 Salvar respostas</button><a class="btn sec" href="/trilha">🧭 Ir para a trilha</a></div></form>
+<p class="sub">Esta lista é uma orientação geral – cada edital pode pedir documentos a mais ou a menos. Confira sempre o edital.</p>"""
+    return pagina("Estou pronto?", corpo, "/pronto", aviso)
+
+
+def auto_trilha(cx=None):
+    cx = cx or ctx_iniciante()
+    uc = cx["uc"]
+    pct, _ = placar_pronto(cx)
+    cards = [c for c in kanban.listar() if visivel(c.get("empresa"), c.get("usuario"))]
+    return {"pronto": pct >= 60, "achar": bool(cards),
+            "edital": any(ve_analise(d) and d.get("status") == "pronto" for d in analise.listar()),
+            "documentos": any(visivel(p.get("empresa"), p.get("usuario")) for p in propostas.listar()),
+            "disputa": int(uc.get("sim_feitos") or 0) > 0,
+            "depois": any(c.get("resultado") for c in cards) or any(visivel(c.get("empresa"), c.get("usuario")) for c in contratos.listar())}
+
+
+def progresso_trilha(cx=None):
+    cx = cx or ctx_iniciante()
+    auto = auto_trilha(cx)
+    marc = cx["uc"].get("trilha") or {}
+    feitos = {k: bool(auto.get(k) or marc.get(k)) for k, *_ in iniciante.TRILHA}
+    return feitos, int(round(100 * sum(feitos.values()) / len(iniciante.TRILHA)))
+
+
+def pg_trilha():
+    cx = ctx_iniciante()
+    feitos, pct = progresso_trilha(cx)
+    auto = auto_trilha(cx)
+    prox = next((k for k, *_ in iniciante.TRILHA if not feitos[k]), None)
+    passos = ""
+    for i, (k, tit, ico, txt, itens, links, dica) in enumerate(iniciante.TRILHA, 1):
+        ok = feitos[k]
+        lis = "".join(f"<li>{e(x)}</li>" for x in itens)
+        bts = "".join(f'<a class="btn sec" href="{e(u)}">{e(r)}</a>' for r, u in links)
+        marcar = ("" if auto.get(k) else
+                  botao(f"/trilha/{k}/{'desfazer' if ok else 'feito'}", "↩ Desmarcar" if ok else "✔ Marcar como feito", "sec"))
+        passos += (f'<details class="tr-p{" ok" if ok else ""}"{" open" if k == prox else ""}><summary><span class="num">{"✓" if ok else i}</span>'
+                   f'<div><b>{ico} {e(tit)}</b><div class="sub">{"concluído" + (" (o sistema conferiu)" if auto.get(k) else "") if ok else ("👉 próximo passo" if k == prox else "")}</div></div></summary>'
+                   f'<div class="corpo"><p>{e(txt)}</p><ul>{lis}</ul><div class="acoes">{bts}{marcar}</div>'
+                   f'<div class="dica">💡 {e(dica)}</div></div></details>')
+    corpo = f"""{ESTILO_INI}<h2>🧭 Minha primeira licitação</h2>
+<p class="sub">7 passos, do zero à primeira disputa. Cada passo leva à tela certa do sistema – vários são marcados sozinhos quando você faz.</p>
+<div class="placar"><div class="n">{pct}%</div><div><b>{sum(feitos.values())} de {len(feitos)} passos</b>
+<div class="pbar2" style="width:260px"><span style="width:{pct}%"></span></div></div></div>{passos}"""
+    return pagina("Primeira licitação", corpo, "/trilha")
+
+
+def pg_iniciante():
+    cx = ctx_iniciante()
+    pct_p, _ = placar_pronto(cx)
+    feitos, pct_t = progresso_trilha(cx)
+    sims = int(cx["uc"].get("sim_feitos") or 0)
+    cards = [("/pronto", "✅", "Estou pronto para licitar?", f"Sua empresa: {pct_p}% pronta", pct_p),
+             ("/trilha", "🧭", "Minha primeira licitação", f"{sum(feitos.values())} de {len(feitos)} passos", pct_t),
+             ("/oportunidades?f=iniciante", "🌱", "Licitações boas para começar", "Dispensas, valor baixo, perto e exclusivas ME/EPP", None),
+             ("/editais", "📖", "Edital explicado", "Analise um edital e clique em “🌱 Explicar para iniciante”", None),
+             ("/simulador", "🎮", "Simulador de disputa", f"Treine lances sem risco · {sims} treino(s) feito(s)", None),
+             ("/modelos", "📝", "Modelos prontos", "Respostas ao pregoeiro e ofícios já preenchidos", None),
+             ("/evolucao", "📈", "Minha evolução", "Como você está indo, semana a semana", None),
+             ("/prazos", "⚖️", "Calculadora de prazos", "Impugnação, recurso, contrarrazões…", None)]
+    grid = "".join(f'<a class="ini-c" href="{u}"><span class="ico">{ic}</span><b>{e(t)}</b><span class="sub">{e(s)}</span>'
+                   + (f'<div class="pbar2"><span style="width:{p}%"></span></div>' if p is not None else "") + "</a>"
+                   for u, ic, t, s, p in cards)
+    corpo = f"""{ESTILO_INI}<h2>🎓 Central do iniciante</h2>
+<p class="sub">Está começando em licitações? Aqui fica tudo o que ajuda a dar o primeiro passo com segurança – na ordem certa.</p>
+<div class="ini-grid">{grid}</div>
+<p class="sub">Dica: os termos com <span class="ti">ⓘ</span> no sistema mostram a explicação ao passar o mouse (ou tocar no celular).</p>"""
+    return pagina("Central do iniciante", corpo, "/iniciante")
+
+
+# ------------------------------------------------------------------ simulador de disputa
+SIM_HTML = r"""<style>
+.sim{display:grid;grid-template-columns:1.2fr 1fr;gap:14px}.sim .bx{background:var(--card);border:1px solid var(--borda);border-radius:14px;padding:16px}
+.sim .relogio{font-size:44px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-1px}.sim .fase{font-weight:700}
+.sim table{width:100%}.sim tr.eu td{background:#e8f5e9;font-weight:700}.sim .chat{height:360px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.sim .msg{background:var(--bg);border:1px solid var(--borda);border-radius:10px;padding:8px 10px;font-size:13.5px}.sim .msg b{color:#1b5e20}
+.sim .msg.sis{background:#fff8e1;color:#5d4300}.sim .lance{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
+.sim .lance input{font-size:18px;max-width:200px;margin:0}.sim .big{font-size:16px;padding:12px 18px}.sim .kp{display:flex;gap:16px;flex-wrap:wrap;margin:8px 0}
+.sim .kp div{background:var(--bg);border-radius:10px;padding:8px 12px}.sim .kp b{display:block;font-size:18px}
+.sim .alerta{background:#ffebee;color:#7f1d1d;border-radius:10px;padding:8px 12px;margin:6px 0;display:none}
+.sim-cfg{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 14px}
+.res-sim{border-radius:14px;padding:16px;margin-top:12px;border:2px solid #2e7d32;background:#e8f5e9;color:#1b4d20}
+@media(max-width:900px){.sim{grid-template-columns:1fr}.sim .chat{height:220px}}
+</style>
+<div id="cfg" class="form" style="max-width:none">
+<h3 style="margin-top:0">1. Monte o treino</h3>
+<div class="sim-cfg">
+<div><label>O que está sendo disputado</label><input class="campo" id="c_obj" value="Lote 1 – Papel toalha interfolha (1.200 pacotes)"></div>
+<div><label>Valor estimado pelo órgão (R$)</label><input class="campo" id="c_ref" value="16.800,00"></div>
+<div><label>Seu custo total do lote (R$) <small>produto + frete</small></label><input class="campo" id="c_custo" value="10.200,00"></div>
+<div><label>Impostos e despesas (% do preço)</label><input class="campo" id="c_imp" value="10"></div>
+<div><label>Margem mínima aceitável (%)</label><input class="campo" id="c_marg" value="6"></div>
+<div><label>Concorrentes</label><select class="campo" id="c_n"><option>3</option><option selected>4</option><option>5</option><option>6</option></select></div>
+<div><label>Diferença mínima entre lances (% do estimado)</label><input class="campo" id="c_dec" value="0,5"></div>
+<div><label>Velocidade</label><select class="campo" id="c_vel"><option value="6" selected>Rápida (10 min viram ~2 min)</option><option value="3">Média (~3,5 min)</option><option value="1">Real (10 min)</option></select></div>
+</div>
+<label class="ck"><input type="checkbox" id="c_me" __ME__> Minha empresa é ME/EPP (direito ao empate ficto)</label>
+<p class="sub">Modo <b>aberto</b> do pregão eletrônico: 10 minutos de lances; se alguém der lance nos 2 minutos finais, prorroga mais 2 minutos, até ninguém mais dar lance.
+Os concorrentes são robôs com custos diferentes. Seu <b>lance mínimo</b> é calculado com o custo, os impostos e a margem mínima.</p>
+<div class="acoes"><button class="big" onclick="iniciar()">▶ Começar a disputa</button></div></div>
+<div id="arena" style="display:none"><div class="sim">
+<div class="bx"><div class="sub" id="a_obj"></div><div class="fase" id="a_fase">Fase de lances – modo aberto</div>
+<div class="relogio" id="a_rel">10:00</div>
+<div class="kp"><div>Seu lance mínimo<b id="a_min"></b></div><div>Seu último lance<b id="a_meu">—</b></div><div>Melhor lance<b id="a_best">—</b></div><div>Sua posição<b id="a_pos">—</b></div></div>
+<div class="alerta" id="a_alerta"></div>
+<div class="lance"><input class="campo" id="a_val" inputmode="decimal" placeholder="Seu lance (R$)"><button class="big" onclick="darLance()">Dar lance</button>
+<button class="sec" onclick="sugerir(1)">Cobrir o 1º</button><button class="sec" onclick="sugerir(0)">No meu mínimo</button></div>
+<div class="sub">O lance precisa ser menor que o <b>seu</b> último lance (pela diferença mínima). Não precisa ser o menor de todos – dá para dar lance intermediário.</div>
+<h4>Classificação (ao vivo)</h4><table id="a_rank"></table></div>
+<div class="bx"><h4 style="margin-top:0">💬 Chat do pregoeiro</h4><div class="chat" id="a_chat"></div><div id="a_extra"></div></div></div>
+<div id="a_res"></div></div>
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+const num=t=>{t=String(t||'').replace(/[^\d,.-]/g,'');if(t.includes(','))t=t.replace(/\./g,'').replace(',','.');return parseFloat(t)||0;};
+const brl=v=>'R$ '+v.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+const mmss=s=>{s=Math.max(0,Math.ceil(s));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
+let S=null,timer=null;
+function chat(txt,sis){const d=document.createElement('div');d.className='msg'+(sis?' sis':'');d.innerHTML=(sis?'⚙️ ':'<b>Pregoeiro:</b> ')+txt;const c=$('a_chat');c.appendChild(d);c.scrollTop=c.scrollHeight;}
+function alerta(t){const a=$('a_alerta');a.textContent=t;a.style.display=t?'block':'none';}
+window.iniciar=function(){
+ const ref=num($('c_ref').value),custo=num($('c_custo').value),imp=num($('c_imp').value),marg=num($('c_marg').value);
+ if(!ref||!custo){alert('Preencha o valor estimado e o seu custo.');return;}
+ if(imp+marg>=90){alert('Impostos + margem passam do limite.');return;}
+ const min=Math.round(custo/(1-(imp+marg)/100)*100)/100;
+ const n=parseInt($('c_n').value);const bots=[];
+ for(let i=0;i<n;i++){const me=Math.random()<.5;bots.push({nome:'Fornecedor '+(i+2)+(me?' (ME/EPP)':''),me,piso:ref*(0.70+Math.random()*0.22),
+  lance:Math.round(ref*(0.96+Math.random()*0.06)*100)/100,ag:0.25+Math.random()*0.7,ult:-99});}
+ S={ref,custo,imp,marg,min,me:$('c_me').checked,dec:Math.max(0.0001,num($('c_dec').value)/100)*ref,vel:parseInt($('c_vel').value),
+   t:0,fim:600,bots,eu:{nome:'Sua empresa',lance:ref,me:$('c_me').checked,deu:0,eu:true},lances:0,fase:'lances',avisou2:false,abaixo:false};
+ $('cfg').style.display='none';$('arena').style.display='';$('a_obj').textContent=$('c_obj').value;$('a_min').textContent=brl(min);
+ $('a_val').value='';$('a_chat').innerHTML='';$('a_res').innerHTML='';$('a_extra').innerHTML='';
+ chat('Bom dia, senhores licitantes. Está aberta a fase de lances do '+$('c_obj').value.split('–')[0].trim()+'. Modo de disputa aberto. Boa sorte a todos.');
+ chat('Propostas iniciais registradas com o valor estimado. Você começa com '+brl(ref)+'.',true);
+ desenhar();clearInterval(timer);timer=setInterval(tick,250);
+};
+function todos(){return S.bots.concat([S.eu]).slice().sort((a,b)=>a.lance-b.lance);}
+function melhor(){return todos()[0];}
+function registrarLance(quem,v){quem.lance=Math.round(v*100)/100;S.lances++;quem.ult=S.t;
+ if(S.fase==='lances'&&S.fim-S.t<=120){S.fim=S.t+120;if(!S.prorrog){S.prorrog=true;chat('Período de prorrogação automática: houve lance nos 2 minutos finais. Cada novo lance prorroga por mais 2 minutos.',true);}}}
+function tick(){
+ const dt=0.25*S.vel;S.t+=dt;
+ if(S.fase==='lances'){
+  const resta=S.fim-S.t;
+  if(!S.avisou2&&resta<=120){S.avisou2=true;chat('Atenção: faltam 2 minutos para o fim do tempo regulamentar. Lances nesse período prorrogam a disputa.',true);}
+  const b0=melhor();
+  S.bots.forEach(b=>{ if(b===b0||S.t-b.ult<4)return;
+   let p=b.ag*dt/18*(resta<120?3:1);
+   if(Math.random()<p){let alvo=b0.lance-S.dec*(1+Math.random()*2.5);if(alvo<b.piso)alvo=b.piso;
+    if(alvo<=b.lance-S.dec&&alvo<b0.lance){registrarLance(b,alvo);}else if(b.lance-S.dec>=b.piso&&Math.random()<.3){registrarLance(b,b.lance-S.dec);} }});
+  if(S.t>=S.fim){encerrarLances();}
+  $('a_rel').textContent=mmss(S.fim-S.t);
+ } else if(S.fase==='empate'){
+  const resta=S.fimEmp-S.t;$('a_rel').textContent=mmss(resta);if(resta<=0){chat('Encerrado o prazo do empate ficto sem novo lance.',true);fimDisputa();}
+ }
+ desenhar();
+}
+function desenhar(){
+ const r=todos();const pos=r.indexOf(S.eu)+1;
+ $('a_rank').innerHTML='<tr><th>#</th><th>Licitante</th><th>Lance</th></tr>'+r.map((x,i)=>'<tr class="'+(x.eu?'eu':'')+'"><td>'+(i+1)+'º</td><td>'+(x.eu?'⭐ Sua empresa'+(S.me?' (ME/EPP)':''):x.nome)+'</td><td>'+brl(x.lance)+'</td></tr>').join('');
+ $('a_meu').textContent=S.eu.deu?brl(S.eu.lance):'—';$('a_best').textContent=brl(r[0].lance);$('a_pos').textContent=pos+'º';
+}
+window.sugerir=function(t){if(!S)return;const v=t?melhor().lance-S.dec:S.min;$('a_val').value=v.toFixed(2).replace('.',',');$('a_val').focus();};
+window.darLance=function(){
+ if(!S||(S.fase!=='lances'&&S.fase!=='empate'))return;const v=num($('a_val').value);
+ if(!v){alerta('Digite o valor do lance.');return;}
+ if(v>S.eu.lance-S.dec+0.001){alerta('Lance recusado: precisa ser pelo menos '+brl(S.dec)+' menor que o seu último lance ('+brl(S.eu.lance)+').');return;}
+ if(S.fase==='empate'&&v>=S.alvoEmp){alerta('No empate ficto o lance precisa ser MENOR que o do 1º colocado ('+brl(S.alvoEmp)+').');return;}
+ if(v<S.min){S.abaixo=true;alerta('⚠️ Lance abaixo do seu lance mínimo ('+brl(S.min)+'): se ganhar assim, a venda dá prejuízo. Na vida real, não faça isso!');}else alerta('');
+ S.eu.deu++;registrarLance(S.eu,v);$('a_val').value='';
+ if(S.fase==='empate'){chat('Empresa ME/EPP exerceu o direito de preferência com '+brl(v)+'.',true);fimDisputa();}
+ desenhar();
+};
+function encerrarLances(){
+ S.fase='fim';chat('Encerrada a fase de lances. A classificação está disponível no sistema.',true);
+ const r=todos();const w=r[0];
+ if(S.me&&!w.eu&&!w.me&&S.eu.lance<=w.lance*1.05){
+  S.fase='empate';S.alvoEmp=w.lance;S.fimEmp=S.t+300;
+  chat('Constatado empate ficto (LC 123/2006, arts. 44 e 45): a empresa ME/EPP mais bem classificada, até 5% acima, pode apresentar novo lance menor que '+brl(w.lance)+' em até 5 minutos.');
+  $('a_fase').textContent='⚖️ Empate ficto – sua chance de cobrir!';alerta('Você é ME/EPP e ficou até 5% acima do 1º. Dê um lance menor que '+brl(w.lance)+' (sem passar do seu mínimo).');
+  return;}
+ fimDisputa();
+}
+function fimDisputa(){
+ clearInterval(timer);S.fase='fim';$('a_fase').textContent='🏁 Disputa encerrada';$('a_rel').textContent='00:00';desenhar();
+ const r=todos();const pos=r.indexOf(S.eu)+1;
+ if(pos===1){
+  const pedido=Math.round(S.eu.lance*0.98*100)/100;
+  chat('Senhores, a empresa arrematante está convocada para negociação. Consegue reduzir o valor para '+brl(pedido)+'?');
+  $('a_extra').innerHTML='<div class="acoes"><button onclick="negociar(1,'+pedido+')">Aceitar '+brl(pedido)+'</button><button class="sec" onclick="negociar(0)">Recusar com educação</button></div>';
+ } else relatorio();
+}
+window.negociar=function(ok,v){
+ $('a_extra').innerHTML='';
+ if(ok){if(v<S.min)S.abaixo=true;S.eu.lance=v;chat('Empresa aceitou o valor de '+brl(v)+'.',true);}
+ else chat('Empresa informou que '+brl(S.eu.lance)+' é o menor valor possível, dentro do estimado. O pregoeiro aceitou a justificativa.',true);
+ chat('Proposta aceita. A empresa está convocada a enviar a <b>proposta ajustada ao último lance</b> e os documentos de habilitação em até <b>2 horas</b>.');
+ desenhar();relatorio();
+};
+function relatorio(){
+ const r=todos();const pos=r.indexOf(S.eu)+1;const v=S.eu.lance;const w=r[0];
+ const lucro=v-S.custo-v*S.imp/100;const mg=100*lucro/v;
+ let dicas=[];
+ if(!S.eu.deu)dicas.push('Você não deu nenhum lance. No pregão, quem não dá lance fica com a proposta inicial – normalmente perde.');
+ if(S.abaixo)dicas.push('Você deu lance abaixo do seu mínimo. Ganhar com prejuízo é pior que perder: respeite o piso.');
+ if(pos>1&&w.lance<S.min)dicas.push('O vencedor ficou abaixo do seu lance mínimo ('+brl(S.min)+'). Melhor perder do que vender com prejuízo – mas vale procurar fornecedor mais barato.');
+ if(pos>1&&w.lance>=S.min)dicas.push('O vencedor ficou acima do seu mínimo: dava para ganhar com lucro. Fique atento ao relógio e dê lances até o seu piso.');
+ if(pos===1)dicas.push('Ganhou! Na vida real, agora corra para mandar a proposta ajustada no prazo (use Readequar ao lance e os Modelos prontos).');
+ if(S.me&&pos>1)dicas.push('Sendo ME/EPP, fique até 5% do 1º colocado (que não seja ME/EPP) para ter o direito de cobrir no empate ficto.');
+ $('a_res').innerHTML='<div class="res-sim"><h3 style="margin-top:0">'+(pos===1?'🥇 Você venceu!':'Você ficou em '+pos+'º lugar')+'</h3>'+
+  '<p>Seu lance final: <b>'+brl(v)+'</b> · lance vencedor: <b>'+brl(w.lance)+'</b> · seu mínimo: <b>'+brl(S.min)+'</b></p>'+
+  '<p>Se vendesse pelo seu lance: lucro de <b>'+brl(lucro)+'</b> ('+mg.toFixed(1).replace('.',',')+'% do preço) depois de custo e impostos.</p>'+
+  '<ul>'+dicas.map(d=>'<li>'+d+'</li>').join('')+'</ul><div class="acoes"><button onclick="location.reload()">🔁 Treinar de novo</button>'+
+  '<a class="btn sec" href="/modelos?modelo=chat_ciente">📝 Modelo de resposta ao pregoeiro</a><a class="btn sec" href="/trilha">🧭 Voltar à trilha</a></div></div>';
+ fetch('/simulador/fim',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+  body:'csrf=__CSRF__&pos='+pos+'&margem='+mg.toFixed(1)}).catch(()=>{});
+}
+})();
+</script>"""
+
+
+def pg_simulador():
+    cx = ctx_iniciante()
+    me = any((d.get("porte") or "") in ("ME", "EPP") for d in cx["dados"].values())
+    n = int(cx["uc"].get("sim_feitos") or 0)
+    corpo = (ESTILO_INI + '<h2>🎮 Simulador de disputa</h2><p class="sub">Treine lances sem risco: um pregão de mentira com concorrentes robôs, '
+             'prorrogação automática, empate ficto de ME/EPP, negociação e convocação do pregoeiro. Nada é enviado a nenhuma plataforma.'
+             + (f' Você já treinou {n} vez(es).' if n else "") + "</p>"
+             + SIM_HTML.replace("__ME__", "checked" if me else "").replace("__CSRF__", CSRF))
+    return pagina("Simulador", corpo, "/simulador")
+
+
+# ------------------------------------------------------------------ modelos prontos
+def ctx_modelo(q):
+    emps = nomes_empresas()
+    nome = q.get("emp", "") if q.get("emp", "") in emps else (sorted(emps)[0] if emps else "")
+    ctx = dados_doc(nome, emps.get(nome, [])) if nome else {}
+    card = kanban.ler(q.get("lic", "")) if q.get("lic") else None
+    if card and not visivel(card.get("empresa"), card.get("usuario")):
+        card = None
+    ctx = dict(ctx)
+    ctx.update({"cnpj_fmt": documentos.fmt_cnpj(ctx.get("cnpj")) if ctx.get("cnpj") else "",
+                "orgao": (card or {}).get("orgao", ""), "processo": re.sub(r"(?i)^\s*preg[aã]o( eletr[oô]nico)?\s*", "", (card or {}).get("processo", "")),
+                "modalidade": (card or {}).get("modalidade") or ("Dispensa Eletrônica" if "dispensa" in iniciante.norm((card or {}).get("processo")) else "Pregão Eletrônico")})
+    return nome, ctx, card
+
+
+def blocos_modelo(tit, texto, ctx):
+    ref = [("dir", f"À/Ao\n{ctx.get('orgao') or '[ÓRGÃO]'}\nA/C Sr(a). Pregoeiro(a) / Agente de Contratação"),
+           ("dir", f"Ref.: {ctx.get('modalidade') or 'Pregão Eletrônico'} nº {ctx.get('processo') or '____/____'}")]
+    corpo = [("p", par.strip()) for par in iniciante.preencher(texto, ctx).split("\n") if par.strip()]
+    fim = [("vazio", ""), ("data", f"{ctx.get('cidade') or '__________'}, {documentos.data_extenso()}."), ("vazio", ""), ("assinatura", "")]
+    return [(tit, ref + [("titulo", tit.split(": ", 1)[-1].upper())] + corpo + fim)]
+
+
+def pg_modelos(q):
+    nome, ctx, card = ctx_modelo(q)
+    mod = next((m for m in iniciante.MODELOS if m[0] == q.get("modelo")), iniciante.MODELOS[0])
+    k, tit, onde, tipo, texto = mod
+    emps = sorted(nomes_empresas())
+    cards = [c for c in kanban.listar() if not c.get("arquivado") and visivel(c.get("empresa"), c.get("usuario")) and (not nome or c.get("empresa") == nome)]
+    sel_m = "".join(f'<option value="{m[0]}"{" selected" if m[0] == k else ""}>{"💬" if m[3] == "chat" else "📄"} {e(m[1])}</option>' for m in iniciante.MODELOS)
+    sel_e = "".join(f'<option{" selected" if n == nome else ""}>{e(n)}</option>' for n in emps)
+    sel_l = '<option value="">— sem licitação (preencher à mão) —</option>' + "".join(
+        f'<option value="{e(c["id"])}"{" selected" if card and c["id"] == card.get("id") else ""}>{e(c.get("processo", ""))} – {e((c.get("orgao") or "")[:50])}</option>' for c in cards)
+    texto_p = iniciante.preencher(texto, ctx)
+    if tipo == "chat":
+        saida = (f'<label>Texto para colar no chat <small>({len(texto_p)} caracteres – muitas plataformas aceitam até 500; troque os [PREENCHER])</small></label>'
+                 f'<textarea class="campo" id="mtxt" rows="6" style="max-width:100%">{e(texto_p)}</textarea>'
+                 '<div class="acoes"><button type="button" onclick="navigator.clipboard.writeText(document.getElementById(\'mtxt\').value);this.textContent=\'✅ Copiado\'">📋 Copiar</button></div>')
+    else:
+        qv = urllib.parse.urlencode({"modelo": k, "emp": nome, "lic": (card or {}).get("id", "")})
+        saida = (f'<label>Prévia do texto <small>(no documento ele sai com timbre, referência, data e assinatura)</small></label>'
+                 f'<textarea class="campo" rows="9" style="max-width:100%" readonly>{e(texto_p)}</textarea>'
+                 f'<div class="acoes"><a class="btn" href="/modelos/ver?{e(qv)}" target="_blank">📄 Abrir documento (editar, imprimir/PDF)</a>'
+                 f'<a class="btn sec" href="/modelos/docx?{e(qv)}">⬇ Baixar Word</a></div>')
+    corpo = f"""{ESTILO_INI}<h2>📝 Modelos prontos</h2>
+<p class="sub">Textos para as situações mais comuns – já preenchidos com os dados da empresa e da licitação. Revise e troque os <mark>[PREENCHER]</mark> antes de enviar.
+O envio é sempre seu: o sistema não manda nada à plataforma.</p>
+<form method="get" action="/modelos" class="form" style="max-width:none"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0 14px">
+<div><label>Modelo</label><select class="campo" name="modelo" onchange="this.form.submit()">{sel_m}</select></div>
+<div><label>Empresa</label><select class="campo" name="emp" onchange="this.form.submit()">{sel_e or "<option>—</option>"}</select></div>
+<div><label>Licitação</label><select class="campo" name="lic" onchange="this.form.submit()">{sel_l}</select></div></div>
+<p class="sub"><b>Onde usar:</b> {e(onde)}</p>{saida}</form>"""
+    return pagina("Modelos prontos", corpo, "/modelos")
+
+
+# ------------------------------------------------------------------ o que significa essa mensagem?
+def html_explicar(texto, g=None):
+    exps = iniciante.explicar(texto)
+    if not exps:
+        return ""
+    ctxq = {"emp": (g or {}).get("nome", "").upper().strip()} if g else {}
+    lic = ""
+    if g:
+        cid = kanban.chave(g["nome"].upper().strip(), g["processo"], g["promotor"]) if hasattr(kanban, "chave") else ""
+        lic = cid if cid and kanban.ler(cid) else ""
+
+    def url(tipo):
+        if tipo.startswith("m:"):
+            return "/modelos?" + urllib.parse.urlencode({"modelo": tipo[2:], **ctxq, **({"lic": lic} if lic else {})})
+        if tipo == "pecas" and g:
+            return "/pecas?" + urllib.parse.urlencode({"emp": ctxq.get("emp", ""), "proc": g["processo"] + "||" + g["promotor"]})
+        return {"propostas": "/propostas", "pacote": "/pacote", "agenda": "/agenda", "prazos": "/prazos", "certidoes": "/certidoes",
+                "contratos": "/contratos", "disputa": "/disputa", "simulador": "/simulador", "pecas": "/pecas"}.get(tipo, "/ajuda")
+    partes = ""
+    for t, s, f, at in exps:
+        bts = "".join(f'<a class="btn sec" href="{e(url(tp))}">{e(r)}</a>' for r, tp in at)
+        partes += (f'<p><b>{e(t)}</b> – {e(s)}</p><p>👉 <b>O que fazer:</b> {e(f)}</p>' + (f'<div class="acoes">{bts}</div>' if bts else ""))
+    return f'<details class="cm-exp"><summary>❓ O que significa?</summary><div class="bx">{partes}</div></details>'
+
+
+# ------------------------------------------------------------------ edital explicado
+def rodar_simples(ch, cfg, usuario):
+    try:
+        d = analise.ler(ch) or {}
+        api = cfg.get("GEMINI_API_KEY", "")
+        if not api:
+            raise RuntimeError("Falta a chave do Gemini. Cadastre em Configurações → Inteligência artificial.")
+        custos_ia.contexto("simples", "", d.get("titulo", ""), usuario)
+        txt, modelo, _ = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), [("texto", "analise_do_edital.md", d.get("md", ""))],
+                                        iniciante.PROMPT_SIMPLES, prazo=240)
+        res = iniciante.ler_json(txt)
+        if not res.get("o_que_compra"):
+            raise RuntimeError("A IA não devolveu a explicação no formato esperado. Tente de novo.")
+        novo = {"status": "pronto", "resultado": res, "custo": custos_ia.ultimo(), "modelo": modelo, "fim": datetime.now().strftime("%d/%m/%Y %H:%M")}
+    except Exception as ex:  # noqa: BLE001
+        novo = {"status": "erro", "erro": str(ex)[:500], "fim": datetime.now().strftime("%d/%m/%Y %H:%M")}
+    d = analise.ler(ch) or {}
+    d["simples"] = novo
+    analise.gravar(ch, d)
+
+
+def semaforo_final(r, cx):
+    """Veredito da IA + o que o sistema sabe da empresa."""
+    cor = r.get("veredito", "amarelo")
+    ordem = ["verde", "amarelo", "vermelho"]
+    extra = []
+
+    def piora(para, motivo):
+        nonlocal cor
+        if ordem.index(para) > ordem.index(cor):
+            cor = para
+        extra.append(motivo)
+    auto = auto_pronto(cx)
+    if not auto.get("cert_basicas"):
+        piora("amarelo", "Suas certidões Federal, FGTS e Trabalhista não estão todas válidas no sistema.")
+    if iniciante.norm(r.get("exige_atestado")).startswith("sim") and not auto.get("atestado"):
+        piora("amarelo", "O edital pede atestado e você ainda não cadastrou nenhum.")
+    portes = {(d.get("porte") or "").upper() for d in cx["dados"].values()}
+    if iniciante.norm(r.get("exclusivo_me_epp")).startswith("sim") and portes and not portes & {"ME", "EPP"}:
+        piora("vermelho", "A disputa é exclusiva para ME/EPP e sua empresa não está cadastrada como ME/EPP.")
+    try:
+        ses = datetime.fromisoformat(r.get("data_sessao") or "")
+        dias = (ses - datetime.now()).days
+        if dias < 0:
+            piora("vermelho", "A sessão já aconteceu.")
+        elif dias < 3:
+            piora("amarelo", f"Pouco tempo para preparar: a sessão é em {dias} dia(s).")
+    except ValueError:
+        pass
+    return cor, extra
+
+
+def html_simples(ch, d):
+    s = d.get("simples") or {}
+    cab = '<h2 id="simples" style="margin-top:6px">🌱 Explicado para iniciante</h2>'
+    botao_s = (f'<form method="post" action="/analise/{ch}/simples" style="display:inline"><input type="hidden" name="csrf" value="{CSRF}">'
+               f'<button{" class=sec" if s else ""}>🌱 {"Explicar de novo" if s else "Explicar em linguagem simples + vale a pena?"}</button></form>')
+    if not s:
+        return (ESTILO_INI + cab + '<p class="sub">Resumo sem juridiquês: o que é, documentos, armadilhas, primeiros passos e um semáforo de '
+                '“vale a pena participar?” que também olha as certidões, atestados e o porte da sua empresa.</p>' + aviso_custo("simples") + botao_s)
+    if s.get("status") == "gerando":
+        return ESTILO_INI + cab + '<div class="msg">🌱 Explicando o edital… (30 segundos a 2 minutos)</div><script>setTimeout(()=>location.reload(),7000)</script>'
+    if s.get("status") == "erro":
+        return ESTILO_INI + cab + f'<div class="msg erro">{e(s.get("erro", ""))}</div>{botao_s}'
+    r = s.get("resultado") or {}
+    cor, extra = semaforo_final(r, ctx_iniciante())
+    tit_cor = {"verde": "🟢 Vale a pena – bom para começar", "amarelo": "🟡 Dá para participar, com cuidado", "vermelho": "🔴 Difícil para quem está começando"}[cor]
+    li = lambda xs: "".join(f"<li>{e(x)}</li>" for x in xs)   # noqa: E731
+    chips = " · ".join(f"{rot}: <b>{e(r.get(k) or 'não informado')}</b>" for k, rot in (
+        ("exclusivo_me_epp", "Exclusiva ME/EPP"), ("exige_atestado", "Atestado"), ("exige_amostra", "Amostra"), ("visita_tecnica", "Visita técnica")))
+    quando = ""
+    try:
+        quando = datetime.fromisoformat(r.get("data_sessao")).strftime("%d/%m/%Y %H:%M")
+    except (TypeError, ValueError):
+        quando = "não informado"
+    return f"""{ESTILO_INI}{cab}<div class="semaforo {cor}"><h3>{tit_cor}</h3>
+<ul>{li(r.get("motivos", []) + extra)}</ul></div>
+<div class="exp-g"><div><b>O que estão comprando</b>{e(r.get("o_que_compra", ""))}</div><div><b>Quem compra</b>{e(r.get("quem_compra", ""))}</div>
+<div><b>Valor estimado</b>{e(r.get("valor_estimado", ""))}</div><div><b>Sessão</b>{e(quando)}</div>
+<div><b>Como funciona</b>{e(r.get("como_funciona", ""))}</div><div><b>Entrega e pagamento</b>{e(r.get("entrega", ""))}<br>{e(r.get("pagamento", ""))}</div></div>
+<p class="sub" style="margin-top:10px">{chips}</p>
+<div class="exp-g" style="margin-top:10px"><div><b>📄 Documentos pedidos</b><ul>{li(r.get("documentos", []))}</ul></div>
+<div><b>⚠️ Armadilhas deste edital</b><ul>{li(r.get("armadilhas", []))}</ul></div>
+<div><b>👉 Primeiros passos</b><ol>{li(r.get("primeiros_passos", []))}</ol></div></div>
+<p class="sub">Gerado em {e(s.get("fim", ""))} {custo_uso(s.get("custo"))} · ⚠️ resumo feito por IA – confira no edital.</p>{botao_s}
+<div class="acoes"><a class="btn sec" href="/pronto">✅ Estou pronto?</a><a class="btn sec" href="/prazos">⚖️ Prazos deste edital</a></div><hr style="margin:22px 0">"""
+
+
+# ------------------------------------------------------------------ minha evolução (semanal)
+def dados_evolucao(ini, fim):
+    """Números do usuário atual entre ini e fim (datetime)."""
+    ini_s, fim_s = ini.strftime("%Y-%m-%dT%H:%M"), fim.strftime("%Y-%m-%dT%H:%M")
+    cards = [c for c in kanban.listar() if visivel(c.get("empresa"), c.get("usuario"))]
+    novas = sum(1 for c in cards if ini_s <= (c.get("criado") or "") < fim_s)
+    disputas = sum(1 for c in cards if ini_s <= (c.get("abertura") or "") < fim_s)
+    ganhas = sum(1 for c in cards if c.get("resultado") == "ganhou" and ini_s[:10] <= (c.get("resultado_em") or "")[:10] < fim_s[:10])
+    perdidas = sum(1 for c in cards if c.get("resultado") == "perdeu" and ini_s[:10] <= (c.get("resultado_em") or "")[:10] < fim_s[:10])
+    props = sum(1 for p in propostas.listar() if visivel(p.get("empresa"), p.get("usuario")) and ini_s <= (p.get("criado") or "") < fim_s)
+    lotes, primeiros, difs = 0, 0, []
+    t0, t1 = ini.timestamp(), fim.timestamp()
+    for x in empresas():
+        db = EMPRESAS / x["id"] / "bll_monitor.db"
+        if not db.exists():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+            for rk, pos in con.execute("SELECT ranking, nossa_pos FROM classificacao WHERE lido_em >= ? AND lido_em < ? AND nossa_pos IS NOT NULL", (t0, t1)):
+                lotes += 1
+                primeiros += pos == 1
+                try:
+                    lista = json.loads(rk or "[]")
+                    nos = next((r for r in lista if r.get("pos") == pos), None)
+                    v1 = next((r for r in lista if r.get("pos") == 1), None)
+                    if pos and pos > 1 and nos and v1 and float(v1.get("valor") or 0) > 0:
+                        difs.append(100 * (float(nos.get("valor") or 0) / float(v1["valor"]) - 1))
+                except (ValueError, TypeError):
+                    pass
+            con.close()
+        except sqlite3.Error:
+            pass
+    return {"novas": novas, "disputas": disputas, "ganhas": ganhas, "perdidas": perdidas, "propostas": props, "lotes": lotes,
+            "primeiros": primeiros, "dif_media": (sum(difs) / len(difs)) if difs else None}
+
+
+def dica_evolucao(a, b):
+    if not a["novas"] and not a["disputas"]:
+        return "Nenhuma licitação nova nesta semana. Abra Oportunidades → 🌱 Bom para começar e escolha uma para seguir."
+    if a["dif_media"] is not None and a["dif_media"] > 5:
+        return f"Nos lotes que perdeu, você ficou em média {a['dif_media']:.1f}% acima do 1º. Reveja fornecedores e frete no Catálogo e preços."
+    if a["lotes"] and a["primeiros"] == 0:
+        return "Ainda sem 1º lugar: treine no Simulador e confira se está dando lances até o seu lance mínimo."
+    if a["ganhas"]:
+        return "Parabéns pela vitória! Cadastre o contrato e as entregas para o sistema avisar prazos e pagamentos."
+    return "Continue no ritmo: quanto mais licitações você acompanha, mais o sistema aprende o seu perfil."
+
+
+def html_evolucao_numeros(a, b):
+    def seta(x, y, bom_subir=True):
+        if x == y:
+            return '<span class="sub">=</span>'
+        sobe = x > y
+        return f'<span style="color:{"#2e7d32" if sobe == bom_subir else "#c62828"}">{"▲" if sobe else "▼"} {abs(x - y)}</span>'
+    itens = [("Licitações novas", a["novas"], b["novas"]), ("Disputas", a["disputas"], b["disputas"]), ("Propostas montadas", a["propostas"], b["propostas"]),
+             ("Lotes com classificação", a["lotes"], b["lotes"]), ("1º lugar em lotes", a["primeiros"], b["primeiros"]), ("Ganhas", a["ganhas"], b["ganhas"])]
+    kp = "".join(f'<div class="kpi"><div class="v">{v}</div><div class="l">{e(r)} {seta(v, w)}</div></div>' for r, v, w in itens)
+    dif = (f'<div class="kpi"><div class="v">{a["dif_media"]:.1f}%</div><div class="l">acima do 1º, em média, nos lotes perdidos</div></div>'
+           if a["dif_media"] is not None else "")
+    return f'<div class="kpis">{kp}{dif}</div>'
+
+
+def pg_evolucao(aviso=""):
+    agora = datetime.now()
+    a = dados_evolucao(agora - timedelta(days=7), agora)
+    b = dados_evolucao(agora - timedelta(days=14), agora - timedelta(days=7))
+    cx = ctx_iniciante()
+    pct_p, _ = placar_pronto(cx)
+    _, pct_t = progresso_trilha(cx)
+    ligado = cx["uc"].get("evolucao_semanal", True)
+    corpo = f"""{ESTILO_INI}<h2>📈 Minha evolução</h2><p class="sub">Últimos 7 dias comparados aos 7 anteriores (▲▼).</p>
+{html_evolucao_numeros(a, b)}
+<div class="msg">💡 {e(dica_evolucao(a, b))}</div>
+<p>Empresa pronta para licitar: <b>{pct_p}%</b> · Trilha da primeira licitação: <b>{pct_t}%</b> · Treinos no simulador: <b>{int(cx["uc"].get("sim_feitos") or 0)}</b></p>
+<form method="post" action="/evolucao/pref" class="form"><input type="hidden" name="csrf" value="{CSRF}">
+<label class="ck"><input type="checkbox" name="ligado" value="1"{" checked" if ligado else ""}> Receber este resumo toda segunda-feira de manhã no Telegram</label>
+<div class="acoes"><button>Salvar</button></div></form>"""
+    return pagina("Minha evolução", corpo, "/evolucao", aviso)
+
+
+def evolucao_semanal():
+    """Toda segunda (8h–11h): manda a evolução da semana no bot de cada usuário que tem empresa e não desligou."""
+    agora = datetime.now()
+    if agora.weekday() != 0 or not 8 <= agora.hour <= 11:
+        return
+    semana = agora.strftime("%G-%V")
+    for lg, u in usuarios.carregar().items():
+        c = u.get("cfg") or {}
+        if u.get("papel") == "admin" or not u.get("ativo", True) or c.get("evolucao_ultima") == semana or not c.get("evolucao_semanal", True):
+            continue
+        if situacao_conta(dict(u, login=lg))["bloq"] or not (c.get("tg_chat") or c.get("tg_token")):
+            continue
+        try:
+            _REQ.user = dict(u, login=lg)
+            if not nomes_empresas():
+                continue
+            a = dados_evolucao(agora - timedelta(days=7), agora)
+            b = dados_evolucao(agora - timedelta(days=14), agora - timedelta(days=7))
+            dif = f"\n• Nos lotes perdidos, ficou em média <b>{a['dif_media']:.1f}%</b> acima do 1º" if a["dif_media"] is not None else ""
+            txt = (f"📈 <b>Sua semana no Licitatudo</b>\n• Licitações novas: <b>{a['novas']}</b> (antes {b['novas']})\n"
+                   f"• Disputas: <b>{a['disputas']}</b> (antes {b['disputas']})\n• Propostas montadas: <b>{a['propostas']}</b>\n"
+                   f"• Lotes com classificação: <b>{a['lotes']}</b> · 1º lugar: <b>{a['primeiros']}</b>\n• Ganhas: <b>{a['ganhas']}</b>{dif}\n\n"
+                   f"💡 {e(dica_evolucao(a, b))}")
+            telegram_geral(txt, usuario=lg)
+            usuarios.salvar_cfg(lg, {"evolucao_ultima": semana})
+        except Exception as ex:  # noqa: BLE001
+            print("Erro na evolução semanal de", lg, ex, flush=True)
+        finally:
+            _REQ.user = None
+
+
 def urg_tag(m):
     motivo = urgencia.classificar(m["texto"], m["escopo"], m["autor"], chat_urgente=CFG_ATUAL().get("CHAT_URGENTE", "1") != "0")
     return f'<span class="tag erro">🚨 {e(motivo)}</span><br>' if motivo else ""
@@ -2147,7 +2786,7 @@ def html_conversa(g, cfg_chat, mapa=None):
         tag_nova = '<span class="tag-nova">NOVA</span>' if nova else ""
         itens += (f'<div class="cm{" urg" if urg else ""}{" nova" if nova else ""}" data-cat="{c}" data-sub="{e(sub)}"{oculto}>'
                   f'<div class="cm-cab"><b>{e(titulo_msg(m))}</b>{tag_nova}{tag_urg}<span class="sub cm-hora">{e(m["horario"] or m["visto"])}</span></div>'
-                  f'<div class="cm-txt">{destacar(e(m["texto"]))}</div></div>')
+                  f'<div class="cm-txt">{destacar(e(m["texto"]))}</div>{html_explicar(m["texto"], g)}</div>')
     return (f'<div class="cv-cab" data-proc="{e(cp)}"><div><div class="cv-num">{e(g["processo"])} {selo_plat(g["plat"])}</div>'
             f'<div><b>Órgão:</b> {e(g["promotor"])}</div><div class="sub"><b>Empresa:</b> {e(g["nome"])} · '
             f'<b>Situação:</b> <span class="cv-sit">{e(situacao_proc(g["eid"], g["processo"], g["promotor"]) or "—")}</span>'
@@ -2398,8 +3037,8 @@ def pg_mensagens(q):
         f'<tr class="{"nova" if m["nova"] and m["visto"].startswith(datetime.now().strftime("%d/%m/%Y")) else ""}">'
         f'<td>{e(m["emp"])}</td><td><b>{e(m["processo"])}</b><div class="sub ocultar">{e(m["promotor"])}</div></td>'
         f'<td class="ocultar">{e(m["escopo"])}</td><td>{e(m["horario"])}</td><td class="ocultar">{e(m["autor"])}</td>'
-        f'<td class="txt">{urg_tag(m)}{e(m["texto"])}</td></tr>' for m in msgs)
-    corpo = f"""<h2>Mensagens</h2><form class="linha" method="get">
+        f'<td class="txt">{urg_tag(m)}{e(m["texto"])}{html_explicar(m["texto"])}</td></tr>' for m in msgs)
+    corpo = ESTILO_INI + f"""<h2>Mensagens</h2><form class="linha" method="get">
 <select name="empresa"><option value="">Todas as empresas</option>{ops}</select>
 <input name="q" value="{e(busca)}" placeholder="Buscar texto, processo, autor…">
 <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" name="novas" value="1" {"checked" if so_novas else ""}> só novas</label>
@@ -4473,6 +5112,7 @@ def kanban_ciclo():
         try:
             pausar_testes_vencidos()
             avisos_planos()
+            evolucao_semanal()
         except Exception as ex:  # noqa: BLE001
             print("Erro ao pausar testes vencidos:", ex, flush=True)
         for lg in list(usuarios.carregar()):
@@ -7296,11 +7936,15 @@ def pg_oportunidades(q, aviso=""):
         lista = [r for r in lista if r.get("nivel") == "alto"]
     elif filtro == "boas":
         lista = [r for r in lista if r.get("nivel") in ("alto", "medio")]
+    elif filtro == "iniciante":
+        lista = [r for r in lista if iniciante.pontos_iniciante(r, r.get("_km"))[0] >= 3]
     if emp_f:
         lista = [r for r in lista if emp_f in r.get("empresas", [])]
     lista.sort(key=lambda r: (r.get("achada_em", "")[:10] == hoje, r.get("pontos", 0), r.get("publicada", "")), reverse=True)
     if raio and ponto_base:
         lista.sort(key=lambda r: r.get("_km") or 0)
+    if filtro == "iniciante":
+        lista.sort(key=lambda r: -iniciante.pontos_iniciante(r, r.get("_km"))[0])
     trecho = lista   # todas; a tela mostra de 60 em 60 ("Mostrar mais")
 
     def link(**k):
@@ -7314,6 +7958,7 @@ def pg_oportunidades(q, aviso=""):
     abas = "".join(
         f'<a class="btn {"" if filtro == k else "sec"}" href="{link(f=k, pagina="")}">{rot} ({n})</a>'
         for k, rot, n in (("boas", "Alto + médio", n_boas), ("alto", "🎯 Encaixe alto", n_alto), ("novas", "🆕 Novas hoje", n_novas),
+                          ("iniciante", "🌱 Bom para começar", sum(1 for r in todas if iniciante.pontos_iniciante(r, r.get("_km"))[0] >= 3)),
                           ("todas", "Todas", len(todas)), ("descartadas", "Descartadas", len(descartadas))))
     nomes = sorted(d.get("perfis", {}))
     sel_emp = ""
@@ -7359,6 +8004,8 @@ def pg_oportunidades(q, aviso=""):
         acao_desc = (botao(f"/oportunidades/{r['id']}/voltar", "Restaurar", "sec") if r.get("descartado")
                      else botao(f"/oportunidades/{r['id']}/descartar", "Descartar", "sec"))
         origem = r.get("origem") or ""
+        p_ini, m_ini = iniciante.pontos_iniciante(r, r.get("_km"))
+        selo_ini = (f'<div class="sub" style="margin-top:4px;color:#2e7d32">🌱 <b>Bom para começar:</b> {e(", ".join(m_ini))}</div>' if p_ini >= 3 else "")
         cards += f"""<div class="card{' lote-oculto' if n_card >= LOTE_CARDS else ''}" data-lid="{e(str(r.get('id') or ''))}" style="border-left-color:{cor}">
 <div class="sub"><b style="color:{cor}">{rot}</b> · {r.get('pontos', 0)} pts {'<span class="tag-nova">NOVA</span>' if nova else ''}
 · {e(r.get('modalidade') or '')} · {e(r.get('titulo') or '')}</div>
@@ -7367,7 +8014,7 @@ def pg_oportunidades(q, aviso=""):
 {f" · 📍 <b>{round(r['_km'])} km</b> de {e(base)}" if r.get('_km') is not None else ''}</div>
 <p style="margin:8px 0;font-size:14px">{e(r.get('objeto') or '')}</p>
 <div class="sub">Combina com: <b>{e(', '.join(r.get('termos') or []))}</b>{(' · ' + e(r['motivo'])) if r.get('motivo') else ''}</div>
-<div class="sub">Perfil de: {e(', '.join(r.get('empresas') or []))}</div>{selo_chance}
+<div class="sub">Perfil de: {e(', '.join(r.get('empresas') or []))}</div>{selo_chance}{selo_ini}
 <div class="sub" style="margin-top:4px">Valor estimado: <b>{e(buscas.moeda(r.get('valor')))}</b>
 {f" · Propostas até: <b>{e(buscas.data_br(r.get('fim')))}</b>" if r.get('fim') else ''}</div>
 <div class="acoes"><a class="btn" target="_blank" rel="noopener" href="{e(r.get('link') or '')}">Ver edital (PNCP)</a>
@@ -7538,6 +8185,7 @@ def pg_analise(ch, q=None):
              botao(f"/analise/{ch}/telegram", "📨 Enviar no Telegram", "sec") +
              '<button class="sec" onclick="window.print()">Imprimir / PDF</button></div>'
              + (f'<div class="msg">Pedido adicional usado: {e(d["extra"])}</div>' if d.get("extra") else "") +
+             html_simples(ch, d) +
              f'<div class="analise">{analise.md_html(d.get("md", ""))}</div>'
              f'<p class="sub">Gerado em {e(d.get("fim", ""))} por {e(d.get("modelo", ""))} {custo_uso(d.get("custo"))} · Arquivos lidos: {e(arqs) or "—"}<br>'
              '⚠️ A IA pode errar ou deixar algo de fora. Confira sempre no edital antes de enviar documentos e proposta.</p>'
@@ -8550,6 +9198,30 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_teste_encerrado())
             if p == "/conta-bloqueada":
                 return self.enviar(pg_conta_bloqueada())
+            if p == "/iniciante":
+                return self.enviar(pg_iniciante())
+            if p == "/pronto":
+                return self.enviar(pg_pronto(AVISOS.get(q.get("ok", ""), "")))
+            if p == "/trilha":
+                return self.enviar(pg_trilha())
+            if p == "/simulador":
+                return self.enviar(pg_simulador())
+            if p == "/modelos":
+                return self.enviar(pg_modelos(q))
+            if p in ("/modelos/ver", "/modelos/docx"):
+                nome_m, ctx_m, _ = ctx_modelo(q)
+                mod_m = next((m for m in iniciante.MODELOS if m[0] == q.get("modelo") and m[3] == "doc"), None)
+                if not mod_m:
+                    return self.redirecionar("/modelos")
+                ctx_m["_empresa"] = nome_m
+                docs_m = blocos_modelo(mod_m[1], mod_m[4], ctx_m)
+                if p == "/modelos/docx":
+                    return self.baixar(documentos.docx(docs_m, ctx_m, logo_img(ctx_m)), f"{mod_m[0]}.docx",
+                                       "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                return self.enviar(folhas_html(mod_m[1], documentos.html(docs_m, ctx_m, logo_url(ctx_m)),
+                                               "/modelos/docx?" + urllib.parse.urlencode(q), ctx_m))
+            if p == "/evolucao":
+                return self.enviar(pg_evolucao(AVISOS.get(q.get("ok", ""), "")))
             if p == "/avisos":
                 return self.enviar(pg_avisos(q))
             if p == "/bem-vindo":
@@ -9210,6 +9882,33 @@ class Painel(BaseHTTPRequestHandler):
                 else:
                     analise.salvar_config_ia(f.get("instrucoes", ""), f.get("empresa", ""), login_atual())
                 return self.redirecionar("/editais?ok=ia")
+            m = re.fullmatch(r"/analise/([\w-]{3,60})/simples", p)
+            if m and analise.ler(m.group(1)) and ve_analise(analise.ler(m.group(1))):
+                ch = m.group(1)
+                d_s = analise.ler(ch)
+                if (d_s.get("simples") or {}).get("status") != "gerando" and d_s.get("md"):
+                    d_s["simples"] = {"status": "gerando", "inicio": datetime.now().strftime("%d/%m/%Y %H:%M")}
+                    analise.gravar(ch, d_s)
+                    threading.Thread(target=rodar_simples, args=(ch, cfg_ia(), login_atual()), daemon=True).start()
+                return self.redirecionar(f"/analise/{ch}#simples")
+            if p == "/pronto/salvar":
+                usuarios.salvar_cfg(login_atual(), {"pronto": {k: f.get(k, "") for k, *_ in iniciante.PRONTO if f.get(k, "") in ("sim", "nao", "")}})
+                return self.redirecionar("/pronto?ok=feito")
+            m = re.fullmatch(r"/trilha/([a-z]{3,12})/(feito|desfazer)", p)
+            if m and any(k == m.group(1) for k, *_ in iniciante.TRILHA):
+                tr = dict(usuarios.cfg(login_atual()).get("trilha") or {})
+                tr[m.group(1)] = m.group(2) == "feito"
+                usuarios.salvar_cfg(login_atual(), {"trilha": tr})
+                return self.redirecionar("/trilha")
+            if p == "/simulador/fim":
+                uc_s = usuarios.cfg(login_atual())
+                usuarios.salvar_cfg(login_atual(), {"sim_feitos": int(uc_s.get("sim_feitos") or 0) + 1,
+                                                    "sim_ultimo": {"pos": re.sub(r"\D", "", f.get("pos", ""))[:2], "margem": f.get("margem", "")[:8],
+                                                                   "quando": datetime.now().strftime("%d/%m/%Y %H:%M")}})
+                return self.enviar("ok")
+            if p == "/evolucao/pref":
+                usuarios.salvar_cfg(login_atual(), {"evolucao_semanal": f.get("ligado") == "1"})
+                return self.redirecionar("/evolucao?ok=feito")
             m = re.fullmatch(r"/analise/([\w-]{3,60})/habilitacao", p)
             if m and analise.ler(m.group(1)):
                 ch = m.group(1)

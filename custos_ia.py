@@ -25,6 +25,7 @@ RECURSOS = {
     "pergunta": ("💬 Pergunte ao Licitatudo (por pergunta)", 0.20),
     "atestado_ler": ("📜 Atestado: ler os dados do arquivo", 0.05),
     "atestados": ("📜 Atestados que atendem o edital", 0.30),
+    "simples": ("🌱 Edital explicado para iniciante", 0.10),
 }
 
 
