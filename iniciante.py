@@ -102,6 +102,7 @@ TRILHA = [
      "O edital diz o que será comprado, os documentos exigidos, prazos de entrega e pagamento e o que pode desclassificar. Leia com atenção o termo de referência.",
      ["Use “Analisar edital (IA)” e depois “🌱 Explicar para iniciante”: você recebe o resumo em linguagem simples e um semáforo de vale a pena.",
       "Anote o prazo para pedir esclarecimento (3 dias úteis antes da abertura).",
+      "Se o órgão publicou o ETP (Estudo Técnico Preliminar), use “📘 Explicar o ETP”: ele mostra como chegaram ao preço e às quantidades.",
       "Dúvida? Pergunte ao órgão por esclarecimento – é seu direito e é de graça."],
      [("🤖 Editais (IA)", "/editais"), ("⚖️ Prazos", "/prazos")],
      "Procure no edital: amostra, visita técnica, atestado e prazo de entrega. São as maiores armadilhas."),

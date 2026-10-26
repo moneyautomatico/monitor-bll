@@ -58,7 +58,11 @@ def diferencas(antes, agora):
     out = []
     novos = [t for k, t in agora["arquivos"].items() if k not in (antes.get("arquivos") or {})]
     for t in novos[:6]:
-        out.append(f"📄 Documento novo: {html.escape(t)}")
+        n = buscas.norm(t).replace("_", " ")
+        if re.search(r"estudos? tecnicos? preliminar|\betp\b", n):
+            out.append(f"📘 ETP publicado: {html.escape(t)} – veja como o órgão chegou ao preço (Editais IA → 📘 Explicar o ETP)")
+        else:
+            out.append(f"📄 Documento novo: {html.escape(t)}")
     removidos = [t for k, t in (antes.get("arquivos") or {}).items() if k not in agora["arquivos"]]
     for t in removidos[:3]:
         out.append(f"🗑 Documento retirado: {html.escape(t)}")

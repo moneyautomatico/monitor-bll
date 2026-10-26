@@ -201,6 +201,7 @@ def historico(ids_empresa, processo, promotor, limite=60000):
 
 
 # ------------------------------------------------------------------ execução
+QUEM_ETP = lambda chave: ""   # noqa: E731 – o painel troca pelo resumo do ETP explicado
 QUEM = lambda: ""   # noqa: E731 – o painel troca por "login de quem pediu"
 
 
@@ -271,7 +272,11 @@ def _rodar(pid, cfg, pedido):
                      f"DADOS DA EMPRESA E DO PROCESSO:\n{_qualificacao(ctx)}\n\n"
                      f"PONTOS QUE A EMPRESA QUER DEFENDER/PEDIR (prioridade máxima):\n{pedido.get('pontos') or '(não informados – use os fatos do histórico)'}\n\n"
                      f"HISTÓRICO REGISTRADO PELO MONITOR NA PLATAFORMA:\n{hist}\n\n"
-                     "Os arquivos anexados acima são o edital e/ou documentos enviados pela empresa (ex.: recurso do "
+                     + (f"{QUEM_ETP(pedido.get('edital', ''))}\n\n" if pedido["tipo"] in ("impugnacao", "esclarecimento") and QUEM_ETP(pedido.get("edital", "")) else "")
+                     + ("Se houver um Estudo Técnico Preliminar (ETP) entre os arquivos ou no resumo acima, compare-o com o edital: exigências "
+                        "sem justificativa no ETP, quantidades ou preços incoerentes e contradições entre ETP e edital são argumentos fortes – "
+                        "cite o trecho/item de cada documento.\n\n" if pedido["tipo"] in ("impugnacao", "esclarecimento") else "")
+                     + "Os arquivos anexados acima são o edital e/ou documentos enviados pela empresa (ex.: recurso do "
                      "concorrente, ata, pedido de diligência). Redija agora a peça completa.")
             if not partes:
                 partes = [("txt", "observação", "Nenhum arquivo do edital foi enviado; use apenas o histórico e os pontos.")]

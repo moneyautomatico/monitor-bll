@@ -220,6 +220,10 @@ SECOES = [
 ]
 
 FAQ = [
+    ("O que é o ETP e como ele me ajuda?",
+     "ETP é o Estudo Técnico Preliminar que o órgão faz antes do edital (Lei 14.133, art. 18). Na análise do edital, use “📘 Explicar o ETP”: "
+     "o sistema mostra como o órgão chegou ao preço (e se parece defasado), as quantidades, as contradições com o edital e já monta os pontos "
+     "para pedir esclarecimento ou impugnar. Se o ETP não estiver no PNCP, peça ao órgão e envie o PDF ali mesmo."),
     ("Nunca participei de licitação. Por onde começo?",
      "Abra 🎓 Aprender → Central do iniciante: faça a checagem “Estou pronto?”, siga a trilha de 7 passos e treine no simulador antes da primeira disputa."),
     ("O sistema dá lance, envia mensagem ou documentos na plataforma?",

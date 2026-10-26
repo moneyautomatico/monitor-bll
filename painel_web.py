@@ -178,6 +178,7 @@ def login_atual():
 
 analise.QUEM = login_atual
 pecas.QUEM = login_atual
+pecas.QUEM_ETP = lambda ch: etp_texto_para_peca(ch) if ch else ""
 
 
 def visivel(nomes, criador=None):
@@ -1420,6 +1421,7 @@ background:var(--card);margin-bottom:8px}}.avl li.novo{{border-left:4px solid va
 
 
 GLOSSARIO = {
+    "ETP": "Estudo Técnico Preliminar: estudo que o órgão faz antes do edital (Lei 14.133, art. 18) – necessidade, solução, quantidades e como estimou o preço.",
     "empate ficto": "Direito da ME/EPP de cobrir o melhor lance quando ficou até 5% acima dele no pregão (LC 123, arts. 44 e 45).",
     "carona": "Adesão à ata por um órgão que não participou da licitação – limites do art. 86 da Lei 14.133.",
     "adesão": "Uso da ata de registro de preço por outro órgão (carona). O fornecedor pode aceitar ou recusar.",
@@ -2610,6 +2612,130 @@ def evolucao_semanal():
             print("Erro na evolução semanal de", lg, ex, flush=True)
         finally:
             _REQ.user = None
+
+
+# ------------------------------------------------------------------ ETP (Estudo Técnico Preliminar) para o licitante
+def etp_partes(ch, d):
+    """Arquivos do ETP desta análise: (partes, nomes). PNCP: baixa só o ETP; envio próprio: arquivos com 'ETP' no nome."""
+    o = d.get("origem") or {}
+    partes, nomes = [], []
+    if o.get("tipo") == "pncp":
+        try:
+            partes, nomes = analise.arquivos_pncp(o["cnpj"], o["ano"], o["seq"], so_etp=True)
+        except Exception:  # noqa: BLE001
+            partes, nomes = [], []
+    pasta = analise.DIR / ch
+    for f in sorted(pasta.glob("*")) if pasta.is_dir() else []:
+        if analise.eh_etp(f.name) and f.name not in nomes:
+            partes += analise.preparar(f.name, f.read_bytes())
+            nomes.append(f.name)
+    return partes, nomes
+
+
+def rodar_etp(ch, cfg, usuario):
+    try:
+        d = analise.ler(ch) or {}
+        api = cfg.get("GEMINI_API_KEY", "")
+        if not api:
+            raise RuntimeError("Falta a chave do Gemini. Cadastre em Configurações → Inteligência artificial.")
+        partes, nomes = etp_partes(ch, d)
+        if not partes:
+            raise RuntimeError("Não achei o arquivo do ETP. Envie o PDF do ETP no campo abaixo.")
+        if d.get("md"):
+            partes = partes + [("texto", "resumo_da_analise_do_edital.md", d["md"])]
+        custos_ia.contexto("etp", "", d.get("titulo", ""), usuario)
+        txt, modelo, _ = analise.gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes, analise.PROMPT_ETP, prazo=300)
+        res = analise.ler_json_etp(txt)
+        if not (res.get("necessidade") or res.get("solucao")):
+            raise RuntimeError("A IA não devolveu a explicação do ETP no formato esperado. Tente de novo.")
+        novo = {"status": "pronto", "resultado": res, "arquivos": nomes, "custo": custos_ia.ultimo(), "modelo": modelo,
+                "fim": datetime.now().strftime("%d/%m/%Y %H:%M")}
+    except Exception as ex:  # noqa: BLE001
+        novo = {"status": "erro", "erro": str(ex)[:500], "fim": datetime.now().strftime("%d/%m/%Y %H:%M")}
+    d = analise.ler(ch) or {}
+    d["etp_exp"] = novo
+    analise.gravar(ch, d)
+
+
+def etp_lista_html(d, ch):
+    links = []
+    for x in d.get("etp") or []:
+        if x.get("url"):
+            links.append(f'<a href="{e(x["url"])}" target="_blank" rel="noopener">📘 {e(x.get("titulo") or "ETP")}</a>')
+        else:
+            links.append(f'📘 {e(x.get("titulo") or "ETP")}')
+    pasta = analise.DIR / ch
+    for f in sorted(pasta.glob("*")) if pasta.is_dir() else []:
+        if analise.eh_etp(f.name) and not any(f.name == (x.get("arquivo") or "") for x in d.get("etp") or []):
+            links.append(f"📘 {e(f.name)} <small class=sub>(enviado por você)</small>")
+    return links
+
+
+def html_etp(ch, d):
+    x = d.get("etp_exp") or {}
+    links = etp_lista_html(d, ch)
+    cab = ('<h2 id="etp" style="margin-top:6px">📘 ETP – Estudo Técnico Preliminar</h2>'
+           '<p class="sub">O ETP é o estudo que o órgão faz <b>antes</b> do edital (Lei 14.133, art. 18): mostra a necessidade, a solução escolhida, '
+           'as quantidades e <b>como chegou ao preço estimado</b>. Para quem vende, é ótimo para checar se o preço é real, achar exigências sem justificativa '
+           'e embasar esclarecimento ou impugnação.</p>')
+    envio = (f'<form method="post" action="/analise/{ch}/etp" enctype="multipart/form-data" class="linha" style="gap:8px;align-items:center;flex-wrap:wrap">'
+             f'<input type="hidden" name="csrf" value="{CSRF}"><input type="file" name="arquivo" accept=".pdf,.docx,.zip" style="max-width:320px">'
+             f'<button class="sec">📤 Enviar o PDF do ETP e explicar</button></form>')
+    botao_x = (f'<form method="post" action="/analise/{ch}/etp" enctype="multipart/form-data" style="display:inline">'
+               f'<input type="hidden" name="csrf" value="{CSRF}"><button{" class=sec" if x else ""}>📘 {"Explicar de novo" if x else "Explicar o ETP (IA)"}</button></form>')
+    if not links and not x:
+        return (ESTILO_INI + cab + '<div class="msg">Não encontramos o ETP publicado junto com este edital. Ele é um documento do processo: '
+                'você pode pedir ao órgão (pelo e-mail do pregoeiro ou pela Lei de Acesso à Informação) e enviar o PDF aqui.</div>' + aviso_custo("etp") + envio)
+    lista = ("<p>Encontrado: " + " · ".join(links) + "</p>") if links else ""
+    if not x:
+        return ESTILO_INI + cab + lista + aviso_custo("etp") + f'<div class="acoes">{botao_x}</div><details class="sub"><summary>Tem outro arquivo do ETP?</summary>{envio}</details>'
+    if x.get("status") == "gerando":
+        return ESTILO_INI + cab + lista + '<div class="msg">📘 Lendo o ETP… (1 a 3 minutos)</div><script>setTimeout(()=>location.reload(),8000)</script>'
+    if x.get("status") == "erro":
+        return ESTILO_INI + cab + lista + f'<div class="msg erro">{e(x.get("erro", ""))}</div><div class="acoes">{botao_x}</div>{envio}'
+    r = x.get("resultado") or {}
+    est = r.get("estimativa") or {}
+    av = iniciante.norm(est.get("avaliacao"))
+    cor_av = "vermelho" if "defasad" in av else ("verde" if av.startswith("atual") else "amarelo")
+    li = lambda xs: "".join(f"<li>{e(v)}</li>" for v in xs) or "<li class=sub>não informado</li>"   # noqa: E731
+    contr = "".join(f'<tr><td>{e(c.get("item") or "—")}</td><td>{e(c.get("etp", ""))}</td><td>{e(c.get("edital", ""))}</td></tr>' for c in r.get("contradicoes", []))
+    ch_edital = urllib.parse.quote(ch)
+    pontos_e = "\n".join("- " + p for p in r.get("pontos_esclarecimento", []))
+    pontos_i = "\n".join("- " + p for p in r.get("pontos_impugnacao", []) + [f"Contradição: ETP diz '{c.get('etp', '')}' e o edital exige '{c.get('edital', '')}' (item {c.get('item') or '?'})" for c in r.get("contradicoes", [])])
+    bt_pecas = ""
+    if pontos_e:
+        bt_pecas += f'<a class="btn sec" href="/pecas?{e(urllib.parse.urlencode({"tipo": "esclarecimento", "edital": ch, "pontos": pontos_e[:2500]}))}">⚖️ Rascunhar esclarecimento com esses pontos</a>'
+    if pontos_i.strip():
+        bt_pecas += f'<a class="btn sec" href="/pecas?{e(urllib.parse.urlencode({"tipo": "impugnacao", "edital": ch, "pontos": pontos_i[:2500]}))}">⚖️ Rascunhar impugnação com esses pontos</a>'
+    return f"""{ESTILO_INI}{cab}{lista}
+<div class="semaforo {cor_av}"><h3>💰 Como o órgão chegou ao preço</h3>
+<p><b>Valor estimado:</b> {e(est.get("valor") or "não informado")} · <b>Método:</b> {e(est.get("metodo") or "não informado")}
+· <b>Data das pesquisas:</b> {e(est.get("data_referencia") or "não informado")}</p>
+<p><b>Avaliação:</b> {e(est.get("avaliacao") or "não dá para saber")}{(" – " + e(est["motivo"])) if est.get("motivo") else ""}</p>
+{("<p class=sub>Fontes: " + e(", ".join(est.get("fontes") or [])) + "</p>") if est.get("fontes") else ""}
+<p class="sub">Preço defasado (pesquisa antiga, poucas cotações) é argumento para pedir esclarecimento – e um sinal para conferir se o valor cobre seu custo.</p></div>
+<div class="exp-g"><div><b>Necessidade do órgão</b>{e(r.get("necessidade", ""))}</div><div><b>Solução escolhida</b>{e(r.get("solucao", ""))}</div>
+<div><b>Quantidades</b>{e(r.get("quantidades", ""))}</div><div><b>Alternativas descartadas</b><ul>{li(r.get("alternativas", []))}</ul></div></div>
+<div class="exp-g" style="margin-top:10px"><div><b>📋 Requisitos importantes</b><ul>{li(r.get("requisitos", []))}</ul></div>
+<div><b>⚠️ Riscos apontados</b><ul>{li(r.get("riscos", []))}</ul></div><div><b>💡 Dicas para você</b><ul>{li(r.get("dicas", []))}</ul></div></div>
+{('<h3>🔎 ETP x edital – pontos que não batem</h3><table><tr><th>Item</th><th>O ETP diz</th><th>O edital exige</th></tr>' + contr + '</table>') if contr else ''}
+<div class="exp-g" style="margin-top:10px"><div><b>❓ Perguntas para esclarecimento</b><ul>{li(r.get("pontos_esclarecimento", []))}</ul></div>
+<div><b>⚖️ Possíveis pontos de impugnação</b><ul>{li(r.get("pontos_impugnacao", []))}</ul></div></div>
+<div class="acoes">{bt_pecas}<a class="btn sec" href="/prazos">⚖️ Até quando posso pedir?</a></div>
+<p class="sub">Gerado em {e(x.get("fim", ""))} {custo_uso(x.get("custo"))} · arquivos: {e(", ".join(x.get("arquivos") or []))} · ⚠️ feito por IA – confira no ETP. Esclarecimento e impugnação vão até 3 dias úteis antes da abertura.</p>
+<div class="acoes">{botao_x}</div><details class="sub"><summary>Enviar outro arquivo do ETP</summary>{envio}</details><hr style="margin:22px 0">"""
+
+
+def etp_texto_para_peca(chave):
+    """Resumo do ETP explicado para a IA das peças (esclarecimento/impugnação)."""
+    r = ((analise.ler(chave) or {}).get("etp_exp") or {}).get("resultado") or {}
+    if not r:
+        return ""
+    est = r.get("estimativa") or {}
+    linhas = [f"Necessidade: {r.get('necessidade', '')}", f"Solução escolhida: {r.get('solucao', '')}",
+              f"Estimativa de preço: {est.get('valor', '')} – método: {est.get('metodo', '')} – data: {est.get('data_referencia', '')} – avaliação: {est.get('avaliacao', '')} {est.get('motivo', '')}"]
+    linhas += [f"Contradição ETP x edital (item {c.get('item') or '?'}): ETP: {c.get('etp', '')} | Edital: {c.get('edital', '')}" for c in r.get("contradicoes", [])]
+    return "RESUMO DO ESTUDO TÉCNICO PRELIMINAR (ETP) DESTA LICITAÇÃO:\n" + "\n".join(linhas)
 
 
 def urg_tag(m):
@@ -5141,12 +5267,16 @@ def html_vigia(card):
     chec = datetime.fromtimestamp(float(card["pncp_checado"])).strftime("%d/%m/%Y %H:%M") if card.get("pncp_checado") else ""
     snap = card.get("pncp_snap") or {}
     docs = "".join(f"<li>{e(t)}</li>" for t in list((snap.get("arquivos") or {}).values())[:15])
+    etps = [(k, t) for k, t in (snap.get("arquivos") or {}).items() if analise.eh_etp(t)] if ref else []
+    etp_html = ("<p>📘 <b>ETP publicado:</b> " + " · ".join(
+        f'<a href="https://pncp.gov.br/pncp-api/v1/orgaos/{ref[0]}/compras/{ref[1]}/{ref[2]}/arquivos/{e(k)}" target="_blank" rel="noopener">{e(t[:80])}</a>'
+        for k, t in etps if k.isdigit()) + ' <span class="sub">– analise o edital (IA) e use “📘 Explicar o ETP” para ver como chegaram ao preço.</span></p>') if etps else ""
     return f"""<div class="form" style="max-width:none;margin-top:12px" id="vigia"><h3 style="margin-top:0">📝 Edital no PNCP – aviso de alteração</h3>
 {(f'<p class="sub">Acompanhando <a href="https://pncp.gov.br/app/editais/{ref[0]}/{ref[1]}/{ref[2]}" target="_blank" rel="noopener">o edital no PNCP</a> a cada 3 horas'
   f'{" · última conferência " + chec if chec else ""}{" · situação: " + e(snap["situacao"]) if snap.get("situacao") else ""}. '
   'Documento novo (errata, adendo, esclarecimento), mudança de data ou de situação chegam no seu Telegram e a data da abertura é atualizada aqui.</p>')
  if ref else '<p class="sub">Cole o link do edital no PNCP para o sistema avisar quando sair errata, adendo, esclarecimento ou mudança de data.</p>'}
-{f'<details><summary class="sub" style="cursor:pointer">documentos publicados ({len(snap.get("arquivos") or {})})</summary><ul>{docs}</ul></details>' if docs else ''}
+{etp_html}{f'<details><summary class="sub" style="cursor:pointer">documentos publicados ({len(snap.get("arquivos") or {})})</summary><ul>{docs}</ul></details>' if docs else ''}
 {f'<h4 style="margin:10px 0 4px">Alterações percebidas</h4><ul>{alts}</ul>' if alts else ''}
 <form method="post" action="/licitacoes/{cid}/pncp" class="linha" style="gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px"><input type="hidden" name="csrf" value="{CSRF}">
 <input class="campo" name="pncp_link" value="{e(card.get("pncp_link") or (card.get("link") if edital_vigia.ref_do_link(card.get("link")) else "") or "")}"
@@ -6244,7 +6374,7 @@ protocolar – a IA marca com [CONFERIR] o que não encontrou. O sistema não en
 <label>Documentos de apoio <small>(opcional: recurso do concorrente, ata, pedido de diligência, planilha de custos, o PDF do edital… até 18 MB)</small></label>
 <input type="file" name="arquivo" multiple accept=".pdf,.docx,.zip,.txt">
 <label>O que você quer defender ou pedir <small>(quanto mais claro, melhor a peça)</small></label>
-<textarea class="campo" name="pontos" rows="5" style="max-width:100%" placeholder="ex.: A LUCINEIDE (1ª no L3) apresentou atestado que não comprova a quantidade mínima do item 9.4.2; pedir a inabilitação dela e a convocação da VC (2ª)."></textarea>
+<textarea class="campo" name="pontos" rows="5" style="max-width:100%" placeholder="ex.: A LUCINEIDE (1ª no L3) apresentou atestado que não comprova a quantidade mínima do item 9.4.2; pedir a inabilitação dela e a convocação da VC (2ª).">{e(q.get("pontos", "")[:3000])}</textarea>
 <div class="acoes"><button {"disabled" if falta else ""}>🤖 Gerar rascunho</button></div></form></div>
 <h2 style="margin-top:22px">Peças geradas</h2>
 <table><tr><th>Peça</th><th>Situação</th><th class="ocultar">Quando</th></tr>{linhas or '<tr><td colspan="3">Nenhuma ainda.</td></tr>'}</table>
@@ -8280,7 +8410,7 @@ def pg_analise(ch, q=None):
              botao(f"/analise/{ch}/telegram", "📨 Enviar no Telegram", "sec") +
              '<button class="sec" onclick="window.print()">Imprimir / PDF</button></div>'
              + (f'<div class="msg">Pedido adicional usado: {e(d["extra"])}</div>' if d.get("extra") else "") +
-             html_simples(ch, d) +
+             html_simples(ch, d) + html_etp(ch, d) +
              f'<div class="analise">{analise.md_html(d.get("md", ""))}</div>'
              f'<p class="sub">Gerado em {e(d.get("fim", ""))} por {e(d.get("modelo", ""))} {custo_uso(d.get("custo"))} · Arquivos lidos: {e(arqs) or "—"}<br>'
              '⚠️ A IA pode errar ou deixar algo de fora. Confira sempre no edital antes de enviar documentos e proposta.</p>'
@@ -9787,6 +9917,32 @@ class Painel(BaseHTTPRequestHandler):
             self.auditar("proposta: leitura dos itens com IA", pid)
             threading.Thread(target=ler_itens_ia, args=(pid, cfg_ia(), partes, login_atual()), daemon=True).start()
             return self.redirecionar(f"/propostas/{pid}")
+        m_etp = re.fullmatch(r"/analise/([\w-]{3,60})/etp", urllib.parse.urlparse(self.path).path.rstrip("/"))
+        if m_etp:
+            if tam > 25 * 1024 * 1024:
+                return self.enviar(pagina("Erro", "<h2>Arquivo grande demais (máx. 25 MB)</h2>"), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido(urllib.parse.urlparse(self.path).path.rstrip("/"), campos):
+                return
+            ch = m_etp.group(1)
+            d_e = analise.ler(ch)
+            if not d_e or not ve_analise(d_e):
+                return self.redirecionar("/editais")
+            arqs = [(n, b) for n, b in arqs if b]
+            if arqs:
+                pasta = analise.DIR / ch
+                pasta.mkdir(parents=True, exist_ok=True)
+                for nome, dados in arqs[:3]:   # guardado com "ETP" no nome para ser reconhecido depois
+                    nome_s = re.sub(r"[^\w.\- ]", "_", nome)[:110]
+                    (pasta / (nome_s if analise.eh_etp(nome_s) else "ETP_" + nome_s)).write_bytes(dados)
+            if (d_e.get("etp_exp") or {}).get("status") != "gerando":
+                d_e["etp_exp"] = {"status": "gerando", "inicio": datetime.now().strftime("%d/%m/%Y %H:%M")}
+                analise.gravar(ch, d_e)
+                self.auditar("ETP explicado (IA)", ch)
+                threading.Thread(target=rodar_etp, args=(ch, cfg_ia(), login_atual()), daemon=True).start()
+            return self.redirecionar(f"/analise/{ch}#etp")
         if self.path.rstrip("/") == "/analise/upload":
             if tam > 40 * 1024 * 1024:
                 return self.enviar(pg_editais("Arquivos grandes demais (máx. 40 MB).", True), 413)

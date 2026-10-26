@@ -243,21 +243,45 @@ def preparar(nome, dados):
     return []
 
 
-def arquivos_pncp(cnpj, ano, seq):
-    """Baixa os documentos da licitação no PNCP, edital e termo de referência primeiro."""
+RE_ETP = re.compile(r"estudos? tecnicos? preliminar|\betp\b|estudo preliminar")
+
+
+def eh_etp(texto):
+    """Nome/título de documento que é o Estudo Técnico Preliminar."""
+    return bool(RE_ETP.search(buscas.norm(texto or "").replace("_", " ").replace("-", " ")))
+
+
+def url_arquivo_pncp(cnpj, ano, seq, a):
+    return a.get("url") or a.get("uri") or (f"https://pncp.gov.br/pncp-api/v1/orgaos/{cnpj}/compras/{ano}/{seq}"
+                                            f"/arquivos/{a.get('sequencialDocumento')}")
+
+
+def etps_pncp(cnpj, ano, seq, lista=None):
+    """ETPs publicados no PNCP: [{"titulo", "url"}]."""
+    if lista is None:
+        lista = buscas._get(f"https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{seq}/arquivos") or []
+    return [{"titulo": f"{a.get('tipoDocumentoNome') or ''}: {a.get('titulo') or ''}".strip(": ")[:160], "url": url_arquivo_pncp(cnpj, ano, seq, a)}
+            for a in lista if a.get("statusAtivo", True) and eh_etp(f"{a.get('tipoDocumentoNome', '')} {a.get('titulo', '')}")]
+
+
+def arquivos_pncp(cnpj, ano, seq, so_etp=False):
+    """Baixa os documentos da licitação no PNCP: edital, termo de referência e ETP primeiro (o ETP nunca fica de fora)."""
     lista = buscas._get(f"https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{seq}/arquivos") or []
     def prioridade(a):
         t = buscas.norm(f"{a.get('tipoDocumentoNome', '')} {a.get('titulo', '')}")
-        for i, chave in enumerate(["edital", "termo de referencia", "anexo", "projeto basico", "estudo"]):
+        if eh_etp(t):
+            return 2
+        for i, chave in ((0, "edital"), (1, "termo de referencia"), (3, "anexo"), (4, "projeto basico"), (5, "estudo")):
             if chave in t:
                 return i
         return 9
     lista = [a for a in lista if a.get("statusAtivo", True)]
+    if so_etp:
+        lista = [a for a in lista if eh_etp(f"{a.get('tipoDocumentoNome', '')} {a.get('titulo', '')}")]
     lista.sort(key=prioridade)
     partes, nomes = [], []
     for a in lista[:8]:
-        url = a.get("url") or a.get("uri") or (f"https://pncp.gov.br/pncp-api/v1/orgaos/{cnpj}/compras/{ano}/{seq}"
-                                               f"/arquivos/{a.get('sequencialDocumento')}")
+        url = url_arquivo_pncp(cnpj, ano, seq, a)
         try:
             dados, _, disp = _baixar(url)
         except Exception:  # noqa: BLE001
@@ -375,10 +399,15 @@ def _rodar(chave, cfg, origem):
         if origem["tipo"] == "pncp":
             partes, nomes = arquivos_pncp(origem["cnpj"], origem["ano"], origem["seq"])
             contexto = f"Licitação publicada no PNCP: {origem.get('titulo', '')}"
+            try:
+                base["etp"] = etps_pncp(origem["cnpj"], origem["ano"], origem["seq"])
+            except Exception:  # noqa: BLE001
+                pass
         else:
             partes = [p for nome, dados in origem["arquivos"] for p in preparar(nome, dados)]
             nomes = [n for n, _ in origem["arquivos"]]
             contexto = ""
+            base["etp"] = [{"titulo": n, "arquivo": n} for n in nomes if eh_etp(n)]
         import custos_ia
         custos_ia.contexto("analise", "", origem.get("titulo", ""), origem.get("usuario", ""))
         md, modelo, usados = gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes,
@@ -492,3 +521,46 @@ def md_telegram(md, titulo="", limite=3800):
     if atual.strip():
         msgs.append(atual)
     return msgs
+
+
+# ------------------------------------------------------------------ ETP explicado (para o licitante)
+PROMPT_ETP = """Você ajuda uma EMPRESA LICITANTE (fornecedora) a entender o ESTUDO TÉCNICO PRELIMINAR (ETP) de uma licitação
+(Lei 14.133/2021, art. 18). Os arquivos enviados são o ETP e, quando houver, um resumo da análise do edital.
+Explique em português simples e objetivo. Use SOMENTE o que está nos documentos; se não houver, escreva "não informado".
+Responda SOMENTE com um JSON válido (sem markdown), neste formato:
+{"necessidade": "qual problema/necessidade o órgão quer resolver (1-3 frases)",
+ "solucao": "a solução escolhida e por quê (1-3 frases)",
+ "alternativas": ["outras soluções que o órgão considerou e descartou"],
+ "quantidades": "como chegaram às quantidades (consumo histórico, projeção) – com números se houver",
+ "estimativa": {"valor": "valor estimado total ou 'não informado'", "metodo": "como o preço foi estimado (painel de preços, cotações com fornecedores, contratações anteriores, mídia especializada...)",
+   "fontes": ["fontes citadas"], "data_referencia": "data/mês das pesquisas de preço ou 'não informado'",
+   "avaliacao": "atual|possivelmente defasado|não dá para saber", "motivo": "por que (ex.: pesquisa com mais de 6 meses, poucas cotações, só 1 fonte)"},
+ "requisitos": ["requisitos/especificações importantes da solução, de forma curta"],
+ "riscos": ["riscos que o ETP aponta"],
+ "contradicoes": [{"etp": "o que o ETP diz", "edital": "o que o edital/termo de referência exige diferente", "item": "nº do item ou ''"}],
+ "pontos_esclarecimento": ["perguntas objetivas que o licitante pode fazer ao órgão com base no ETP"],
+ "pontos_impugnacao": ["exigências que parecem restringir a competição ou não têm justificativa no ETP (só se houver base nos documentos)"],
+ "dicas": ["3 a 5 dicas práticas para o licitante usar o ETP (preço, quantidade, entrega, marca...)"]}
+"""
+
+
+def ler_json_etp(txt):
+    m = re.search(r"\{.*\}", txt or "", re.S)
+    if not m:
+        return {}
+    try:
+        d = json.loads(m.group(0))
+    except ValueError:
+        return {}
+    t = lambda v, n=400: str(v or "")[:n]   # noqa: E731
+    li = lambda v, k=8: [t(x, 300) for x in (v if isinstance(v, list) else []) if str(x).strip()][:k]   # noqa: E731
+    est = d.get("estimativa") if isinstance(d.get("estimativa"), dict) else {}
+    contr = [{"etp": t(c.get("etp"), 300), "edital": t(c.get("edital"), 300), "item": t(c.get("item"), 30)}
+             for c in (d.get("contradicoes") or []) if isinstance(c, dict) and (c.get("etp") or c.get("edital"))][:8]
+    return {"necessidade": t(d.get("necessidade"), 600), "solucao": t(d.get("solucao"), 600), "alternativas": li(d.get("alternativas"), 5),
+            "quantidades": t(d.get("quantidades"), 600),
+            "estimativa": {"valor": t(est.get("valor"), 80), "metodo": t(est.get("metodo"), 400), "fontes": li(est.get("fontes"), 6),
+                           "data_referencia": t(est.get("data_referencia"), 60), "avaliacao": t(est.get("avaliacao"), 40), "motivo": t(est.get("motivo"), 300)},
+            "requisitos": li(d.get("requisitos"), 10), "riscos": li(d.get("riscos"), 6), "contradicoes": contr,
+            "pontos_esclarecimento": li(d.get("pontos_esclarecimento"), 8), "pontos_impugnacao": li(d.get("pontos_impugnacao"), 6),
+            "dicas": li(d.get("dicas"), 5)}
