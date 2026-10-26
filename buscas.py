@@ -48,7 +48,7 @@ def termos(txt):
 def _get(url, timeout=25):
     """Tenta urllib (2x) e, se o PNCP fechar a conexão, usa o curl do sistema."""
     ultimo = None
-    for _ in range(2):
+    for _ in range(2 if timeout >= 20 else 1):
         try:
             req = urllib.request.Request(url, headers=UA)
             with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -161,13 +161,29 @@ def ref(it):
     return it.get("orgao_cnpj"), it.get("ano"), it.get("numero_sequencial")
 
 
-def listar_itens(cnpj, ano, seq, maximo=500):
-    out, pag = [], 1
+ITENS_CACHE = {}   # (cnpj, ano, seq) -> (quando, itens)
+
+
+def listar_itens(cnpj, ano, seq, maximo=500, prazo=None):
+    """Itens da compra no PNCP. prazo = segundos no total (None = sem limite); guarda 30 min na memória."""
+    chave = (str(cnpj), str(ano), str(seq))
+    c = ITENS_CACHE.get(chave)
+    if c and time.time() - c[0] < 1800:
+        return c[1]
+    fim = time.time() + prazo if prazo else None
+    out, pag, completo = [], 1, True
     while len(out) < maximo:
+        resta = (fim - time.time()) if fim else 25
+        if resta < 3:
+            completo = False
+            break
         try:
             dados = _get(f"https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{seq}/itens"
-                         f"?pagina={pag}&tamanhoPagina=100")
+                         f"?pagina={pag}&tamanhoPagina=100", timeout=max(3, min(25, int(resta))))
         except Exception:  # noqa: BLE001
+            if pag == 1 and fim:
+                raise
+            completo = False
             break
         if not dados:
             break
@@ -175,6 +191,11 @@ def listar_itens(cnpj, ano, seq, maximo=500):
         if len(dados) < 100:
             break
         pag += 1
+    if out and completo:
+        ITENS_CACHE[chave] = (time.time(), out)
+        if len(ITENS_CACHE) > 300:
+            for k in sorted(ITENS_CACHE, key=lambda k: ITENS_CACHE[k][0])[:100]:
+                ITENS_CACHE.pop(k, None)
     return out
 
 

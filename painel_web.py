@@ -8208,19 +8208,42 @@ def busca_para_qs(b):
             "vmax": b.get("vmax", ""), **({"itens": "1"} if b.get("itens") else {})}
 
 
-def pg_itens(q):
-    cnpj, ano, seq = (re.sub(r"\D", "", q.get(k, "")) for k in ("cnpj", "ano", "seq"))
-    its = buscas.listar_itens(cnpj, ano, seq)
+def tabela_itens(its):
     linhas = "".join(f'<tr><td>{e(str(x.get("numeroItem")))}</td><td class="txt">{e(x.get("descricao") or "")}</td>'
                      f'<td>{e(str(x.get("quantidade") or ""))} {e(x.get("unidadeMedida") or "")}</td>'
                      f'<td>{e(buscas.moeda(x.get("valorUnitarioEstimado")))}</td>'
                      f'<td class="ocultar">{e(x.get("situacaoCompraItemNome") or "")}</td></tr>' for x in its)
+    return (f'<table><tr><th>Nº</th><th>Descrição</th><th>Qtd.</th><th>Valor unit. estimado</th><th class="ocultar">Situação</th></tr>'
+            f'{linhas or "<tr><td colspan=5>O PNCP não tem itens cadastrados para esta licitação – veja no edital.</td></tr>"}</table>')
+
+
+def pg_itens(q):
+    cnpj, ano, seq = (re.sub(r"\D", "", q.get(k, "")) for k in ("cnpj", "ano", "seq"))
+    c = buscas.ITENS_CACHE.get((cnpj, ano, seq))
+    qs = urllib.parse.urlencode({"cnpj": cnpj, "ano": ano, "seq": seq})
+    if c and time.time() - c[0] < 1800:
+        tabela = tabela_itens(c[1])
+    else:   # carrega depois, para a página não ficar presa esperando o PNCP
+        tabela = (f'<div id="itens-pncp" class="msg">⏳ Buscando os itens no PNCP… (o site do governo às vezes demora até 40 segundos)</div>'
+                  f'<script>(function(){{const c=document.getElementById("itens-pncp");function ir(){{c.className="msg";'
+                  f'c.innerHTML="⏳ Buscando os itens no PNCP… (o site do governo às vezes demora até 40 segundos)";'
+                  f'const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),55000);'
+                  f'fetch("/buscar/itens/tabela?{qs}",{{credentials:"same-origin",signal:ctl.signal}}).then(r=>r.text()).then(h=>{{clearTimeout(t);c.className="";c.innerHTML=h;}})'
+                  f'.catch(()=>{{c.className="msg erro";c.innerHTML="O PNCP não respondeu a tempo. <button onclick=\\"window.itensDeNovo()\\">Tentar de novo</button>";}});}}'
+                  f'window.itensDeNovo=ir;ir();}})();</script>')
     corpo = (f'<h2>Itens da licitação</h2><p><a class="btn sec" href="javascript:history.back()">← Voltar</a> '
              f'<a class="btn" target="_blank" rel="noopener" href="https://pncp.gov.br/app/editais/{cnpj}/{ano}/{seq}">Ver edital (PNCP)</a></p>'
-             f'<div style="margin-bottom:12px">{botao_analisar(cnpj, ano, seq, "")}</div>'
-             f'<table><tr><th>Nº</th><th>Descrição</th><th>Qtd.</th><th>Valor unit. estimado</th><th class="ocultar">Situação</th></tr>'
-             f'{linhas or "<tr><td colspan=5>Itens não disponíveis.</td></tr>"}</table>')
+             f'<div style="margin-bottom:12px">{botao_analisar(cnpj, ano, seq, "")}</div>{tabela}')
     return pagina("Itens", corpo, "/buscar")
+
+
+def tabela_itens_pncp(q):
+    cnpj, ano, seq = (re.sub(r"\D", "", q.get(k, "")) for k in ("cnpj", "ano", "seq"))
+    try:
+        return tabela_itens(buscas.listar_itens(cnpj, ano, seq, prazo=40))
+    except Exception:  # noqa: BLE001
+        return ('<div class="msg erro">O PNCP não respondeu agora (o site do governo está lento ou fora do ar). '
+                '<button onclick="window.itensDeNovo()">Tentar de novo</button> ou abra o edital no PNCP.</div>')
 
 
 def botao_analisar(cnpj, ano, seq, titulo):
@@ -9441,6 +9464,8 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_classificacao(q))
             if p == "/buscar/itens":
                 return self.enviar(pg_itens(q))
+            if p == "/buscar/itens/tabela":
+                return self.enviar(tabela_itens_pncp(q))
             m = re.fullmatch(r"/empresas/([a-z0-9-]+)(/log)?", p)
             if m and (EMPRESAS / f"{m.group(1)}.env").exists():
                 if m.group(2):
