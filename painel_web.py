@@ -2145,7 +2145,8 @@ Os concorrentes são robôs com custos diferentes. Seu <b>lance mínimo</b> é c
 <script>
 (function(){
 const $=id=>document.getElementById(id);
-const num=t=>{t=String(t||'').replace(/[^\d,.-]/g,'');if(t.includes(','))t=t.replace(/\./g,'').replace(',','.');return parseFloat(t)||0;};
+const num=t=>{t=String(t||'').replace(/[^\d,.]/g,'');if(t.includes(','))t=t.replace(/\./g,'').replace(',','.');
+ else if(/^\d{1,3}(\.\d{3})+$/.test(t))t=t.replace(/\./g,'');const v=parseFloat(t);return v>0?v:0;};
 const brl=v=>'R$ '+v.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 const mmss=s=>{s=Math.max(0,Math.ceil(s));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
 let S=null,timer=null;
@@ -2196,7 +2197,8 @@ function desenhar(){
 window.sugerir=function(t){if(!S)return;const v=t?melhor().lance-S.dec:S.min;$('a_val').value=v.toFixed(2).replace('.',',');$('a_val').focus();};
 window.darLance=function(){
  if(!S||(S.fase!=='lances'&&S.fase!=='empate'))return;const v=num($('a_val').value);
- if(!v){alerta('Digite o valor do lance.');return;}
+ if(!v){alerta('Digite um valor válido (só números, ex.: 14.200,00).');return;}
+ if(v<S.ref*0.3){alerta('Lance recusado: '+brl(v)+' é menos de 30% do valor estimado – parece erro de digitação. Na vida real, um lance assim seria desclassificado como inexequível.');return;}
  if(v>S.eu.lance-S.dec+0.001){alerta('Lance recusado: precisa ser pelo menos '+brl(S.dec)+' menor que o seu último lance ('+brl(S.eu.lance)+').');return;}
  if(S.fase==='empate'&&v>=S.alvoEmp){alerta('No empate ficto o lance precisa ser MENOR que o do 1º colocado ('+brl(S.alvoEmp)+').');return;}
  if(v<S.min){S.abaixo=true;alerta('⚠️ Lance abaixo do seu lance mínimo ('+brl(S.min)+'): se ganhar assim, a venda dá prejuízo. Na vida real, não faça isso!');}else alerta('');
