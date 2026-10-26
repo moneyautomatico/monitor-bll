@@ -10,6 +10,7 @@ import threading
 import time
 import unicodedata
 import urllib.parse
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -64,6 +65,36 @@ def _get(url, timeout=25):
         ultimo = RuntimeError(f"curl código {r.returncode}")
     except Exception as ex:  # noqa: BLE001
         ultimo = ex
+    raise ultimo
+
+
+def _get_prazo(urls, fim):
+    """Como _get, mas nunca passa do horário 'fim' (time.time()); tenta cada endereço com urllib e depois curl."""
+    ultimo = RuntimeError("sem tempo")
+    for url in urls:
+        for modo in ("urllib", "curl"):
+            resta = fim - time.time()
+            if resta < 3:
+                raise ultimo
+            t = max(3, min(15, int(resta) - 1))
+            try:
+                if modo == "urllib":
+                    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=t) as r:
+                        return json.loads(r.read().decode("utf-8") or "null")
+                r = subprocess.run(["curl", "-s", "--compressed", "-m", str(t), "-A", UA["User-Agent"], "-H", "Accept: application/json",
+                                    "-w", "\\n%{http_code}", url], capture_output=True, text=True, timeout=t + 3)
+                corpo, _, cod = r.stdout.rpartition("\n")
+                if cod.strip() == "204":
+                    return []
+                if r.returncode == 0 and cod.strip() == "200":
+                    return json.loads(corpo or "null")
+                ultimo = RuntimeError(f"curl código {r.returncode} http {cod.strip()}")
+            except urllib.error.HTTPError as ex:
+                if ex.code == 204:
+                    return []
+                ultimo = ex
+            except Exception as ex:  # noqa: BLE001
+                ultimo = ex
     raise ultimo
 
 
@@ -177,9 +208,12 @@ def listar_itens(cnpj, ano, seq, maximo=500, prazo=None):
         if resta < 3:
             completo = False
             break
+        caminho = f"/v1/orgaos/{cnpj}/compras/{ano}/{seq}/itens?pagina={pag}&tamanhoPagina=100"
         try:
-            dados = _get(f"https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{seq}/itens"
-                         f"?pagina={pag}&tamanhoPagina=100", timeout=max(3, min(25, int(resta))))
+            if fim:   # com prazo: cada tentativa respeita o tempo que sobra (e tenta o endereço alternativo do PNCP)
+                dados = _get_prazo(["https://pncp.gov.br/api/pncp" + caminho, "https://pncp.gov.br/pncp-api" + caminho], fim)
+            else:
+                dados = _get("https://pncp.gov.br/api/pncp" + caminho)
         except Exception:  # noqa: BLE001
             if pag == 1 and fim:
                 raise
