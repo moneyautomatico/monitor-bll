@@ -829,6 +829,74 @@ BOTAO_IA = ('<a href="/pergunte" class="fab-ia" title="Pergunte ao Licitatudo (I
             '.fab-ia:hover{background:#2e7d32}@media print{.fab-ia{display:none}}@media(max-width:700px){.fab-ia span{display:none}}</style>')
 
 
+
+ESTILO_MODERNO = """
+/* ===== visual moderno da área do licitante (camada por cima do ESTILO) ===== */
+:root{--bg:#f4f7f5;--card:#fff;--txt:#0f1f17;--sub:#5d6c64;--verde:#1d7a4c;--verde2:#e7f4ec;--borda:#e2eae5;
+--acento:#34c27a;--esc:#07160f;--esc2:#0d2419;--sombra:0 1px 2px rgba(15,31,23,.04),0 6px 18px rgba(15,31,23,.06);--sombra2:0 14px 34px rgba(15,31,23,.12);--raio:14px}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0b120e;--card:#131c17;--txt:#e6efe9;--sub:#93a39a;--verde:#4cc488;--verde2:#16291f;
+--borda:#223029;--sombra:0 1px 2px rgba(0,0,0,.3),0 8px 22px rgba(0,0,0,.25);--sombra2:0 16px 36px rgba(0,0,0,.45)}}
+:root[data-theme=dark]{--bg:#0b120e;--card:#131c17;--txt:#e6efe9;--sub:#93a39a;--verde:#4cc488;--verde2:#16291f;--borda:#223029;
+--sombra:0 1px 2px rgba(0,0,0,.3),0 8px 22px rgba(0,0,0,.25);--sombra2:0 16px 36px rgba(0,0,0,.45)}
+html{scroll-behavior:smooth}
+body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;font-size:14.5px;line-height:1.5;
+-webkit-font-smoothing:antialiased;background:radial-gradient(1200px 380px at 50% -120px,rgba(52,194,122,.10),transparent 70%),var(--bg);background-attachment:fixed}
+::selection{background:rgba(52,194,122,.28)}
+/* topo */
+header{position:sticky;top:0;z-index:50;background:linear-gradient(180deg,rgba(7,22,15,.97),rgba(13,36,25,.95));backdrop-filter:saturate(1.4) blur(12px);
+-webkit-backdrop-filter:saturate(1.4) blur(12px);border-bottom:1px solid rgba(255,255,255,.07);box-shadow:0 6px 20px rgba(0,0,0,.12);padding:0 18px;gap:14px;min-height:60px}
+header>b{display:flex;align-items:center;gap:9px;font-size:17px;letter-spacing:-.2px;padding:12px 0}
+header>b:before{content:"LT";width:30px;height:30px;border-radius:9px;background:conic-gradient(from 210deg,#7ef0b4,#34c27a,#1f8f57,#7ef0b4);
+display:grid;place-items:center;color:#07160f;font-size:12px;font-weight:900;box-shadow:0 4px 12px rgba(52,194,122,.35)}
+nav{gap:2px;align-items:center}nav a{color:#c3d6ca;padding:8px 11px;margin:10px 0;border:0;border-radius:10px;font-size:13.5px;font-weight:500;transition:background .15s,color .15s}
+nav a:hover{background:rgba(255,255,255,.07);color:#fff}nav a.on{background:rgba(52,194,122,.16);color:#fff;box-shadow:inset 0 0 0 1px rgba(126,240,180,.25)}
+nav .sub-m{background:rgba(13,36,25,.98);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:6px;top:calc(100% - 4px);
+box-shadow:0 18px 40px rgba(0,0,0,.35);min-width:250px}
+nav .sub-m a{margin:0;border-radius:9px;padding:9px 12px}nav .sub-m a:hover,nav .sub-m a.aqui{background:rgba(52,194,122,.16)}
+.topo,.tema,header .sair{border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);border-radius:10px;padding:7px 11px;font-size:13.5px;color:#e3efe8;transition:.15s}
+.topo:hover,.tema:hover,header .sair:hover{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.25)}
+main{padding:24px 18px 70px;animation:entrar .35s ease both}@keyframes entrar{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+h2{font-size:22px;letter-spacing:-.4px;margin:4px 0 14px;font-weight:750}h3{font-size:16px;letter-spacing:-.2px}
+a{color:var(--verde)}.sub{color:var(--sub)}
+/* blocos */
+.card,.kpi,.form,table,.analise,.mc-esq,.mc-dir,.pl,.ch-lado,.ch-conv{border-radius:var(--raio);border-color:var(--borda);box-shadow:var(--sombra)}
+.card{border-left-width:4px;padding:16px;transition:transform .18s,box-shadow .18s}.card:hover{transform:translateY(-2px);box-shadow:var(--sombra2)}
+.kpi{padding:14px 16px;position:relative;overflow:hidden;transition:transform .18s,box-shadow .18s}
+.kpi:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:linear-gradient(180deg,var(--acento),var(--verde))}
+a.kpi:hover{transform:translateY(-2px);box-shadow:var(--sombra2)}.kpi .v{font-size:26px;font-weight:800;letter-spacing:-.6px}.kpi .l{font-size:12.5px}
+.form{padding:20px}
+/* tabelas */
+table{border-collapse:separate;border-spacing:0;font-size:13.5px}th{background:transparent;color:var(--sub);font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;
+font-weight:700;padding:11px 12px;border-bottom:1px solid var(--borda)}td{padding:11px 12px}tbody tr:hover td,table tr:hover td{background:rgba(52,194,122,.045)}
+/* formulários */
+input,select,textarea{border-radius:10px;border:1px solid var(--borda);padding:9px 12px;transition:border-color .15s,box-shadow .15s}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--acento);box-shadow:0 0 0 3px rgba(52,194,122,.18)}
+label{font-weight:650;color:var(--txt)}
+/* botões */
+button,.btn{border-radius:10px;padding:9px 14px;font-weight:650;letter-spacing:.1px;background:linear-gradient(135deg,#25935c,#1d7a4c);
+box-shadow:0 1px 0 rgba(255,255,255,.15) inset,0 4px 12px rgba(29,122,76,.22);transition:transform .12s,box-shadow .15s,filter .15s}
+button:hover,.btn:hover{filter:brightness(1.06);box-shadow:0 1px 0 rgba(255,255,255,.15) inset,0 8px 18px rgba(29,122,76,.3)}button:active,.btn:active{transform:translateY(1px)}
+button.sec,.btn.sec{background:var(--card);color:var(--txt);border:1px solid var(--borda);box-shadow:0 1px 2px rgba(15,31,23,.05)}
+button.sec:hover,.btn.sec:hover{border-color:var(--acento);background:var(--verde2);filter:none}
+button.perigo,.btn.perigo{background:linear-gradient(135deg,#d64545,#b3261e);box-shadow:0 4px 12px rgba(179,38,30,.22)}
+header button.menu-btn,header .tema,header .topo{box-shadow:none;background:rgba(255,255,255,.04)}
+/* etiquetas e avisos */
+.tag{border-radius:999px;padding:3px 10px;font-weight:650}.msg{border-radius:12px;padding:12px 16px;border:1px solid rgba(52,194,122,.25);box-shadow:var(--sombra)}
+.msg.erro{border-color:rgba(179,38,30,.25)}
+.barra{height:8px}.barra i{background:linear-gradient(90deg,var(--verde),var(--acento))}
+/* cabeçalhos escuros internos */
+.cv-cab,.pl-cab{background:linear-gradient(135deg,#0d2419,#13402b)}
+.aba{border-radius:999px;padding:6px 12px}.it.on{border-left-color:var(--acento)}
+/* rolagem */
+*{scrollbar-width:thin;scrollbar-color:rgba(93,108,100,.35) transparent}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:rgba(93,108,100,.3);border-radius:10px;border:2px solid transparent;background-clip:padding-box}
+@media (max-width:900px){header{padding:0 12px}nav{align-items:stretch}nav a{margin:0}nav .area>a{border-radius:10px}nav .sub-m{border:0;background:none;backdrop-filter:none;box-shadow:none}}
+.fab-ia{background:linear-gradient(135deg,#2aa565,#1d7a4c)!important;box-shadow:0 10px 26px rgba(29,122,76,.4)!important;border:1px solid rgba(255,255,255,.18)}
+.hoje li{border-radius:12px!important;box-shadow:var(--sombra);transition:transform .15s}.hoje li:hover{transform:translateX(2px)}
+@media (prefers-reduced-motion:reduce){main{animation:none}.card,.kpi,button,.btn{transition:none}}
+@media print{body{background:#fff}header{position:static}}
+"""
+
 def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     u = usuario_atual()
     if getattr(_REQ, "admin", False) and aba in ROTAS_ADM_LAYOUT:
@@ -850,8 +918,8 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
-<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#173f2c"><link rel="apple-touch-icon" href="/icone-192.png">
-{TEMA_JS}<style>{ESTILO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="topo" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)" style="margin-left:auto">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header>{faixa_teste(u) if u else ""}<main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#07160f"><link rel="apple-touch-icon" href="/icone-192.png">
+{TEMA_JS}<style>{ESTILO}{ESTILO_MODERNO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="topo" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)" style="margin-left:auto">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header>{faixa_teste(u) if u else ""}<main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();
 document.querySelectorAll('nav .sub-m a').forEach(a=>{{if(a.getAttribute('href')===location.pathname)a.classList.add('aqui');}});
 if('serviceWorker' in navigator){{navigator.serviceWorker.register('/sw.js').catch(()=>{{}});}}</script></body></html>"""
