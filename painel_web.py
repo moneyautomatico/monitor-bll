@@ -713,7 +713,9 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .it-l1{display:flex;justify-content:space-between;align-items:center;gap:8px}.it-data{font-size:12px;color:var(--sub);display:flex;align-items:center;gap:6px}
 .ponto{width:9px;height:9px;border-radius:50%;background:#e53935;display:inline-block}.ponto[hidden]{display:none}
 .it-org{font-size:12.5px;color:var(--sub);margin:2px 0 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.it-l3{display:flex;gap:6px;align-items:center}.it-urg{margin-left:auto}
+.it-l3{display:flex;gap:6px;align-items:center}.it-urg{margin-left:auto}.it-urg+.it-arq{margin-left:6px}
+.it-arq{margin-left:auto;opacity:.35;cursor:pointer;padding:0 4px;border-radius:6px;font-size:14px}.it:hover .it-arq{opacity:1}.it-arq:hover{background:var(--verde2)}
+.it-volta{font-size:11px;font-weight:700;color:var(--verde);background:var(--verde2);border-radius:999px;padding:1px 7px}
 .selo{color:#fff;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap}
 .mc-dir{background:var(--card);border:1px solid var(--borda);border-radius:12px;display:flex;flex-direction:column;min-height:0;min-width:0}
 .cv-vazio{padding:40px;text-align:center;color:var(--sub)}
@@ -1116,7 +1118,7 @@ O histórico e o login atuais são mantidos.</p>
                 lider = next((z for z in rk if z.get("pos") == 1), None)
             except ValueError:
                 lider = None
-            lid = ("R$ " + f'{lider["valor"]:,.2f}'.replace(",", "X").replace(".", ",").replace("X", ".")) if lider else e(r[6])
+            lid = ("R$ " + f'{propostas.num(lider["valor"]):,.2f}'.replace(",", "X").replace(".", ",").replace("X", ".")) if lider else e(r[6])
             url = "/classificacao?" + urllib.parse.urlencode({"empresa": x["id"], "processo": r[0], "promotor": r[1]})
             linhas += (f'<tr><td>{pos}</td><td>{e(x["nome"])} <span class="sub">{e(x["plat"])}</span></td>'
                        f'<td><a href="{url}"><b>{e(r[0])}</b></a><div class="sub ocultar">{e(r[1])}</div></td>'
@@ -2849,6 +2851,36 @@ def chave_proc(g):
     return f'{g["eid"]}|{g["processo"]}|{g["promotor"]}'
 
 
+SIT_ENCERRADA = ("HOMOLOG", "CANCELAD", "REVOGAD", "FRACASSAD", "DESERT", "ANULAD", "ENCERRAD")
+
+
+def chats_arquivados():
+    """{chave_proc: 'AAAA-MM-DDTHH:MM:SS'} – processos que o usuário arquivou na lista do chat (cada usuário tem a sua)."""
+    return dict(usuarios.cfg(login_atual()).get("chats_arquivados") or {})
+
+
+def arquivado(g, arq):
+    """Arquivado e sem mensagem nova depois do arquivamento (mensagem nova faz o processo voltar sozinho para a lista)."""
+    q = arq.get(chave_proc(g))
+    if not q:
+        return False
+    try:
+        return g["ultima"] <= datetime.fromisoformat(q)
+    except ValueError:
+        return True
+
+
+def situacoes_empresa(eid):
+    db = EMPRESAS / eid / "bll_monitor.db"
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        r = {(a, b): (c or "").upper() for a, b, c in con.execute("SELECT processo, promotor, situacao FROM processos")}
+        con.close()
+        return r
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def nao_lido(g, mapa):
     vista = mapa.get(chave_proc(g))
     if not vista:
@@ -2997,7 +3029,8 @@ def html_conversa(g, cfg_chat, mapa=None):
             f'</div></div><a class="btn cv-doc" href="/documentos?{e(urllib.parse.urlencode({"emp": g["nome"].upper().strip(), "proc": g["processo"] + "||" + g["promotor"]}))}" '
             f'title="Gerar as declarações deste processo">📄 Declarações</a>'
             f'<a class="btn cv-doc" style="margin-left:6px" href="/pecas?{e(urllib.parse.urlencode({"emp": g["nome"].upper().strip(), "proc": g["processo"] + "||" + g["promotor"]}))}" '
-            f'title="Rascunho de recurso, contrarrazões, resposta a diligência… com IA">⚖️ Peça (IA)</a></div>' + barra_classif(g) +
+            f'title="Rascunho de recurso, contrarrazões, resposta a diligência… com IA">⚖️ Peça (IA)</a>'
+            f'<button type="button" class="btn cv-doc" style="margin-left:6px" onclick="arquivarAtual()" title="Arquivar/desarquivar este processo na lista">📦</button></div>' + barra_classif(g) +
             f'<div class="cv-filtro">'
             + menu("lote", "Lotes (mensagens)", "Todos os lotes", padrao=True)
             + menu("dilig", "Diligências", "Todas as diligências")
@@ -3056,10 +3089,13 @@ def pg_chat(q):
     lista = sorted(procs.values(), key=lambda x: x["ultima"], reverse=True)
     plats = [pl for pl in ("BLL", "BNC", "Portal de Compras", "Licitanet") if any(g["plat"] == pl for g in lista)]
     plats += sorted({g["plat"] for g in lista} - set(plats))
+    arq = chats_arquivados()
+    n_arq = sum(1 for g in lista if arquivado(g, arq))
     abas = ('<button class="aba on" data-f="todos" onclick="aba(this)">Todos</button>'
             '<button class="aba" data-f="naolidos" onclick="aba(this)">Não lidos</button>'
             '<button class="aba" data-f="urgentes" onclick="aba(this)">Urgentes</button>' +
-            "".join(f'<button class="aba" data-f="plat:{e(pl)}" onclick="aba(this)">{e(pl)}</button>' for pl in plats))
+            "".join(f'<button class="aba" data-f="plat:{e(pl)}" onclick="aba(this)">{e(pl)}</button>' for pl in plats) +
+            f'<button class="aba" data-f="arquivados" onclick="aba(this)" title="Processos que você arquivou">📦 Arquivados (<span id="n-arq">{n_arq}</span>)</button>')
     nomes_emp = sorted({g["nome"] for g in lista})
     menu_emp = ('<select class="mc-emp" onchange="filtrar();try{sessionStorage.setItem(\'emp\',this.value)}catch(e){}" title="Filtrar por empresa">'
                 f'<option value="">🏢 Todas as empresas ({len(lista)})</option>' +
@@ -3075,13 +3111,18 @@ def pg_chat(q):
         url = "/mensagens/processo?" + urllib.parse.urlencode({"eid": g["eid"], "processo": g["processo"], "promotor": g["promotor"]})
         busca_txt = f'{g["processo"]} {g["promotor"]}'.lower()   # empresa tem filtro próprio (menu abaixo das plataformas)
         on = sel == (g["eid"], g["processo"], g["promotor"])
+        e_arq = arquivado(g, arq)
+        voltou = chave_proc(g) in arq and not e_arq
         itens += (f'<a class="it{" on" if on else ""}" href="#" data-url="{e(url)}" data-plat="{e(g["plat"])}" data-emp="{e(g["nome"])}" data-nl="{1 if nl else 0}" '
+                  f'data-arq="{1 if e_arq else 0}" data-proc="{e(chave_proc(g))}" '
                   f'data-urg="{1 if urg else 0}" data-busca="{e(busca_txt)}" onclick="return abrir(this)">'
                   f'<div class="it-l1"><b>{e(g["processo"])}</b><span class="it-data">{e(quando)}'
                   f'<i class="ponto"{"" if nl else " hidden"}></i></span></div>'
                   f'<div class="it-org">{e(g["promotor"])}</div>'
                   f'<div class="it-l3">{selo_plat(g["plat"])}<span class="sub">{e(g["nome"])}</span>'
-                  f'{"<span class=it-urg>🚨</span>" if urg else ""}</div></a>')
+                  f'{"<span class=it-volta title=" + chr(34) + "Estava arquivado e chegou mensagem nova" + chr(34) + ">📬 voltou</span>" if voltou else ""}'
+                  f'{"<span class=it-urg>🚨</span>" if urg else ""}'
+                  f'<span class="it-arq" role="button" title="{"Desarquivar" if e_arq else "Arquivar este processo"}" onclick="return arquivarIt(event,this)">{"↩️" if e_arq else "📦"}</span></div></a>')
     direita = barra_msgs() + '<div class="cv-vazio">Selecione um processo à esquerda para ver as mensagens.</div>'
     if sel and sel in procs:
         direita = html_conversa(procs[sel], cfg_chat, mapa)
@@ -3089,6 +3130,7 @@ def pg_chat(q):
     corpo = f"""<div class="mc">
 <aside class="mc-esq"><div class="mc-topo"><h2 style="margin:0">Monitorar chat</h2>
 <div class="ferr">
+<button class="sec" type="button" onclick="arquivarEncerrados()" title="Arquivar todos os processos homologados, cancelados, fracassados ou desertos">📦</button>
 <a class="btn sec" href="/mensagens?vista=lista" title="Ver todas as mensagens em tabela">☰</a></div></div>
 
 <input class="mc-busca" placeholder="Buscar pregão ou órgão…" oninput="filtrar()">
@@ -3097,8 +3139,20 @@ def pg_chat(q):
 <section class="mc-dir"><div id="conversa">{direita}</div></section></div>
 <script>
 let filtroAba='todos';
-function passaAba(a){{if(filtroAba==='naolidos')return a.dataset.nl==='1'; if(filtroAba==='urgentes')return a.dataset.urg==='1';
+function passaAba(a){{if(filtroAba==='arquivados')return a.dataset.arq==='1'; if(a.dataset.arq==='1')return false;
+ if(filtroAba==='naolidos')return a.dataset.nl==='1'; if(filtroAba==='urgentes')return a.dataset.urg==='1';
  if(filtroAba.startsWith('plat:'))return a.dataset.plat===filtroAba.slice(5); return true;}}
+function postArq(corpo){{return fetch('/mensagens/arquivar',{{method:'POST',credentials:'same-origin',
+ headers:{{'Content-Type':'application/x-www-form-urlencoded'}},body:'csrf={CSRF}&'+corpo}}).then(r=>r.ok?r.json():null);}}
+function marcaArq(a,sim){{a.dataset.arq=sim?'1':'0';const b=a.querySelector('.it-arq');if(b){{b.textContent=sim?'↩️':'📦';b.title=sim?'Desarquivar':'Arquivar este processo';}}
+ const v=a.querySelector('.it-volta');if(v)v.remove();
+ const n=document.getElementById('n-arq');if(n)n.textContent=[...document.querySelectorAll('#lista .it')].filter(x=>x.dataset.arq==='1').length;}}
+function arquivarIt(ev,b){{ev.preventDefault();ev.stopPropagation();const a=b.closest('.it');const sim=a.dataset.arq!=='1';
+ postArq('acao='+(sim?'arquivar':'desarquivar')+'&proc='+encodeURIComponent(a.dataset.proc)).then(r=>{{if(r){{marcaArq(a,sim);filtrar();}}}});return false;}}
+function arquivarAtual(){{const a=document.querySelector('#lista .it.on');if(a){{const b=a.querySelector('.it-arq');if(b)arquivarIt({{preventDefault(){{}},stopPropagation(){{}}}},b);}}}}
+function arquivarEncerrados(){{if(!confirm('Arquivar todos os processos homologados, cancelados, fracassados, revogados ou desertos? Eles voltam sozinhos se chegar mensagem nova.'))return;
+ postArq('acao=encerrados').then(r=>{{if(!r)return;(r.procs||[]).forEach(k=>{{const a=[...document.querySelectorAll('#lista .it')].find(x=>x.dataset.proc===k);if(a)marcaArq(a,true);}});
+  filtrar();alert(r.n?r.n+' processo(s) arquivado(s). Veja na aba 📦 Arquivados.':'Nenhum processo encerrado para arquivar.');}});}}
 function filtrar(){{const t=document.querySelector('.mc-busca').value.toLowerCase();
  const its=[...document.querySelectorAll('#lista .it')]; const se=document.querySelector('.mc-emp');
  if(se){{  // o menu mostra só as empresas da plataforma/aba escolhida
@@ -9030,7 +9084,7 @@ class Painel(BaseHTTPRequestHandler):
         if caminho.startswith(ROTAS_ADMIN) and u["papel"] != "admin":
             return self.negar("Esta área é só do administrador.")
         if self.command == "POST":
-            if u["papel"] == "leitura" and not caminho.startswith(("/mensagens/lidas", "/conta/", "/preferencias")):
+            if u["papel"] == "leitura" and not caminho.startswith(("/mensagens/lidas", "/mensagens/arquivar", "/conta/", "/preferencias")):
                 return self.negar("O seu usuário é só de consulta: não pode alterar nada.")
             if (caminho.startswith(ROTAS_IA) and not caminho.endswith("/telegram") or ROTAS_IA_RE.fullmatch(caminho)) and not u.get("ia", True):
                 return self.negar("O seu usuário não tem permissão para usar os recursos com IA (que têm custo). Fale com o administrador.")
@@ -10007,7 +10061,7 @@ class Painel(BaseHTTPRequestHandler):
             return
         if p.startswith(("/admin/empresas", "/admin/preferencias", "/admin/meu-consumo")):
             p = p[6:]
-        if not p.startswith(("/mensagens/lidas", "/pergunte/enviar", "/pergunte/estado")):
+        if not p.startswith(("/mensagens/lidas", "/mensagens/arquivar", "/pergunte/enviar", "/pergunte/estado")):
             self.auditar("ação " + p, ", ".join(f"{k}={str(v)[:40]}" for k, v in f.items()
                                                 if k not in ("csrf", "nova", "nova2", "atual", "md") and not re.search(r"senha|token|key|pass|secret|chave", k, re.I)))
         try:
@@ -10155,6 +10209,35 @@ class Painel(BaseHTTPRequestHandler):
                             return self.enviar(pg_editais("Os arquivos desta análise não estão mais guardados. Envie de novo.", True))
                     analise.iniciar(ch, cfg_ia(), o)
                 return self.redirecionar(f"/analise/{ch}")
+            if p == "/mensagens/arquivar":
+                arq = chats_arquivados()
+                agora_iso = datetime.now().isoformat(timespec="seconds")
+                procs_ok = []
+                if f.get("acao") == "encerrados":
+                    sits = {}
+                    for g in agrupar_processos().values():
+                        if g["eid"] not in sits:
+                            sits[g["eid"]] = situacoes_empresa(g["eid"])
+                        if any(x in sits[g["eid"]].get((g["processo"], g["promotor"]), "") for x in SIT_ENCERRADA) and not arquivado(g, arq):
+                            arq[chave_proc(g)] = agora_iso
+                            procs_ok.append(chave_proc(g))
+                elif f.get("proc", "").count("|") >= 2 and empresa_liberada(f["proc"].split("|")[0]):
+                    if f.get("acao") == "arquivar":
+                        arq[f["proc"]] = agora_iso
+                    else:
+                        arq.pop(f["proc"], None)
+                    procs_ok.append(f["proc"])
+                if len(arq) > 3000:   # limpa os mais antigos
+                    arq = dict(sorted(arq.items(), key=lambda kv: kv[1])[-3000:])
+                usuarios.salvar_cfg(login_atual(), {"chats_arquivados": arq})
+                dados_a = json.dumps({"n": len(procs_ok), "procs": procs_ok}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(dados_a)))
+                self.cabecalhos_seguranca()
+                self.end_headers()
+                self.wfile.write(dados_a)
+                return
             if p == "/mensagens/lidas":
                 if f.get("proc"):
                     for cat_sub in f.get("subs", "").split("||"):
