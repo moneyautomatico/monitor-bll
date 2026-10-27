@@ -1445,7 +1445,8 @@ def processar(db, page, primeira_vez, diag=False):
 
 
 def plataforma_nome():
-    return {"licitanet": "Licitanet", "pcp": "Portal de Compras Públicas", "bnc": "BNC"}.get(CFG.get("PLATAFORMA", "bll").lower(), "BLL")
+    return {"licitanet": "Licitanet", "pcp": "Portal de Compras Públicas", "bnc": "BNC",
+            "comprasgov": "Compras.gov.br"}.get(CFG.get("PLATAFORMA", "bll").lower(), "BLL")
 
 
 def notificar(db, novas, primeira_vez, n_ativos, agora):
@@ -2357,6 +2358,37 @@ fp.onchange=f;fb.oninput=f;
 </script></body></html>""", encoding="utf-8")
 
 
+# ----------------------------------------------------------------- Compras.gov.br (só leitura com a sessão que o licitante abriu no painel)
+def _dur(seg):
+    seg = int(seg)
+    return f"{seg // 3600} h {seg % 3600 // 60:02d} min" if seg >= 3600 else f"{seg // 60} min"
+
+
+def processar_comprasgov(db, page, primeira_vez, diag=False):
+    """Fase 1: mantém a sessão viva voltando à página inicial do fornecedor e mede quanto ela dura.
+    A leitura do chat entra quando o diagnóstico (estrutura das telas) mostrar onde ficam as mensagens."""
+    import comprasgov
+    eid = CFG.get("EMPRESA_ID", "")
+    st = comprasgov.ler_estado(eid)
+    alvo = st.get("inicio") or st.get("ultima_url") or ""
+    if not st.get("conectado_em") or not comprasgov.host_ok(alvo):
+        log("Compras.gov.br: ainda não conectado. Abra o painel → Empresas → 🔌 Conectar.")
+        return "deslogado"
+    page.goto(alvo, wait_until="domcontentloaded")
+    page.wait_for_timeout(5000)
+    agora = time.time()
+    if comprasgov.tela_de_login(page.url) or not comprasgov.host_ok(page.url):
+        if not st.get("aviso_caiu"):
+            dur = _dur(agora - float(st.get("conectado_ts") or agora))
+            comprasgov.gravar_estado(eid, aviso_caiu=datetime.now().strftime("%d/%m %H:%M"), duracao_sessao=dur)
+            log(f"Compras.gov.br: a sessão caiu (durou {dur}).")
+        return "deslogado"
+    comprasgov.gravar_estado(eid, ultima_ok=datetime.now().strftime("%d/%m/%Y %H:%M"),
+                             no_ar_ha=_dur(agora - float(st.get("conectado_ts") or agora)))
+    log(f"Compras.gov.br: sessão ativa ({page.title()[:60]}). Leitura do chat: aguardando o diagnóstico.")
+    return "ok"
+
+
 # ----------------------------------------------------------------- execução
 def contexto(pw, visivel):
     visivel = visivel or CFG.get("NAVEGADOR_VISIVEL") == "1"  # no servidor roda numa tela virtual (xvfb)
@@ -2423,11 +2455,24 @@ def rodar(uma_vez=False, visivel=False, diag=False):
         fn_processar, fn_login = processar_licitanet, login_licitanet
     elif CFG.get("PLATAFORMA", "bll").lower() == "pcp":
         fn_processar, fn_login = processar_pcp, login_pcp
+    elif CFG.get("PLATAFORMA", "bll").lower() == "comprasgov":
+        fn_processar, fn_login = processar_comprasgov, (lambda page: "manual")
     else:
         fn_processar, fn_login = processar, login_automatico
     if CFG.get("EMPRESA_ID"):
         time.sleep(random.uniform(0, 20))  # espalha as empresas para não verificarem todas juntas
     while True:
+      trava_cg = None
+      if CFG.get("PLATAFORMA", "bll").lower() == "comprasgov":   # o painel pode estar com a conexão aberta no mesmo perfil
+          import comprasgov
+          trava_cg = comprasgov.TravaPerfil(CFG.get("EMPRESA_ID", ""))
+          if not trava_cg.pegar():
+              log("Compras.gov.br: conexão aberta no painel – espero ela fechar.")
+              gerar_painel(db, "🔌 Conexão ao Compras.gov.br aberta no painel")
+              if uma_vez:
+                  break
+              time.sleep(60)
+              continue
       with VagaNavegador(), sync_playwright() as pw:
         inicio_ciclo = time.time()
         ctx = contexto(pw, visivel)
@@ -2458,7 +2503,13 @@ def rodar(uma_vez=False, visivel=False, diag=False):
                                      "Faça o login manualmente para o monitor voltar a funcionar.")
                         else:
                             falhas_login += 1
-                    if r == "deslogado":
+                    if r == "deslogado" and CFG.get("PLATAFORMA", "bll").lower() == "comprasgov":
+                        if not avisou_logout:
+                            telegram("🔌 <b>Compras.gov.br</b>: a sessão caiu (ou ainda não foi conectada). Abra o painel → "
+                                     "Empresas → <b>🔌 Conectar</b> e entre com a sua conta gov.br para o monitor voltar a ler.")
+                            avisou_logout = True
+                        gerar_painel(db, "🔌 Reconecte o Compras.gov.br (painel → Empresas → Conectar)")
+                    elif r == "deslogado":
                         log(f"Sessão da {plataforma_nome()} expirou ou não foi possível entrar.")
                         if not avisou_logout:
                             telegram(f"⚠️ <b>Monitor {plataforma_nome()}</b>: não consegui entrar na plataforma "
@@ -2494,6 +2545,8 @@ def rodar(uma_vez=False, visivel=False, diag=False):
             pass
         ctx.close()
         estado(db, "duracao_ciclo", str(int(time.time() - inicio_ciclo)))
+      if trava_cg:
+          trava_cg.soltar()
       if uma_vez:
           break
       base = intervalo * 60

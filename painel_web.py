@@ -62,6 +62,7 @@ import propostas
 import trava_teste
 import iniciante
 import robo
+import comprasgov
 
 PASTA = Path(__file__).resolve().parent
 EMPRESAS = PASTA / "empresas"
@@ -548,7 +549,7 @@ def empresas():
             continue
         ign = {s.strip().upper() for s in (cfg.get("SITUACOES_IGNORADAS") or ign_geral).split(",")}
         d = {"id": eid, "nome": cfg.get("EMPRESA_NOME", eid), "cfg": cfg, "ativo": ativo(eid),
-             "plat": {"licitanet": "Licitanet", "pcp": "Portal de Compras", "bnc": "BNC"}.get(cfg.get("PLATAFORMA", "bll").lower(), "BLL"),
+             "plat": {"licitanet": "Licitanet", "pcp": "Portal de Compras", "bnc": "BNC", "comprasgov": "Compras.gov.br"}.get(cfg.get("PLATAFORMA", "bll").lower(), "BLL"),
              "status": "Aguardando primeira verificação", "ultima": "", "duracao": 0,
              "procs": [], "andamento": 0, "msgs": 0, "novas_hoje": 0}
         db = EMPRESAS / eid / "bll_monitor.db"
@@ -3540,7 +3541,9 @@ def pg_empresas(aviso="", erro=False):
         linhas += f"""<tr><td><b>{e(x['nome'])}</b> <span class="tag parado">{e(x['plat'])}</span><div class="sub">{e(x['cfg'].get('BLL_EMAIL', ''))}{dono}</div></td>
 <td><span class="tag {cls}">{e(txt)}</span></td><td class="ocultar">{e(x['cfg'].get('ENVIAR_PARA', 'geral'))}</td>
 <td><div class="acoes" style="margin:0"><a class="btn sec" href="{ue('/empresas/' + x['id'])}">Editar</a>{pausar}
-{botao(ue(f"/empresas/{x['id']}/testar"), "Testar alerta", "sec")}<a class="btn sec" href="{ue('/empresas/' + x['id'] + '/log')}">Log</a></div></td></tr>"""
+{botao(ue(f"/empresas/{x['id']}/testar"), "Testar alerta", "sec")}<a class="btn sec" href="{ue('/empresas/' + x['id'] + '/log')}">Log</a>
+{f'<a class="btn" href="/comprasgov?eid={e(x["id"])}">🔌 Conectar</a>' if x["cfg"].get("PLATAFORMA", "").lower() == "comprasgov" else ""}</div>
+{f'<div class="sub">{e(comprasgov.resumo_estado(x["id"]))}</div>' if x["cfg"].get("PLATAFORMA", "").lower() == "comprasgov" else ""}</td></tr>"""
     corpo = f"""<h2>Empresas</h2><p class="sub">{"Todas as empresas do sistema, de todos os usuários." if eh_admin() else
  "As empresas que você cadastrou. Elas e os dados delas (mensagens, processos, agenda, documentos…) só aparecem para você e para o administrador."}</p>
 <div class="acoes" style="margin-bottom:12px">{'' if usuario_atual() and usuario_atual()["papel"] == "leitura" else f'<a class="btn" href="{ue("/empresas/nova")}">+ Cadastrar empresa</a>'}</div>
@@ -3576,10 +3579,13 @@ def form_empresa(eid=None):
 <option value="bll" {"selected" if plat == "bll" else ""}>BLL Compras</option>
 <option value="licitanet" {"selected" if plat == "licitanet" else ""}>Licitanet</option>
 <option value="pcp" {"selected" if plat == "pcp" else ""}>Portal de Compras Públicas</option>
-<option value="bnc" {"selected" if plat == "bnc" else ""}>BNC Compras</option></select>
-<label>Usuário / e-mail de login</label><input class="campo" name="email" value="{g('BLL_EMAIL')}" required>
+<option value="bnc" {"selected" if plat == "bnc" else ""}>BNC Compras</option>
+<option value="comprasgov" {"selected" if plat == "comprasgov" else ""}>Compras.gov.br (governo federal)</option></select>
+<div class="so-cg msg">🔌 No Compras.gov.br não cadastramos usuário e senha: depois de salvar, clique em <b>Conectar</b> na lista de empresas
+e entre você mesmo com a conta gov.br (o captcha é com você). O monitor só lê com a sessão aberta.</div>
+<div class="nao-cg"><label>Usuário / e-mail de login</label><input class="campo" name="email" value="{g('BLL_EMAIL')}" required>
 <label>Senha <small>{"(deixe em branco para manter)" if eid else ""}<span class="so-bll"> BLL/BNC: 6 números</span></small></label>
-<input class="campo" type="password" name="senha" {"" if eid else "required"} autocomplete="new-password">
+<input class="campo" type="password" name="senha" {"" if eid else "required"} autocomplete="new-password"></div>
 <div class="so-bll"><label>Perfil a escolher após o login <small>(parte do nome, ex.: OPERADOR EMPRESA X)</small></label>
 <input class="campo" name="perfil" value="{g('BLL_PERFIL', 'OPERADOR')}"></div>
 <label>CNPJ da empresa <small>{"(obrigatório no teste grátis – o teste é 1 por empresa)" if situacao_teste(usuario_atual()) else ""}<span class="so-ln"> Licitanet: o mesmo login pode ter várias empresas; escolhemos esta</span></small></label>
@@ -3600,8 +3606,94 @@ def form_empresa(eid=None):
 <div class="acoes"><button>Salvar</button><a class="btn sec" href="{ue('/empresas')}">Cancelar</a></div></form>{remover}</div>
 <script>function trocaPlat(){{const v=document.getElementById('plat').value,ln=v==='licitanet',bll=(v==='bll'||v==='bnc');
 document.querySelectorAll('.so-bll').forEach(x=>x.style.display=bll?'':'none');
-document.querySelectorAll('.so-ln').forEach(x=>x.style.display=ln?'':'none');}}trocaPlat();</script>"""
+document.querySelectorAll('.so-ln').forEach(x=>x.style.display=ln?'':'none');
+const cg=v==='comprasgov';document.querySelectorAll('.so-cg').forEach(x=>x.style.display=cg?'':'none');
+document.querySelectorAll('.nao-cg').forEach(x=>{{x.style.display=cg?'none':'';x.querySelectorAll('input').forEach(i=>{{if(cg){{if(i.required)i.dataset.req='1';i.required=false;}}else if(i.dataset.req)i.required=true;}});}});}}trocaPlat();</script>"""
     return pagina("Empresa", abas_admin_topo(corpo, "emp"), "/empresas")
+
+
+# ------------------------------------------------------------------ Compras.gov.br: conexão assistida (o licitante entra e resolve o captcha)
+CG_HTML = r"""<h2>🔌 Conectar Compras.gov.br – __NOME__</h2>
+<p class="sub">Esta tela mostra um navegador do servidor. <b>Você</b> entra com a sua conta gov.br e resolve o captcha – o sistema não guarda a sua senha
+e não resolve captcha. Depois, o monitor usa a sessão aberta só para <b>ler</b> (não envia nada). Quando a sessão cair, avisamos para reconectar.</p>
+__AVISO__
+<div class="cg-passos"><b>Passo a passo:</b> 1) clique em <i>Entrar com gov.br</i> e faça o login (captcha e verificação são com você) ·
+2) abra a área do fornecedor com os seus pregões e clique em <b>📌 Minha página inicial</b> ·
+3) abra um pregão em andamento, o chat/mensagens e os itens, clicando em <b>🧭 Salvar estrutura</b> em cada tela ·
+4) clique em <b>✅ Concluir</b>.</div>
+__CORPO__"""
+
+CG_JS = r"""<style>
+.cg-passos{background:var(--card);border:1px solid var(--borda);border-radius:12px;padding:10px 14px;font-size:13.5px;line-height:1.6;margin:10px 0}
+.cg-barra{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:8px 0}.cg-barra input{flex:1 1 260px;min-width:0}
+.cg-tela{position:relative;border:1px solid var(--borda);border-radius:10px;overflow:hidden;background:#111;outline:none}
+.cg-tela img{display:block;width:100%;height:auto;cursor:crosshair;user-select:none;-webkit-user-drag:none}
+.cg-tela:focus{box-shadow:0 0 0 3px rgba(52,194,122,.45)}#cg-st{font-size:12.5px;color:var(--sub)}
+.cg-tec{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.cg-tec input{flex:1 1 220px;min-width:0}
+</style>
+<div class="cg-barra"><button class="sec" type="button" onclick="cg('voltar')">←</button><button class="sec" type="button" onclick="cg('recarregar')">⟳</button>
+<input class="campo" id="cg-url" placeholder="endereço (só gov.br / Compras.gov.br)"><button class="sec" type="button" onclick="cg('ir',{url:document.getElementById('cg-url').value})">Ir</button></div>
+<div class="cg-barra"><button type="button" class="sec" onclick="cg('marcar_inicio')">📌 Minha página inicial</button>
+<button type="button" class="sec" onclick="cg('salvar_tela')">🧭 Salvar estrutura desta tela</button>
+<form method="post" action="/comprasgov/concluir" style="display:inline"><input type="hidden" name="csrf" value="__CSRF__"><input type="hidden" name="eid" value="__EID__">
+<button>✅ Concluir e salvar a sessão</button></form><span id="cg-st">conectando…</span></div>
+<div class="cg-tela" id="cg-caixa" tabindex="0" title="Clique para focar e digitar com o teclado"><img id="cg-img" alt="Tela do navegador do servidor"></div>
+<div class="cg-tec"><input class="campo" id="cg-txt" placeholder="No celular: digite aqui e toque em Enviar texto" autocomplete="off" autocapitalize="off">
+<button type="button" class="sec" onclick="enviarTxt()">Enviar texto</button><button type="button" class="sec" onclick="cg('tecla',{tecla:'Enter'})">Enter</button>
+<button type="button" class="sec" onclick="cg('tecla',{tecla:'Tab'})">Tab</button><button type="button" class="sec" onclick="cg('tecla',{tecla:'Backspace'})">⌫</button>
+<button type="button" class="sec" onclick="cg('rolar',{dy:-500})">▲</button><button type="button" class="sec" onclick="cg('rolar',{dy:500})">▼</button></div>
+<script>
+(function(){
+const EID='__EID__',CSRF='__CSRF__',img=document.getElementById('cg-img'),cx=document.getElementById('cg-caixa'),st=document.getElementById('cg-st');
+let fila=Promise.resolve(),buf='',tb=null,vivo=true,carregando=false;
+function tela(){ if(!vivo||carregando)return; carregando=true; img.src='/comprasgov/tela?eid='+encodeURIComponent(EID)+'&t='+Date.now(); }
+img.onload=()=>{carregando=false;setTimeout(tela,900);};
+img.onerror=()=>{carregando=false;st.textContent='a conexão foi fechada (inatividade ou concluída). Recarregue a página para abrir de novo.';vivo=false;};
+window.cg=function(tipo,extra){fila=fila.then(()=>{const b=new URLSearchParams(Object.assign({csrf:CSRF,eid:EID,tipo:tipo},extra||{}));
+ return fetch('/comprasgov/acao',{method:'POST',body:b,credentials:'same-origin'}).then(r=>r.json()).then(j=>{
+  st.textContent=j.ok?((tipo==='marcar_inicio'?'📌 página inicial salva · ':tipo==='salvar_tela'?'🧭 estrutura salva · ':'')+(j.titulo||'')):('⚠️ '+j.erro);
+  if(j.url&&document.activeElement!==document.getElementById('cg-url'))document.getElementById('cg-url').value=j.url;
+  if(!j.ok&&j.fechada)vivo=false;}).catch(()=>{st.textContent='⚠️ sem resposta do servidor';});});return fila;};
+window.enviarTxt=function(){const i=document.getElementById('cg-txt');if(i.value){cg('texto',{texto:i.value});i.value='';}};
+img.addEventListener('click',ev=>{const r=img.getBoundingClientRect();cx.focus();
+ cg('clique',{x:Math.round((ev.clientX-r.left)*__LARG__/r.width),y:Math.round((ev.clientY-r.top)*__ALT__/r.height)});});
+img.addEventListener('wheel',ev=>{ev.preventDefault();cg('rolar',{dy:Math.round(ev.deltaY)});},{passive:false});
+const ESP={Enter:1,Tab:1,Backspace:1,Delete:1,Escape:1,ArrowUp:1,ArrowDown:1,ArrowLeft:1,ArrowRight:1,Home:1,End:1,PageUp:1,PageDown:1};
+function solta(){if(buf){const t=buf;buf='';cg('texto',{texto:t});}}
+cx.addEventListener('keydown',ev=>{if(ev.ctrlKey||ev.metaKey||ev.altKey)return;
+ if(ev.key.length===1){buf+=ev.key;clearTimeout(tb);tb=setTimeout(solta,180);ev.preventDefault();}
+ else if(ESP[ev.key]){solta();cg('tecla',{tecla:(ev.key==='Tab'&&ev.shiftKey)?'Shift+Tab':ev.key});ev.preventDefault();}});
+document.getElementById('cg-url').addEventListener('keydown',ev=>{if(ev.key==='Enter')cg('ir',{url:ev.target.value});});
+tela();
+})();
+</script>"""
+
+
+def pg_comprasgov(eid, aviso="", erro=False):
+    cfg = ler_env(EMPRESAS / f"{eid}.env")
+    con = comprasgov.atual(eid)
+    st = comprasgov.ler_estado(eid)
+    info = (f'<p class="sub">Situação: {e(comprasgov.resumo_estado(eid))}'
+            + (f' · página inicial: {e(st.get("inicio_titulo") or st.get("inicio", ""))}' if st.get("inicio") else "")
+            + (f' · a última sessão durou {e(st["duracao_sessao"])}' if st.get("duracao_sessao") else "") + "</p>")
+    if con:
+        corpo = (CG_JS.replace("__EID__", e(eid)).replace("__CSRF__", CSRF)
+                 .replace("__LARG__", str(comprasgov.LARG)).replace("__ALT__", str(comprasgov.ALT)))
+    else:
+        corpo = (f'<form method="post" action="/comprasgov/abrir"><input type="hidden" name="csrf" value="{CSRF}">'
+                 f'<input type="hidden" name="eid" value="{e(eid)}"><div class="acoes"><button>🔌 Abrir a conexão</button>'
+                 f'<a class="btn sec" href="/empresas">Voltar</a></div></form>'
+                 '<p class="sub">A conexão abre um navegador no servidor por até 15 minutos sem uso. Enquanto ela estiver aberta, '
+                 'o monitor desta empresa espera.</p>')
+    msg = f'<div class="msg {"erro" if erro else ""}">{e(aviso)}</div>' if aviso else ""
+    html_ = CG_HTML.replace("__NOME__", e(cfg.get("EMPRESA_NOME", eid))).replace("__AVISO__", msg + info).replace("__CORPO__", corpo)
+    return pagina("Conectar Compras.gov.br", html_, "/empresas")
+
+
+def eid_comprasgov(eid):
+    """Empresa existe, é do Compras.gov.br e o usuário pode mexer nela."""
+    return (bool(re.fullmatch(r"[a-z0-9-]{1,40}", eid or "")) and (EMPRESAS / f"{eid}.env").exists()
+            and ler_env(EMPRESAS / f"{eid}.env").get("PLATAFORMA", "").lower() == "comprasgov" and pode_editar_empresa(eid))
 
 
 # ------------------------------------------------------------------ declarações
@@ -9040,13 +9132,13 @@ def salvar_empresa(f, eid=None):
             n += 1
     senha = f.get("senha", "").strip()
     plat = f.get("plataforma", "bll")
-    if plat not in ("bll", "licitanet", "pcp", "bnc"):
+    if plat not in ("bll", "licitanet", "pcp", "bnc", "comprasgov"):
         plat = "bll"
     if plat in ("bll", "bnc") and senha and not re.fullmatch(r"\d{6}", senha):
         return "A senha da BLL/BNC deve ter 6 números."
     if plat == "licitanet" and not re.sub(r"\D", "", f.get("cnpj", "")):
         return "Informe o CNPJ da empresa na Licitanet."
-    if novo and not senha:
+    if novo and not senha and plat != "comprasgov":
         return "Informe a senha da BLL."
     modo = f.get("enviar_para", "geral")
     if modo in ("proprio", "ambos") and not f.get("tg_chat", "").strip():
@@ -9231,6 +9323,53 @@ class Painel(BaseHTTPRequestHandler):
             if k == "k" and v.count("|") == 3 and not pode_empresa(v.split("|")[0]):
                 return self.negar("Você não tem acesso a esta empresa.")
         return True
+
+    def comprasgov_post(self, p, f):
+        eid = f.get("eid", "")
+        if not eid_comprasgov(eid):
+            return self.redirecionar("/empresas")
+        if p == "/comprasgov/abrir":
+            try:
+                comprasgov.abrir(eid, login_atual())
+            except Exception as ex:  # noqa: BLE001
+                return self.enviar(pg_comprasgov(eid, str(ex), True))
+            return self.redirecionar(f"/comprasgov?eid={eid}")
+        if p == "/comprasgov/concluir":
+            try:
+                r = comprasgov.fechar(eid)
+            except Exception as ex:  # noqa: BLE001
+                return self.enviar(pg_comprasgov(eid, f"Não consegui salvar a sessão: {ex}", True))
+            if r.get("logado"):
+                sh("systemctl", "restart", f"monitor-bll@{eid}")
+                return self.enviar(pg_comprasgov(eid, "✅ Sessão salva. O monitor já começou a usar a conexão (só leitura)."))
+            return self.enviar(pg_comprasgov(eid, "A conexão foi fechada, mas parece que o login não foi concluído "
+                                                  "(a última tela era a de entrada do gov.br). Abra de novo e entre.", True))
+        if p == "/comprasgov/acao":
+            con = comprasgov.atual(eid)
+            tipo = f.get("tipo", "")
+            permitidos = {"clique": ("x", "y"), "texto": ("texto",), "tecla": ("tecla",), "rolar": ("dy",), "ir": ("url",),
+                          "voltar": (), "recarregar": (), "marcar_inicio": (), "salvar_tela": ()}
+            try:
+                if not con:
+                    raise LookupError("A conexão foi fechada. Recarregue a página para abrir de novo.")
+                if tipo not in permitidos:
+                    raise ValueError("ação inválida")
+                r = con.pedir(tipo, **{k: f.get(k, "") for k in permitidos[tipo]})
+                res = {"ok": True, "url": r.get("url", ""), "titulo": r.get("titulo", "")}
+            except LookupError as ex:
+                res = {"ok": False, "erro": str(ex), "fechada": True}
+            except Exception as ex:  # noqa: BLE001
+                res = {"ok": False, "erro": str(ex)[:200]}
+            dados = json.dumps(res, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(dados)))
+            self.cabecalhos_seguranca()
+            self.end_headers()
+            self.wfile.write(dados)
+            return
+        return self.redirecionar("/empresas")
 
     def sessao(self):
         """(login, cookie, é_admin) da requisição. /admin só aceita a sessão da Área do administrador."""
@@ -9496,7 +9635,7 @@ class Painel(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(dados)
             return
-        if not p.startswith(("/mensagens/processo", "/mensagens/busca", "/consumo.csv", "/meu-consumo.csv", "/backup/")) \
+        if not p.startswith(("/mensagens/processo", "/mensagens/busca", "/consumo.csv", "/meu-consumo.csv", "/backup/", "/comprasgov/tela")) \
                 and not p.endswith(("/docx", "/arquivo", "/pacote")):
             marcar_presenca(self, self.path)
         if p.startswith(("/admin/empresas", "/admin/preferencias", "/admin/meu-consumo")):
@@ -9519,6 +9658,30 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_empresas(AVISOS.get(q.get("ok", ""), "")))
             if p == "/empresas/nova":
                 return self.enviar(form_empresa())
+            if p in ("/comprasgov", "/comprasgov/tela"):
+                eid_cg = q.get("eid", "")
+                if not eid_comprasgov(eid_cg) or not self.permitido(p, {"eid": eid_cg}):
+                    return self.redirecionar("/empresas")
+                if p == "/comprasgov":
+                    return self.enviar(pg_comprasgov(eid_cg))
+                con = comprasgov.atual(eid_cg)
+                try:
+                    if not con:
+                        raise RuntimeError("fechada")
+                    img_cg = con.pedir("tela", prazo=20)
+                except Exception:  # noqa: BLE001
+                    self.send_response(410)
+                    self.cabecalhos_seguranca()
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(img_cg)))
+                self.cabecalhos_seguranca()
+                self.end_headers()
+                self.wfile.write(img_cg)
+                return
             if p == "/config":
                 return self.enviar(pg_config(AVISOS.get(q.get("ok", ""), "")))
             if p == "/documentos":
@@ -10159,10 +10322,12 @@ class Painel(BaseHTTPRequestHandler):
             return
         if p.startswith(("/admin/empresas", "/admin/preferencias", "/admin/meu-consumo")):
             p = p[6:]
-        if not p.startswith(("/mensagens/lidas", "/mensagens/arquivar", "/pergunte/enviar", "/pergunte/estado")):
+        if not p.startswith(("/mensagens/lidas", "/mensagens/arquivar", "/pergunte/enviar", "/pergunte/estado", "/comprasgov/acao")):
             self.auditar("ação " + p, ", ".join(f"{k}={str(v)[:40]}" for k, v in f.items()
                                                 if k not in ("csrf", "nova", "nova2", "atual", "md") and not re.search(r"senha|token|key|pass|secret|chave", k, re.I)))
         try:
+            if p.startswith("/comprasgov/"):
+                return self.comprasgov_post(p, f)
             if p.startswith("/preferencias/"):
                 return self.preferencias(p, f)
             if p in ("/conta/senha", "/admin/senha"):
