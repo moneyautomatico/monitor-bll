@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Blindagem do servidor do Licitatudo. Pode rodar mais de uma vez sem problema.
+# Blindagem do servidor do Expert Licitante. Pode rodar mais de uma vez sem problema.
 #   bash seguranca.sh                 -> usa o endereço grátis <ip>.sslip.io para o HTTPS
 #   bash seguranca.sh meu.dominio.com www.meu.dominio.com -> usa o seu domínio (aponte o DNS para o IP do servidor antes);
 #                                     só o domínio atende (www redireciona para ele; o endereço sslip.io é desligado)
@@ -73,7 +73,7 @@ cat > /usr/local/bin/licitatudo-alerta-ssh <<EOF
 TOK="\$(grep -E '^TELEGRAM_TOKEN=' ${DIR}/config.env | cut -d= -f2-)"
 CHAT="\$(grep -E '^TELEGRAM_CHAT_ID=' ${DIR}/config.env | cut -d= -f2-)"
 [ -n "\$TOK" ] && [ -n "\$CHAT" ] || exit 0
-TXT="🛡️ Login no SERVIDOR do Licitatudo: usuário \$PAM_USER, de \${PAM_RHOST:-local}, em \$(date '+%d/%m/%Y %H:%M'). Se não foi você, troque a senha do servidor na Hostinger."
+TXT="🛡️ Login no SERVIDOR do Expert Licitante: usuário \$PAM_USER, de \${PAM_RHOST:-local}, em \$(date '+%d/%m/%Y %H:%M'). Se não foi você, troque a senha do servidor na Hostinger."
 ( timeout 10 curl -s -o /dev/null "https://api.telegram.org/bot\$TOK/sendMessage" \
     --data-urlencode "chat_id=\$CHAT" --data-urlencode "text=\$TXT" & ) >/dev/null 2>&1
 exit 0

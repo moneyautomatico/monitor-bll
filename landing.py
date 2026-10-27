@@ -36,7 +36,7 @@ RECURSOS = [
 
 FAQ = [
     ("O sistema dá lance ou envia documentos por mim?",
-     "Não. O Licitatudo só lê as plataformas e prepara arquivos e rascunhos. Quem envia, assina e dá lance é sempre você – com tudo pronto e no prazo."),
+     "Não. O Expert Licitante só lê as plataformas e prepara arquivos e rascunhos. Quem envia, assina e dá lance é sempre você – com tudo pronto e no prazo."),
     ("Preciso de cartão de crédito para testar?", "Não. O teste é grátis por {dias} dias e não pede cartão. No fim, você decide se quer continuar."),
     ("Quais plataformas ele acompanha?",
      "BLL, BNC, Portal de Compras Públicas e Licitanet para o monitor; PNCP para buscar editais e oportunidades. Você cadastra o login da sua empresa e ele começa a ler."),
@@ -46,7 +46,7 @@ FAQ = [
     ("Sou pequena empresa (ME/EPP) e estou começando. Serve para mim?",
      "Serve. O assistente guia cada passo, as dicas explicam os termos técnicos e o siga-me mostra o que fazer em cada licitação – inclusive os direitos de ME/EPP, como o empate ficto."),
     ("Por que não usar só os portais gratuitos?",
-     "Os portais mostram cada pregão separado e não avisam no celular. O Licitatudo junta todos, lê o chat por você, calcula prazos, monta documentos e mostra o que fazer hoje."),
+     "Os portais mostram cada pregão separado e não avisam no celular. O Expert Licitante junta todos, lê o chat por você, calcula prazos, monta documentos e mostra o que fazer hoje."),
     ("Posso fazer o teste mais de uma vez?",
      "Não. O teste grátis é um por empresa: o mesmo CNPJ ou o mesmo login de plataforma não faz um segundo teste, mesmo em outra conta."),
     ("E depois dos {dias} dias?", "Seus dados continuam guardados. É só falar com a gente para escolher o plano e seguir de onde parou."),
@@ -55,7 +55,7 @@ FAQ = [
 
 def pagina(dias=7, whatsapp="", cadastro_aberto=True):
     wa = ("https://wa.me/" + "".join(c for c in whatsapp if c.isdigit()) + "?text=" +
-          urllib.parse.quote("Olá! Vim pelo site do Licitatudo e quero saber mais.")) if whatsapp else ""
+          urllib.parse.quote("Olá! Vim pelo site do Expert Licitante e quero saber mais.")) if whatsapp else ""
     if cadastro_aberto:
         cta = f'<a class="cta" href="/teste-gratis">Testar {dias} dias grátis <span aria-hidden="true">→</span></a>'
         cta_topo = '<a class="cta cta-p" href="/teste-gratis">Testar grátis</a>'
@@ -82,7 +82,7 @@ def pagina(dias=7, whatsapp="", cadastro_aberto=True):
          "“Por que perdi?” lote a lote, ficha do órgão (paga em dia?), proposta readequada ao lance com um clique, contratos, atas e o lucro real.",
          '<div class="barras"><i style="height:40%"></i><i style="height:65%"></i><i style="height:50%"></i><i style="height:85%"></i><i style="height:70%"></i><i style="height:95%"></i></div>'),
     ])
-    telas = [("tela-hoje", "🏠 Hoje", 1360, 472, "A tela Hoje junta, por urgência, tudo o que precisa de você: prazos, disputas, tarefas e certidões."),
+    telas = [("tela-hoje", "🏠 Hoje", 1360, 458, "A tela Hoje junta, por urgência, tudo o que precisa de você: prazos, disputas, tarefas e certidões."),
              ("tela-siga-me", "🧭 Siga-me", 1360, 860, "Cada licitação com o passo a passo do que falta – do edital ao contrato."),
              ("tela-preco", "🧮 Formação de preço", 1360, 645, "Custo, impostos e margem viram o preço da proposta e o lance mínimo de cada item.")]
     abas_telas = "".join(f'<button type="button" role="tab" data-t="{i}" aria-selected="{str(i == 0).lower()}">{e(r)}</button>'
@@ -92,10 +92,10 @@ def pagina(dias=7, whatsapp="", cadastro_aberto=True):
                          for i, (n, _, w, hh, leg) in enumerate(telas))
     faq = "".join(f'<details><summary>{e(p.format(dias=dias))}<span class="mais">+</span></summary><p>{e(r.format(dias=dias))}</p></details>' for p, r in FAQ)
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Licitatudo – sua licitação no piloto automático</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Expert Licitante – sua licitação no piloto automático</title>
 <meta name="description" content="Monitor do pregoeiro 24 h com alarme no celular, prazos da Lei 14.133, preço com lucro e habilitação em um PDF. Teste grátis por {dias} dias, sem cartão.">
 <meta name="theme-color" content="#07160f"><link rel="icon" href="/icone-192.png"><link rel="manifest" href="/manifest.webmanifest">
-<meta property="og:title" content="Licitatudo – sua licitação no piloto automático"><meta property="og:description" content="Teste grátis por {dias} dias, sem cartão.">
+<meta property="og:title" content="Expert Licitante – sua licitação no piloto automático"><meta property="og:description" content="Teste grátis por {dias} dias, sem cartão.">
 <style>
 :root{{--v:#34c27a;--v2:#1f8f57;--esc:#07160f;--esc2:#0d2419;--txt:#0f1f17;--sub:#5a6a61;--borda:#e3ebe6;--bg:#f6f9f7}}
 *{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--txt);background:var(--bg);line-height:1.55;-webkit-font-smoothing:antialiased}}
@@ -195,18 +195,18 @@ footer{{background:var(--esc);color:#7f998b;font-size:13px;padding:26px 0;border
 @media(max-width:980px){{.bento{{grid-template-columns:1fr 1fr}}.b-grande{{grid-row:auto;grid-column:span 2}}.passos{{grid-template-columns:1fr 1fr}}.calc{{grid-template-columns:1fr;padding:28px}}.tela .grid{{grid-template-columns:1fr}}.tela .kan{{display:none}}}}
 @media(max-width:680px){{.topo nav a.lnk{{display:none}}.topo nav{{gap:8px}}.topo .w{{padding:0 14px}}.marca{{font-size:17px}}.topo nav .entrar{{padding:8px 11px}}.tela .bar span:not(.pts){{display:none}}.vs,.seg,.bento,.passos{{grid-template-columns:1fr}}.b-grande,.b-larga{{grid-column:auto}}section{{padding:68px 0}}.hero{{padding:120px 0 64px}}.tela{{margin-top:44px}}.hero h1{{letter-spacing:-1px}}}}
 </style></head><body>
-<header class="topo" id="topo"><div class="w"><a class="marca" href="/conheca"><i>LT</i>Licitatudo</a>
+<header class="topo" id="topo"><div class="w"><a class="marca" href="/conheca"><i>EL</i>Expert Licitante</a>
 <nav><a class="lnk" href="#recursos">Recursos</a><a class="lnk" href="#como">Como funciona</a><a class="lnk" href="#telas">Telas</a><a class="lnk" href="/prazos">Calculadora de prazos</a>
 <a class="entrar" href="/login">Entrar</a>{cta_topo}</nav></div></header>
 
 <div class="hero"><div class="w">
 <span class="pilula"><b>NOVO</b> Alarme do pregoeiro + prazos da Lei 14.133</span>
 <h1>Sua licitação no <span class="grad">piloto automático</span>.<br>Do edital ao pagamento.</h1>
-<p class="lead">O Licitatudo vigia o chat do pregoeiro 24 horas, toca no seu celular quando é com você, calcula os prazos da lei,
+<p class="lead">O Expert Licitante vigia o chat do pregoeiro 24 horas, toca no seu celular quando é com você, calcula os prazos da lei,
 monta a proposta com preço que dá lucro e deixa a habilitação pronta em um PDF.</p>
 <div class="botoes">{cta}{cta_wa}</div>
 <div class="mini"><span>{ic("check")} {dias} dias grátis</span><span>{ic("check")} Sem cartão de crédito</span><span>{ic("check")} Conta pronta em 1 minuto</span><span>{ic("check")} Cancele quando quiser</span></div>
-<div class="tela rv"><div class="tela-in"><div class="bar"><span class="pts"><i></i><i></i><i></i></span><b>Licitatudo</b><span>🏠 Hoje</span><span>🗂️ Licitações</span><span>🎯 Disputa</span><span>📄 Documentos</span></div>
+<div class="tela rv"><div class="tela-in"><div class="bar"><span class="pts"><i></i><i></i><i></i></span><b>Expert Licitante</b><span>🏠 Hoje</span><span>🗂️ Licitações</span><span>🎯 Disputa</span><span>📄 Documentos</span></div>
 <div class="grid"><div><div style="font-weight:800;margin-bottom:10px">🏠 Hoje – o que precisa de você</div>
 <div class="it"><span>🏁</span><div><b>Disputa HOJE às 09:00 – Pregão 45/2026</b><small>Prefeitura Municipal · 86% pronto · falta: pacote</small></div><span class="bt">Abrir</span></div>
 <div class="it"><span>⏰</span><div><b>Proposta ajustada em até 2 horas</b><small>Pedido do pregoeiro no chat · Pregão 33/2026</small></div><span class="bt">Ver</span></div>
@@ -221,10 +221,10 @@ monta a proposta com preço que dá lucro e deixa a habilitação pronta em um P
 
 <section><div class="w"><div class="tit rv"><span class="tag">O problema</span><h2>Licitação não perdoa um minuto de distração</h2>
 <p>Quem disputa vários pregões ao mesmo tempo vive com o portal aberto, planilha de prazos e medo de perder a convocação.</p></div>
-<div class="vs rv"><div class="sem"><h3>Sem o Licitatudo</h3><ul>
+<div class="vs rv"><div class="sem"><h3>Sem o Expert Licitante</h3><ul>
 <li>Atualizar o chat de cada pregão o dia inteiro</li><li>Convocação de 2 horas vista tarde demais</li><li>Prazo de recurso contado na mão (e errado)</li>
 <li>Certidão vencida descoberta na hora de enviar</li><li>Lance no impulso, sem saber o custo real</li><li>Perder sem entender por quê</li></ul></div>
-<div class="com"><h3>Com o Licitatudo</h3><ul>
+<div class="com"><h3>Com o Expert Licitante</h3><ul>
 <li>O monitor lê todos os chats por você, 24 horas</li><li>Alarme no celular quando o pregoeiro chama</li><li>Prazos da Lei 14.133 calculados e avisados</li>
 <li>Certidões com aviso antes de vencer e link de emissão</li><li>Preço e lance mínimo calculados antes da disputa</li><li>“Por que perdi?” lote a lote, com dicas</li></ul></div></div></div></section>
 
@@ -232,7 +232,7 @@ monta a proposta com preço que dá lucro e deixa a habilitação pronta em um P
 <p>Do edital ao pagamento – com o sistema dizendo o que fazer, e quando.</p></div><div class="bento rv">{bento}</div></div></section>
 
 <section id="telas" style="padding-top:0"><div class="w"><div class="tit rv"><span class="tag">Veja o sistema</span><h2>Telas reais, sem maquiagem</h2>
-<p>É assim que o Licitatudo aparece para você – aqui com uma empresa e órgãos de exemplo.</p></div>
+<p>É assim que o Expert Licitante aparece para você – aqui com uma empresa e órgãos de exemplo.</p></div>
 <div class="abas rv" role="tablist">{abas_telas}</div><div class="telas rv">{figs_telas}</div></div></section>
 
 <section id="como" style="background:#fff;border-top:1px solid var(--borda);border-bottom:1px solid var(--borda)"><div class="w"><div class="tit rv"><span class="tag">Como funciona</span>
@@ -243,7 +243,7 @@ monta a proposta com preço que dá lucro e deixa a habilitação pronta em um P
 <div class="p"><b>Receba</b><span>Contratos, entregas, notas e atas sob controle – com aviso de pagamento atrasado.</span></div></div></div></section>
 
 <section><div class="w"><div class="calc rv"><div><span class="tag" style="color:#7ef0b4">Faça a conta</span><h2>Quanto tempo você gasta só vigiando o pregoeiro?</h2>
-<p>Ajuste com a sua rotina. Esse é o tempo que o monitor do Licitatudo assume por você – para você usar vendendo mais.</p></div>
+<p>Ajuste com a sua rotina. Esse é o tempo que o monitor do Expert Licitante assume por você – para você usar vendendo mais.</p></div>
 <div><div class="campo"><label>Pregões acompanhados por mês <b id="v1">10</b></label><input type="range" id="r1" min="1" max="60" value="10"></div>
 <div class="campo"><label>Minutos por dia olhando o chat de cada um <b id="v2">20</b></label><input type="range" id="r2" min="5" max="90" step="5" value="20"></div>
 <div class="campo"><label>Dias de sessão/acompanhamento por pregão <b id="v3">5</b></label><input type="range" id="r3" min="1" max="20" value="5"></div>
@@ -261,7 +261,7 @@ monta a proposta com preço que dá lucro e deixa a habilitação pronta em um P
 
 <section class="final"><div class="w"><h2>Teste {dias} dias grátis.<br><span class="grad">Sem cartão. Sem compromisso.</span></h2>
 <p>Crie a conta em 1 minuto e amanhã cedo receba no Telegram o resumo do seu dia de licitações.</p><div class="botoes">{cta}{cta_wa}</div></div></section>
-<footer><div class="w"><span>© Licitatudo · licitação no piloto automático</span><span><a href="/prazos" style="text-decoration:none">Calculadora de prazos</a> · <a href="/login" style="text-decoration:none">Entrar</a></span></div></footer>
+<footer><div class="w"><span>© Expert Licitante · licitação no piloto automático</span><span><a href="/prazos" style="text-decoration:none">Calculadora de prazos</a> · <a href="/login" style="text-decoration:none">Entrar</a></span></div></footer>
 {f'<a class="wa" href="{e(wa)}" target="_blank" rel="noopener">💬 WhatsApp</a>' if wa else ""}
 <script>
 (function(){{const t=document.getElementById('topo');const f=()=>t.classList.toggle('rolou',scrollY>20);f();addEventListener('scroll',f,{{passive:true}});
@@ -280,7 +280,7 @@ def pagina_cadastro(dias, token, erro="", campos=None, whatsapp=""):
     c = campos or {}
     v = lambda k: e(c.get(k, ""))  # noqa: E731
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Teste grátis – Licitatudo</title><meta name="theme-color" content="#173f2c"><link rel="icon" href="/icone-192.png">
+<title>Teste grátis – Expert Licitante</title><meta name="theme-color" content="#173f2c"><link rel="icon" href="/icone-192.png">
 <style>*{{box-sizing:border-box}}body{{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f7faf8;color:#14211a;
 display:grid;place-items:center;min-height:100vh;padding:24px}}.cx{{width:100%;max-width:440px;background:#fff;border:1px solid #dde6e0;border-radius:18px;padding:28px;
 box-shadow:0 24px 50px rgba(20,33,26,.1)}}a{{color:#1f5c3f}}h1{{font-size:24px;margin:0 0 6px}}p.s{{color:#55645b;margin:0 0 18px;font-size:14.5px}}
@@ -289,7 +289,7 @@ border-radius:10px;outline:none}}input:focus{{border-color:#2f8a5b;box-shadow:0 
 .ck{{display:flex;gap:8px;align-items:flex-start;font-weight:400;font-size:13px;margin-top:14px}}button{{width:100%;margin-top:18px;font:inherit;font-weight:700;color:#fff;border:0;
 border-radius:12px;padding:14px;cursor:pointer;background:linear-gradient(135deg,#2f8a5b,#1f5c3f)}}.erro{{background:#fde8e6;color:#b3261e;border-radius:10px;padding:10px 12px;font-size:14px;margin-bottom:8px}}
 .hp{{position:absolute;left:-9999px}}.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}}</style></head><body><div class="cx">
-<p style="margin:0 0 14px"><a href="/">← Licitatudo</a></p><h1>Teste grátis por {dias} dias</h1>
+<p style="margin:0 0 14px"><a href="/">← Expert Licitante</a></p><h1>Teste grátis por {dias} dias</h1>
 <p class="s">Sem cartão de crédito. Você já entra no painel e o assistente mostra cada passo.</p>
 {f'<div class="erro">{e(erro)}</div>' if erro else ""}
 <form method="post" action="/teste-gratis" autocomplete="on"><input type="hidden" name="t" value="{e(token)}">
@@ -485,13 +485,13 @@ def pagina_prazos(q=None, cadastro_aberto=True, dias=7):
         if not calc["blocos"]:
             partes.append('<div class="aviso">Informe pelo menos uma data válida.</div>')
         res = '<div class="res" id="resultado">' + "".join(partes) + "</div>"
-    vende = (f'<div class="vende"><div><h2>Pare de contar prazo na mão.</h2><p>No Licitatudo, cada licitação já nasce com esses prazos na agenda '
+    vende = (f'<div class="vende"><div><h2>Pare de contar prazo na mão.</h2><p>No Expert Licitante, cada licitação já nasce com esses prazos na agenda '
              f'e o aviso chega no Telegram e no celular 24 h e 2 h antes.</p></div>{cta}</div>') if cta else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Calculadora de prazos de licitação – Lei 14.133 | Licitatudo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Calculadora de prazos de licitação – Lei 14.133 | Expert Licitante</title>
 <meta name="description" content="Calcule grátis o prazo de impugnação, esclarecimento, recurso, contrarrazões, regularização ME/EPP e vigência de ata pela Lei 14.133, em dias úteis.">
 <meta name="theme-color" content="#07160f"><link rel="icon" href="/icone-192.png"><style>{CSS_PUB}</style></head><body>
-<header class="topo"><div class="w"><a class="marca" href="/conheca"><i>LT</i>Licitatudo</a><nav><a class="lnk" href="/conheca">Conheça</a>
+<header class="topo"><div class="w"><a class="marca" href="/conheca"><i>EL</i>Expert Licitante</a><nav><a class="lnk" href="/conheca">Conheça</a>
 <a class="entrar" href="/login">Entrar</a>{cta_topo}</nav></div></header>
 <div class="hero"><div class="w"><span class="tag">Ferramenta gratuita</span><h1>Calculadora de prazos<br>de licitação – Lei 14.133</h1>
 <p>Impugnação, esclarecimento, prazo mínimo do edital, recurso, contrarrazões, regularização de ME/EPP e vigência de ata – em dias úteis, com o artigo da lei.</p></div></div>
@@ -512,5 +512,5 @@ def pagina_prazos(q=None, cadastro_aberto=True, dias=7):
 {vende}
 <p class="nota">Contagem em dias úteis com os feriados nacionais (inclui Carnaval e Corpus Christi). Feriados estaduais e municipais, pontos facultativos
 e regras próprias do edital podem mudar a data – confira sempre o edital e o sistema da licitação. Esta calculadora é uma ajuda e não substitui orientação jurídica.</p>
-</main><footer><div class="w"><span>© Licitatudo · licitação no piloto automático</span><span><a href="/conheca" style="text-decoration:none">Conheça o Licitatudo</a></span></div></footer>
+</main><footer><div class="w"><span>© Expert Licitante · licitação no piloto automático</span><span><a href="/conheca" style="text-decoration:none">Conheça o Expert Licitante</a></span></div></footer>
 </body></html>"""

@@ -374,7 +374,7 @@ def alerta_seguranca(chave, texto, minutos=60):
         return
     _ALERTAS_LOGIN[chave] = agora
     threading.Thread(target=telegram_geral, args=("🛡️ " + texto,), daemon=True).start()
-    threading.Thread(target=ntfy_geral, args=("Licitatudo – segurança", re.sub(r"<[^>]+>", "", texto), "4"), daemon=True).start()
+    threading.Thread(target=ntfy_geral, args=("Expert Licitante – segurança", re.sub(r"<[^>]+>", "", texto), "4"), daemon=True).start()
 
 
 def acesso_novo(ip, navegador):
@@ -394,7 +394,7 @@ def acesso_novo(ip, navegador):
 
 def pg_login(erro="", destino="/", admin=False):
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar – Licitatudo</title>{TEMA_JS}
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar – Expert Licitante</title>{TEMA_JS}
 <style>
 *{{box-sizing:border-box}}html,body{{height:100%;margin:0}}
 body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#17241c;display:grid;grid-template-columns:1.1fr 1fr;background:#f3f5f4}}
@@ -435,14 +435,14 @@ button.entrar:hover{{transform:translateY(-1px);box-shadow:0 14px 28px rgba(31,9
 :root[data-theme=dark] .tema{{background:#1a211d;border-color:#2a332e}}
 @media (max-width:860px){{body{{grid-template-columns:1fr}}.arte{{padding:28px;min-height:auto}}.chamada h1{{font-size:26px}}.chips,.rodape{{display:none}}}}
 </style></head><body>
-<section class="arte"><div class="marca"><div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>Licitatudo</div>
+<section class="arte"><div class="marca"><div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>Expert Licitante</div>
 <div class="chamada"><h1>Todas as suas licitações, num só lugar.</h1>
 <p>Mensagens do pregoeiro, classificação dos lotes, recursos e diligências da BLL, BNC e Portal de Compras — com alerta na hora.</p>
 <div class="chips"><span class="chip">🔔 Alertas em tempo real</span><span class="chip">📊 Classificação por lote</span><span class="chip">🤖 Análise de editais</span></div></div>
-<div class="rodape">© {datetime.now().year} Licitatudo · acesso restrito</div></section>
+<div class="rodape">© {datetime.now().year} Expert Licitante · acesso restrito</div></section>
 <button type="button" class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>
 <section class="lado"><form class="cartao" method="post" action="/login">
-{'<h2>🛡️ Acesso do administrador</h2><p class="sub">Entrada exclusiva para administradores do Licitatudo.</p><input type="hidden" name="so_admin" value="1">' if admin else '<h2>Bem-vindo de volta</h2><p class="sub">Entre para acessar o painel.</p>'}
+{'<h2>🛡️ Acesso do administrador</h2><p class="sub">Entrada exclusiva para administradores do Expert Licitante.</p><input type="hidden" name="so_admin" value="1">' if admin else '<h2>Bem-vindo de volta</h2><p class="sub">Entre para acessar o painel.</p>'}
 {f'<div class="erro">{e(erro)}</div>' if erro else ''}
 <input type="hidden" name="destino" value="{e(destino)}">
 <label for="u">Usuário</label><div class="campo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
@@ -829,7 +829,7 @@ ABAS = [("/", "Início"), ("/licitacoes", "🗂️ Licitações"), ("/mensagens"
 
 
 PAPEL_NOME = usuarios.PAPEIS
-BOTAO_IA = ('<a href="/pergunte" class="fab-ia" title="Pergunte ao Licitatudo (IA)">💬<span>Pergunte</span></a>'
+BOTAO_IA = ('<a href="/pergunte" class="fab-ia" title="Pergunte ao Expert Licitante (IA)">💬<span>Pergunte</span></a>'
             '<style>.fab-ia{position:fixed;right:18px;bottom:18px;z-index:1500;background:#1b5e20;color:#fff;text-decoration:none;'
             'border-radius:999px;padding:12px 16px;font-weight:700;box-shadow:0 6px 18px rgba(0,0,0,.3);display:flex;gap:6px;align-items:center}'
             '.fab-ia:hover{background:#2e7d32}@media print{.fab-ia{display:none}}@media(max-width:700px){.fab-ia span{display:none}}</style>')
@@ -852,7 +852,7 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvet
 header{position:sticky;top:0;z-index:50;background:linear-gradient(180deg,rgba(7,22,15,.97),rgba(13,36,25,.95));backdrop-filter:saturate(1.4) blur(12px);
 -webkit-backdrop-filter:saturate(1.4) blur(12px);border-bottom:1px solid rgba(255,255,255,.07);box-shadow:0 6px 20px rgba(0,0,0,.12);padding:0 18px;gap:14px;min-height:60px}
 header>b{display:flex;align-items:center;gap:9px;font-size:17px;letter-spacing:-.2px;padding:12px 0}
-header>b:before{content:"LT";width:30px;height:30px;border-radius:9px;background:conic-gradient(from 210deg,#7ef0b4,#34c27a,#1f8f57,#7ef0b4);
+header>b:before{content:"EL";width:30px;height:30px;border-radius:9px;background:conic-gradient(from 210deg,#7ef0b4,#34c27a,#1f8f57,#7ef0b4);
 display:grid;place-items:center;color:#07160f;font-size:12px;font-weight:900;box-shadow:0 4px 12px rgba(52,194,122,.35)}
 nav{gap:2px;align-items:center}nav a{color:#c3d6ca;padding:8px 11px;margin:10px 0;border:0;border-radius:10px;font-size:13.5px;font-weight:500;transition:background .15s,color .15s}
 nav a:hover{background:rgba(255,255,255,.07);color:#fff}nav a.on{background:rgba(52,194,122,.16);color:#fff;box-shadow:inset 0 0 0 1px rgba(126,240,180,.25)}
@@ -927,9 +927,9 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
                 '<a href="/conta">Trocar agora em Minha conta</a>.</div>')
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Expert Licitante</title>
 <link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#07160f"><link rel="apple-touch-icon" href="/icone-192.png">
-{TEMA_JS}<style>{ESTILO}{ESTILO_MODERNO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="topo" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)" style="margin-left:auto">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓<span class="rot"> Ajuda</span></a>{f'<a class="sair" href="/conta" title="Minha conta – {e(u["login"])} ({e(PAPEL_NOME.get(u["papel"], ""))})">👤<span class="rot"> {e(u["login"])}</span></a>' if u else ""}<a class="sair" href="/sair">Sair</a></header>{faixa_teste(u) if u else ""}<main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
+{TEMA_JS}<style>{ESTILO}{ESTILO_MODERNO}</style></head><body><header><b>Expert Licitante</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="topo" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)" style="margin-left:auto">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓<span class="rot"> Ajuda</span></a>{f'<a class="sair" href="/conta" title="Minha conta – {e(u["login"])} ({e(PAPEL_NOME.get(u["papel"], ""))})">👤<span class="rot"> {e(u["login"])}</span></a>' if u else ""}<a class="sair" href="/sair">Sair</a></header>{faixa_teste(u) if u else ""}<main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();
 document.querySelectorAll('nav .sub-m a').forEach(a=>{{if(a.getAttribute('href')===location.pathname)a.classList.add('aqui');}});
 if('serviceWorker' in navigator){{navigator.serviceWorker.register('/sw.js').catch(()=>{{}});}}</script></body></html>"""
@@ -942,7 +942,7 @@ NOMES_PAGINA = [("/admin/empresas", "Admin · Empresas"), ("/admin/auditoria", "
                 ("/disputa", "🎯 Disputa"), ("/agenda", "Agenda"), ("/certidoes", "Certidões"), ("/concorrentes", "Concorrentes"),
                 ("/oportunidades", "Oportunidades"), ("/buscar", "Buscar"), ("/editais", "Editais (IA)"), ("/analise", "Análise de edital"),
                 ("/documentos", "Declarações"), ("/propostas", "Proposta comercial"), ("/pecas", "Peças com IA"), ("/empresas", "Empresas"),
-                ("/preferencias", "⚙️ Minhas configurações"), ("/meu-consumo", "Meu consumo de IA"), ("/pergunte", "Pergunte ao Licitatudo"),
+                ("/preferencias", "⚙️ Minhas configurações"), ("/meu-consumo", "Meu consumo de IA"), ("/pergunte", "Pergunte ao Expert Licitante"),
                 ("/conta", "Minha conta"), ("/config", "Configurações gerais"), ("/consumo", "Consumo de IA"),
                 ("/licitacoes", "🗂️ Licitações"), ("/atas", "Atas de registro de preço"), ("/contratos", "Contratos"), ("/ajuda", "❓ Ajuda"),
                 ("/atestados", "Atestados"), ("/relatorio", "Relatório do mês"), ("/resultado", "Por que perdi?"),
@@ -1012,9 +1012,9 @@ def pagina_admin(titulo, corpo, aviso="", erro=False):
     u = usuario_atual()
     msg = f'<div class="msg {"erro" if erro else ""}">{aviso}</div>' if aviso else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Administração Licitatudo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Administração Expert Licitante</title>
 {TEMA_JS}<style>{ESTILO}header{{background:linear-gradient(90deg,#2a1f4d,#3b2a6b)!important}}</style></head><body>
-<header><b>🛡️ Licitatudo · Administração</b><nav></nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>
+<header><b>🛡️ Expert Licitante · Administração</b><nav></nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>
 <a class="sair" href="/" target="_blank" title="Abrir o painel de uso diário">↗ Abrir o painel</a>
 <span class="sair" style="cursor:default">👤 {e(u["login"]) if u else ""}</span><a class="sair" href="/admin/sair">Sair</a></header><main>{msg}{corpo}</main><script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();</script></body></html>"""
@@ -1483,7 +1483,7 @@ def pg_bem_vindo(q):
         itens += (f'<li class="{"feito" if ok else ("atual" if atual == i else "")}"><div class="n">{"✓" if ok else i}</div><div style="flex:1">'
                   f'<b>{ic} {e(t)}</b>' + (f'<div class="sub">{e(txt)}</div>' if txt and not ok else "")
                   + (f'<div class="acoes"><a class="btn" href="{e(u)}">Fazer agora →</a></div>' if atual == i else "") + "</div></li>")
-    corpo = f"""{ESTILO_KANBAN}<div style="max-width:760px;margin:auto"><h2>👋 Bem-vindo ao Licitatudo{(", " + e(lg)) if lg else ""}!</h2>
+    corpo = f"""{ESTILO_KANBAN}<div style="max-width:760px;margin:auto"><h2>👋 Bem-vindo ao Expert Licitante{(", " + e(lg)) if lg else ""}!</h2>
 <p>Em poucos passos o sistema começa a trabalhar por você: acompanha os processos, avisa os prazos e monta os documentos.
 <b>{feitos} de {len(ps)}</b> feitos.</p><div class="pbar grande"><span style="width:{int(100 * feitos / len(ps))}%"></span></div>
 <ol class="siga" style="margin-top:12px">{itens}</ol>
@@ -1645,7 +1645,7 @@ def trava_teste_msg(lg, cnpj="", plat="", login_plat="", ignorar_eid=None):
     cv = cfg_vendas()
     contato = (" Fale com a gente pelo WhatsApp (" + cv["whatsapp"] + ") para assinar." if cv["whatsapp"] else " Fale com a gente para assinar.")
     if trava_teste.conflito(trava_teste.chaves(cnpj, plat, login_plat), lg):
-        return "Esta empresa já usou o teste grátis do Licitatudo em outra conta – o teste é 1 por empresa." + contato
+        return "Esta empresa já usou o teste grátis do Expert Licitante em outra conta – o teste é 1 por empresa." + contato
     c14 = trava_teste.so_digitos(cnpj)
     lp = (login_plat or "").strip().lower()
     for a in EMPRESAS.glob("*.env") if EMPRESAS.exists() else []:
@@ -1656,7 +1656,7 @@ def trava_teste_msg(lg, cnpj="", plat="", login_plat="", ignorar_eid=None):
                                                  trava_teste.so_digitos(documentos.dados(c.get("EMPRESA_NOME") or a.stem).get("cnpj")))
         mesmo_login = lp and (c.get("BLL_EMAIL") or "").strip().lower() == lp and (c.get("PLATAFORMA") or "bll").lower() == (plat or "bll")
         if mesmo_cnpj or mesmo_login:
-            return "Esta empresa já está cadastrada no Licitatudo em outra conta, por isso não entra no teste grátis." + contato
+            return "Esta empresa já está cadastrada no Expert Licitante em outra conta, por isso não entra no teste grátis." + contato
     return ""
 
 
@@ -1710,9 +1710,9 @@ def link_whatsapp(texto):
 
 def pg_teste_encerrado():
     u = usuario_atual() or {}
-    wa = link_whatsapp(f"Olá! Meu teste do Licitatudo terminou (login {u.get('login', '')}) e quero continuar.")
+    wa = link_whatsapp(f"Olá! Meu teste do Expert Licitante terminou (login {u.get('login', '')}) e quero continuar.")
     corpo = f"""<div style="max-width:620px;margin:40px auto;text-align:center"><h2 style="font-size:26px">⏳ O seu teste grátis terminou</h2>
-<p>Obrigado por testar o Licitatudo! Os seus dados (empresas, licitações, propostas e documentos) continuam guardados.
+<p>Obrigado por testar o Expert Licitante! Os seus dados (empresas, licitações, propostas e documentos) continuam guardados.
 Para continuar de onde parou, fale com a gente e escolha o plano.</p>
 {f'<p><a class="btn" href="{e(wa)}" target="_blank" rel="noopener" style="font-size:16px;padding:12px 20px">💬 Falar no WhatsApp e continuar</a></p>' if wa else '<p><b>Fale com o administrador do sistema para continuar.</b></p>'}
 <p class="sub">Enquanto isso, os monitores das suas empresas ficam pausados no painel.</p></div>"""
@@ -1722,7 +1722,7 @@ Para continuar de onde parou, fale com a gente e escolha o plano.</p>
 def faixa_teste(u):
     sc = situacao_conta(u)
     if sc["cod"] in ("vencendo", "carencia"):
-        wa = link_whatsapp(f"Olá! Quero renovar a assinatura do Licitatudo (login {u.get('login', '')}).")
+        wa = link_whatsapp(f"Olá! Quero renovar a assinatura do Expert Licitante (login {u.get('login', '')}).")
         d = sc["dias"]
         txt = (("vence <b>hoje</b>" if d == 0 else f"vence em <b>{d} dia(s)</b>") + f" ({sc['ate']:%d/%m})") if d >= 0 else \
             f"<b>venceu</b> em {sc['ate']:%d/%m} – o acesso é bloqueado em {carencia_dias() + d + 1} dia(s)"
@@ -1731,7 +1731,7 @@ def faixa_teste(u):
     st = situacao_teste(u)
     if not st or st["acabou"]:
         return ""
-    wa = link_whatsapp(f"Olá! Estou testando o Licitatudo (login {u.get('login', '')}) e quero assinar.")
+    wa = link_whatsapp(f"Olá! Estou testando o Expert Licitante (login {u.get('login', '')}) e quero assinar.")
     txt = "último dia" if st["dias"] == 0 else f"faltam {st['dias']} dia(s)"
     return (f'<div style="background:#fff4e0;color:#7a4b00;font-size:13px;padding:7px 16px;text-align:center">🎁 Teste grátis – <b>{txt}</b> '
             f'(até {st["ate"]:%d/%m}).{(" <a href=" + chr(34) + e(wa) + chr(34) + " target=_blank rel=noopener style=color:#7a4b00;font-weight:700>Quero assinar →</a>") if wa else ""}</div>')
@@ -1825,7 +1825,7 @@ def avisos_planos():
             txt = f"vence {'HOJE' if d == 0 else f'em {d} dia(s)'} ({sc['ate']:%d/%m/%Y})"
         else:
             txt = f"venceu em {sc['ate']:%d/%m/%Y} – o acesso é bloqueado em {carencia_dias() + d + 1} dia(s)"
-        telegram_geral(f"🔑 <b>Sua assinatura do Licitatudo {txt}.</b>\nFale com a gente para renovar e não ficar sem os alertas.", usuario=lg)
+        telegram_geral(f"🔑 <b>Sua assinatura do Expert Licitante {txt}.</b>\nFale com a gente para renovar e não ficar sem os alertas.", usuario=lg)
         telegram_geral(f"🔑 <b>Assinatura {txt}</b>\n{nome} (login <b>{e(lg)}</b>) – {e(c.get('empresa_nome', ''))}\n"
                        f"WhatsApp: {e(c.get('whatsapp', '') or '—')}\nRenovar em 🛡️ Admin → 🔑 Ativação.")
         usuarios.salvar_cfg(lg, {"avisos_plano": (feitos + [chave])[-20:]})
@@ -1838,11 +1838,11 @@ def pg_conta_bloqueada():
         return pg_teste_encerrado()
     if sc["cod"] == "suspenso":
         tit, txt = "🚫 Acesso suspenso", "O acesso desta conta está suspenso no momento."
-        msg_wa = f"Olá! Meu acesso ao Licitatudo está suspenso (login {u.get('login', '')}). Pode me ajudar?"
+        msg_wa = f"Olá! Meu acesso ao Expert Licitante está suspenso (login {u.get('login', '')}). Pode me ajudar?"
     else:
         tit = "⏳ Sua assinatura venceu"
         txt = f"A assinatura venceu em {sc['ate']:%d/%m/%Y}." if sc.get("ate") else "A assinatura venceu."
-        msg_wa = f"Olá! Quero renovar a assinatura do Licitatudo (login {u.get('login', '')})."
+        msg_wa = f"Olá! Quero renovar a assinatura do Expert Licitante (login {u.get('login', '')})."
     wa = link_whatsapp(msg_wa)
     corpo = f"""<div style="max-width:620px;margin:40px auto;text-align:center"><h2 style="font-size:26px">{tit}</h2>
 <p>{txt} Os seus dados (empresas, licitações, propostas e documentos) continuam guardados e voltam assim que o acesso for reativado.</p>
@@ -2611,7 +2611,7 @@ def evolucao_semanal():
             a = dados_evolucao(agora - timedelta(days=7), agora)
             b = dados_evolucao(agora - timedelta(days=14), agora - timedelta(days=7))
             dif = f"\n• Nos lotes perdidos, ficou em média <b>{a['dif_media']:.1f}%</b> acima do 1º" if a["dif_media"] is not None else ""
-            txt = (f"📈 <b>Sua semana no Licitatudo</b>\n• Licitações novas: <b>{a['novas']}</b> (antes {b['novas']})\n"
+            txt = (f"📈 <b>Sua semana no Expert Licitante</b>\n• Licitações novas: <b>{a['novas']}</b> (antes {b['novas']})\n"
                    f"• Disputas: <b>{a['disputas']}</b> (antes {b['disputas']})\n• Propostas montadas: <b>{a['propostas']}</b>\n"
                    f"• Lotes com classificação: <b>{a['lotes']}</b> · 1º lugar: <b>{a['primeiros']}</b>\n• Ganhas: <b>{a['ganhas']}</b>{dif}\n\n"
                    f"💡 {e(dica_evolucao(a, b))}")
@@ -5889,7 +5889,7 @@ def html_relatorio(d):
             + _barras("Recebido", [(m, h["recebido"]) for m, h in d["hist"]], lambda v: brl(v).replace("R$ ", "")))
     return f"""<div class="rel"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
 <div><h1>Relatório de licitações</h1><div class="sub">{nome_mes(d["mes"]).capitalize()} · {e(d["emp"] or "todas as empresas")}</div></div>
-<div class="sub">Gerado em {datetime.now():%d/%m/%Y %H:%M} · Licitatudo</div></div>
+<div class="sub">Gerado em {datetime.now():%d/%m/%Y %H:%M} · Expert Licitante</div></div>
 <div class="kp"><div><span>Disputadas</span><b>{len(d["lic"])}</b></div><div><span>Ganhas</span><b>{d["ganhas"]}</b></div>
 <div><span>Taxa de vitória</span><b>{taxa}</b></div><div><span>Valor ganho</span><b>{brl(d["valor_ganho"])}</b></div>
 <div><span>Faturado no mês</span><b>{brl(d["faturado"])}</b></div><div><span>Recebido no mês</span><b>{brl(d["recebido"])}</b></div>
@@ -7159,7 +7159,7 @@ O copiloto usa o piso para dizer se ainda dá para cobrir o concorrente.</p>
     return pagina("Disputa ao vivo", corpo, "/disputa", aviso)
 
 
-# ------------------------------------------------------------------ pergunte ao Licitatudo (IA)
+# ------------------------------------------------------------------ pergunte ao Expert Licitante (IA)
 SUGESTOES = ["Quais processos estão em habilitação ou recurso agora?", "Em quais lotes estamos em 1º lugar?",
              "Quais prazos vencem esta semana?", "Quais certidões estão vencidas ou vencendo?",
              "Quem é o concorrente que mais ganha da gente e por quanto?", "Resuma o que aconteceu hoje nos processos",
@@ -7195,7 +7195,7 @@ def pg_pergunte():
 .chips-s{{display:flex;flex-wrap:wrap;gap:6px}}.chip-s{{font-size:13px;padding:6px 10px;border-radius:999px}}
 .pensando{{color:var(--sub);font-style:italic}}</style>
 <div class="conv"><div class="linha" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-<h2 style="margin:0">💬 Pergunte ao Licitatudo</h2>
+<h2 style="margin:0">💬 Pergunte ao Expert Licitante</h2>
 <form method="post" action="/pergunte/limpar"><input type="hidden" name="csrf" value="{CSRF}"><button class="sec">🗑 Nova conversa</button></form></div>
 <p class="sub">A IA responde com os dados do sistema: processos, situação, classificação, mensagens do chat, prazos, certidões,
 concorrentes, oportunidades e editais analisados. Ela pode errar – confira o que for decisivo. Os dados vão para o Google
@@ -7325,11 +7325,11 @@ real (média dos últimos usos) e dos preços/repasse em ⚙️. Edite à vontad
 def comunicado_texto(tab_valores):
     p = custos_ia.precos()
     linhas = "\n".join(f"  • {nome.split(' ', 1)[1] if ' ' in nome else nome}: aprox. {custos_ia.brl(v)} por uso" for nome, v, _ in tab_valores)
-    return f"""Assunto: Uso dos recursos de Inteligência Artificial no Licitatudo – custos por uso
+    return f"""Assunto: Uso dos recursos de Inteligência Artificial no Expert Licitante – custos por uso
 
 Prezado(a) licitante,
 
-Informamos que alguns recursos do Licitatudo utilizam Inteligência Artificial (Google Gemini), serviço cobrado
+Informamos que alguns recursos do Expert Licitante utilizam Inteligência Artificial (Google Gemini), serviço cobrado
 por uso. Por isso, cada utilização desses recursos gera um custo, calculado pela quantidade de texto lida e
 escrita pela IA (tokens).
 
@@ -7475,7 +7475,7 @@ def pg_meu_consumo(q):
         f'<tr><td>{e(nome)}</td><td>~{custos_ia.brl(custos_ia.estimativa(k)[1] if custos_ia.precos()["cobrar"] and custos_ia.precos()["acrescimo"] else custos_ia.estimativa(k)[0])}</td></tr>'
         for k, (nome, _) in custos_ia.RECURSOS.items())
     corpo = f"""{ESTILO_IA}<h2>💳 Meu consumo de IA</h2>
-<p class="sub">Os recursos com inteligência artificial (análise de edital, “Posso participar?”, declarações, peças e “Pergunte ao Licitatudo”)
+<p class="sub">Os recursos com inteligência artificial (análise de edital, “Posso participar?”, declarações, peças e “Pergunte ao Expert Licitante”)
 têm custo por uso. Aqui aparecem só os <b>seus</b> usos. Os demais recursos do sistema não têm custo de IA.</p>
 {'<div class="aviso-ia">Você usa a <b>sua própria chave</b> do Google Gemini: a cobrança real vem do Google na sua conta – os valores aqui são estimativa.</div>' if uc.get("gemini_key") else ''}
 <div class="acoes">{sel}<a class="btn sec" href="/meu-consumo.csv?mes={mes}">⬇ Exportar CSV</a><a class="btn sec" href="/preferencias">⚙️ Voltar</a></div>
@@ -7496,7 +7496,7 @@ def pg_preferencias(aviso="", erro=False):
     bot, chat, topico = uc.get("bot_nome", ""), uc.get("tg_chat", ""), uc.get("ntfy", "")
     tem_bot = bool(uc.get("tg_token"))
     cod = codigo_telegram(lg)
-    sugestao_ntfy = uc.get("ntfy_sugestao") or ("licitatudo-" + re.sub(r"[^a-z0-9]", "", lg)[:12] + "-" + secrets.token_hex(4))
+    sugestao_ntfy = uc.get("ntfy_sugestao") or ("expertlicitante-" + re.sub(r"[^a-z0-9]", "", lg)[:12] + "-" + secrets.token_hex(4))
     if not uc.get("ntfy_sugestao"):
         usuarios.salvar_cfg(lg, {"ntfy_sugestao": sugestao_ntfy})
     ok_i = '<span class="passo ok">✓</span>'
@@ -7664,7 +7664,7 @@ Telegram/ntfy de administrador. Os alertas das empresas continuam indo só para 
 <div class="acoes"><a class="btn {"sec" if ok_tg and ok_nt else ""}" href="/admin/preferencias">⚙️ Configurar meu bot e ntfy de administrador</a>
 <a class="btn sec" href="/config#backup">🔒 Senha e horário do backup</a>
 {botao("/admin/avisos/testar", "📨 Testar avisos", "sec")}</div>
-<p class="sub">Dica: crie no @BotFather um bot só para você (ex.: <i>licitatudo_admin_bot</i>) – não use o bot de um cliente.</p></div>"""
+<p class="sub">Dica: crie no @BotFather um bot só para você (ex.: <i>expertlicitante_admin_bot</i>) – não use o bot de um cliente.</p></div>"""
 
 
 def pg_admin(q, aviso="", erro=False, f=None):
@@ -9123,7 +9123,7 @@ def descobrir(token):
 
 # ------------------------------------------------------------------ servidor
 class Painel(BaseHTTPRequestHandler):
-    server_version = "Licitatudo"
+    server_version = "Expert Licitante"
     sys_version = ""
     timeout = 40   # derruba conexões presas (ataque de conexões lentas)
 
@@ -10187,7 +10187,7 @@ class Painel(BaseHTTPRequestHandler):
                 if not tgs and not tops:
                     return self.enviar(pg_admin({}, "Nenhum destino configurado: conecte o seu bot e/ou ntfy em ⚙️ Minhas configurações.", True))
                 telegram_geral("✅ <b>Teste dos avisos do administrador</b>\nAvisos de segurança e a cópia do backup chegam aqui.")
-                ntfy_geral("Licitatudo – teste", "Avisos do administrador chegam aqui.", "3")
+                ntfy_geral("Expert Licitante – teste", "Avisos do administrador chegam aqui.", "3")
                 return self.redirecionar("/admin?ok=avisos")
             if p == "/admin/usuarios/novo":
                 try:
@@ -11189,7 +11189,7 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
                                                        f" Mande {codigo_telegram(lg)} ao bot e clique de novo, ou digite o chat_id.", True))
             usuarios.salvar_cfg(lg, {"tg_chat": str(chat)})
             n = aplicar_alertas_usuario(lg)
-            telegram_para(tok, chat, f"✅ <b>Licitatudo conectado!</b>\nOs alertas das suas empresas ({n}) vão chegar aqui.")
+            telegram_para(tok, chat, f"✅ <b>Expert Licitante conectado!</b>\nOs alertas das suas empresas ({n}) vão chegar aqui.")
             return self.redirecionar("/preferencias?ok=pref_chat")
         if p == "/preferencias/bot/webhook":
             tok = uc.get("tg_token", "")
@@ -11205,7 +11205,7 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
                 return self.enviar(pg_preferencias("Esse tópico já é usado por outro usuário. Use o nome sugerido.", True))
             usuarios.salvar_cfg(lg, {"ntfy": t})
             aplicar_alertas_usuario(lg)
-            agenda.ntfy({"NTFY_TOPICO": t}, "Licitatudo conectado", "Os alarmes das suas empresas vão tocar aqui.")
+            agenda.ntfy({"NTFY_TOPICO": t}, "Expert Licitante conectado", "Os alarmes das suas empresas vão tocar aqui.")
             return self.redirecionar("/preferencias?ok=pref_ntfy")
         if p == "/preferencias/ntfy/remover":
             usuarios.salvar_cfg(lg, {"ntfy": None})
@@ -11214,9 +11214,9 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
         if p == "/preferencias/testar":
             res = []
             if uc.get("tg_token") and uc.get("tg_chat"):
-                res.append("Telegram: " + ("✅ enviado" if telegram_para(uc["tg_token"], uc["tg_chat"], f"✅ Teste do Licitatudo para <b>{e(lg)}</b>: os alertas das suas empresas chegam aqui.") else "❌ falhou (abra o bot e toque em Iniciar)"))
+                res.append("Telegram: " + ("✅ enviado" if telegram_para(uc["tg_token"], uc["tg_chat"], f"✅ Teste do Expert Licitante para <b>{e(lg)}</b>: os alertas das suas empresas chegam aqui.") else "❌ falhou (abra o bot e toque em Iniciar)"))
             if uc.get("ntfy"):
-                agenda.ntfy({"NTFY_TOPICO": uc["ntfy"]}, "Teste do Licitatudo", "Os alarmes das suas empresas tocam aqui.")
+                agenda.ntfy({"NTFY_TOPICO": uc["ntfy"]}, "Teste do Expert Licitante", "Os alarmes das suas empresas tocam aqui.")
                 res.append("ntfy: enviado (veja no app)")
             return self.enviar(pg_preferencias(" · ".join(res) or "Configure o bot ou o ntfy primeiro.", not res))
         if p == "/preferencias/ajustes":

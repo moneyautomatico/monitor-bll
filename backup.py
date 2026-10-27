@@ -1,4 +1,4 @@
-"""Backup diário do Licitatudo.
+"""Backup diário do Expert Licitante.
 
 - Cópia local em backups/ (guarda os últimos 7 dias).
 - Cópia fora do servidor: o arquivo vai CRIPTOGRAFADO (AES-256, senha definida no painel) para o Telegram geral.
@@ -174,7 +174,7 @@ def executar(cfg, avisar, destinos=None):
     try:
         for tok, chat in destinos:
             try:
-                enviar_telegram(tok, chat, enc, f"💾 Backup Licitatudo {datetime.now():%d/%m/%Y %H:%M} "
+                enviar_telegram(tok, chat, enc, f"💾 Backup Expert Licitante {datetime.now():%d/%m/%Y %H:%M} "
                                                 f"({tam:.1f} MB, criptografado com a senha do backup)")
                 break   # uma cópia externa basta
             except Exception as ex:  # noqa: BLE001

@@ -113,7 +113,7 @@ def consultar_cnpj(cnpj):
     n = re.sub(r"\D", "", cnpj or "")
     if len(n) != 14:
         raise ValueError("CNPJ precisa ter 14 números.")
-    req = urllib.request.Request(f"https://brasilapi.com.br/api/cnpj/v1/{n}", headers={"User-Agent": "Licitatudo/1.0"})
+    req = urllib.request.Request(f"https://brasilapi.com.br/api/cnpj/v1/{n}", headers={"User-Agent": "ExpertLicitante/1.0"})
     with urllib.request.urlopen(req, timeout=25) as r:
         j = json.load(r)
     end = ", ".join(x for x in [

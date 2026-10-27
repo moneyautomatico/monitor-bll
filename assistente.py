@@ -1,4 +1,4 @@
-"""Pergunte ao Licitatudo: assistente com IA (Gemini) que responde em português usando os dados que o sistema
+"""Pergunte ao Expert Licitante: assistente com IA (Gemini) que responde em português usando os dados que o sistema
 já coleta – processos, situação, classificação, mensagens do chat, prazos, certidões, concorrentes e oportunidades.
 Só lê os dados; não muda nada. Não envia CPF nem senhas para a IA."""
 import json
@@ -18,7 +18,7 @@ ARQ = PASTA / "conversa_ia.json"
 TRAVA = threading.Lock()
 LIMITE_CONTEXTO = 150_000   # caracteres de dados enviados à IA por pergunta (menos = resposta mais rápida e barata)
 
-REGRAS = """Você é o assistente do Licitatudo, sistema que acompanha licitações públicas de um grupo de empresas
+REGRAS = """Você é o assistente do Expert Licitante, sistema que acompanha licitações públicas de um grupo de empresas
 (mensagens do pregoeiro, classificação dos lotes, prazos, certidões, concorrentes e oportunidades).
 Responda em português do Brasil, de forma direta e organizada (listas curtas e tabelas simples em Markdown quando ajudar).
 

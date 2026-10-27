@@ -44,7 +44,7 @@ def _ler_csv(texto):
 def _baixar():
     for url in FONTES:
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Licitatudo/1.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "ExpertLicitante/1.0"})
             with urllib.request.urlopen(req, timeout=60) as r:
                 txt = r.read().decode("utf-8")
             if len(_ler_csv(txt)) > 5000:
@@ -108,7 +108,7 @@ def sede_por_cnpj(cnpj):
         return d[cnpj]
     sede = ""
     try:
-        req = urllib.request.Request(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}", headers={"User-Agent": "Licitatudo/1.0"})
+        req = urllib.request.Request(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}", headers={"User-Agent": "ExpertLicitante/1.0"})
         with urllib.request.urlopen(req, timeout=20) as r:
             j = json.load(r)
         if j.get("municipio") and j.get("uf"):
