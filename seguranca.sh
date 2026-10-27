@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Blindagem do servidor do Licitatudo. Pode rodar mais de uma vez sem problema.
 #   bash seguranca.sh                 -> usa o endereço grátis <ip>.sslip.io para o HTTPS
-#   bash seguranca.sh meu.dominio.com -> usa o seu domínio (aponte o DNS para o IP do servidor antes)
+#   bash seguranca.sh meu.dominio.com www.meu.dominio.com -> usa o seu domínio (aponte o DNS para o IP do servidor antes);
+#                                     o endereço sslip.io continua funcionando junto
 # O que faz:
 #   1. Permissões: arquivos com senhas/tokens só o administrador lê.
 #   2. Atualizações de segurança automáticas do Ubuntu.
@@ -85,7 +86,10 @@ ok "cada entrada por SSH manda um aviso no Telegram geral"
 
 echo "==> 5/6 HTTPS (cadeado) no painel"
 IP="$(curl -s -4 --max-time 10 https://api.ipify.org || hostname -I | awk '{print $1}')"
-DOMINIO="${1:-$(echo "$IP" | tr . -).sslip.io}"
+SSLIP="$(echo "$IP" | tr . -).sslip.io"
+DOMINIO="${1:-$SSLIP}"
+# todos os endereços atendidos (o 1º é o principal; o sslip.io continua funcionando para links antigos)
+ENDERECOS="$(printf '%s\n' "$@" "$SSLIP" | awk 'NF && !v[$0]++' | paste -sd, - | sed 's/,/, /g')"
 if ! command -v caddy >/dev/null; then
   apt-get install -y -q debian-keyring debian-archive-keyring apt-transport-https curl gnupg >/dev/null 2>&1
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
@@ -97,7 +101,7 @@ for p in 80 443; do
   iptables -C INPUT -p tcp --dport $p -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport $p -j ACCEPT
 done
 cat > /etc/caddy/Caddyfile <<EOF
-${DOMINIO} {
+${ENDERECOS} {
 	encode gzip
 	header -Server
 	reverse_proxy 127.0.0.1:${PORTA}
