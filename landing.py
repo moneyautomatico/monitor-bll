@@ -94,7 +94,7 @@ def pagina(dias=7, whatsapp="", cadastro_aberto=True):
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Expert Licitante – sua licitação no piloto automático</title>
 <meta name="description" content="Monitor do pregoeiro 24 h com alarme no celular, prazos da Lei 14.133, preço com lucro e habilitação em um PDF. Teste grátis por {dias} dias, sem cartão.">
-<meta name="theme-color" content="#07160f"><link rel="icon" href="/icone-192.png"><link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#07160f"><link rel="icon" href="/site/favicon.svg" type="image/svg+xml"><link rel="manifest" href="/manifest.webmanifest">
 <meta property="og:title" content="Expert Licitante – sua licitação no piloto automático"><meta property="og:description" content="Teste grátis por {dias} dias, sem cartão.">
 <style>
 :root{{--v:#34c27a;--v2:#1f8f57;--esc:#07160f;--esc2:#0d2419;--txt:#0f1f17;--sub:#5a6a61;--borda:#e3ebe6;--bg:#f6f9f7}}
@@ -105,7 +105,7 @@ a{{color:inherit}}.w{{max-width:1160px;margin:auto;padding:0 22px}}
 .topo{{position:fixed;inset:0 0 auto 0;z-index:40;transition:.25s}}.topo .w{{display:flex;align-items:center;gap:20px;height:68px}}
 .topo.rolou{{background:rgba(7,22,15,.82);backdrop-filter:blur(14px);border-bottom:1px solid rgba(255,255,255,.08)}}
 .marca{{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px;color:#fff;text-decoration:none;letter-spacing:-.2px}}
-.marca i{{width:32px;height:32px;border-radius:10px;background:conic-gradient(from 210deg,#7ef0b4,#34c27a,#1f8f57,#7ef0b4);display:grid;place-items:center;font-style:normal;font-size:12.5px;color:#07160f;font-weight:900}}
+.marca i{{width:26px;height:42px;background:url(/site/escudo.svg) center/contain no-repeat}}
 .topo nav{{margin-left:auto;display:flex;gap:22px;align-items:center;font-size:14px}}.topo nav a{{color:#c6d8cd;text-decoration:none}}.topo nav a:hover{{color:#fff}}
 .topo nav .entrar{{color:#fff;border:1px solid rgba(255,255,255,.22);padding:8px 14px;border-radius:10px}}
 .cta{{display:inline-flex;align-items:center;gap:8px;background:linear-gradient(135deg,#5ee39d,#34c27a 45%,#1f8f57);color:#04140c!important;text-decoration:none;font-weight:800;
@@ -195,7 +195,7 @@ footer{{background:var(--esc);color:#7f998b;font-size:13px;padding:26px 0;border
 @media(max-width:980px){{.bento{{grid-template-columns:1fr 1fr}}.b-grande{{grid-row:auto;grid-column:span 2}}.passos{{grid-template-columns:1fr 1fr}}.calc{{grid-template-columns:1fr;padding:28px}}.tela .grid{{grid-template-columns:1fr}}.tela .kan{{display:none}}}}
 @media(max-width:680px){{.topo nav a.lnk{{display:none}}.topo nav{{gap:8px}}.topo .w{{padding:0 14px}}.marca{{font-size:17px}}.topo nav .entrar{{padding:8px 11px}}.tela .bar span:not(.pts){{display:none}}.vs,.seg,.bento,.passos{{grid-template-columns:1fr}}.b-grande,.b-larga{{grid-column:auto}}section{{padding:68px 0}}.hero{{padding:120px 0 64px}}.tela{{margin-top:44px}}.hero h1{{letter-spacing:-1px}}}}
 </style></head><body>
-<header class="topo" id="topo"><div class="w"><a class="marca" href="/conheca"><i>EL</i>Expert Licitante</a>
+<header class="topo" id="topo"><div class="w"><a class="marca" href="/conheca"><i></i><img src="/site/nome.svg" height="17" alt="Expert Licitante"></a>
 <nav><a class="lnk" href="#recursos">Recursos</a><a class="lnk" href="#como">Como funciona</a><a class="lnk" href="#telas">Telas</a><a class="lnk" href="/prazos">Calculadora de prazos</a>
 <a class="entrar" href="/login">Entrar</a>{cta_topo}</nav></div></header>
 
@@ -280,7 +280,7 @@ def pagina_cadastro(dias, token, erro="", campos=None, whatsapp=""):
     c = campos or {}
     v = lambda k: e(c.get(k, ""))  # noqa: E731
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Teste grátis – Expert Licitante</title><meta name="theme-color" content="#173f2c"><link rel="icon" href="/icone-192.png">
+<title>Teste grátis – Expert Licitante</title><meta name="theme-color" content="#173f2c"><link rel="icon" href="/site/favicon.svg" type="image/svg+xml">
 <style>*{{box-sizing:border-box}}body{{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f7faf8;color:#14211a;
 display:grid;place-items:center;min-height:100vh;padding:24px}}.cx{{width:100%;max-width:440px;background:#fff;border:1px solid #dde6e0;border-radius:18px;padding:28px;
 box-shadow:0 24px 50px rgba(20,33,26,.1)}}a{{color:#1f5c3f}}h1{{font-size:24px;margin:0 0 6px}}p.s{{color:#55645b;margin:0 0 18px;font-size:14.5px}}
@@ -432,7 +432,7 @@ CSS_PUB = """
 a{color:inherit}.w{max-width:1000px;margin:auto;padding:0 22px}.ic{width:22px;height:22px}
 .topo{background:var(--esc)}.topo .w{display:flex;align-items:center;gap:16px;height:66px;max-width:1160px}
 .marca{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;color:#fff;text-decoration:none}
-.marca i{width:30px;height:30px;border-radius:9px;background:conic-gradient(from 210deg,#7ef0b4,#34c27a,#1f8f57,#7ef0b4);display:grid;place-items:center;font-style:normal;font-size:12px;color:#07160f;font-weight:900}
+.marca i{width:25px;height:40px;background:url(/site/escudo.svg) center/contain no-repeat}
 .topo nav{margin-left:auto;display:flex;gap:10px;align-items:center;font-size:14px}.topo nav a{color:#c6d8cd;text-decoration:none}
 .topo nav .entrar{color:#fff;border:1px solid rgba(255,255,255,.22);padding:8px 13px;border-radius:10px}
 .cta{display:inline-flex;align-items:center;gap:8px;background:linear-gradient(135deg,#5ee39d,#34c27a 45%,#1f8f57);color:#04140c!important;text-decoration:none;font-weight:800;padding:14px 24px;border-radius:14px;box-shadow:0 12px 30px rgba(52,194,122,.3);border:0;font-size:16px;cursor:pointer;font-family:inherit}
@@ -490,8 +490,8 @@ def pagina_prazos(q=None, cadastro_aberto=True, dias=7):
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Calculadora de prazos de licitação – Lei 14.133 | Expert Licitante</title>
 <meta name="description" content="Calcule grátis o prazo de impugnação, esclarecimento, recurso, contrarrazões, regularização ME/EPP e vigência de ata pela Lei 14.133, em dias úteis.">
-<meta name="theme-color" content="#07160f"><link rel="icon" href="/icone-192.png"><style>{CSS_PUB}</style></head><body>
-<header class="topo"><div class="w"><a class="marca" href="/conheca"><i>EL</i>Expert Licitante</a><nav><a class="lnk" href="/conheca">Conheça</a>
+<meta name="theme-color" content="#07160f"><link rel="icon" href="/site/favicon.svg" type="image/svg+xml"><style>{CSS_PUB}</style></head><body>
+<header class="topo"><div class="w"><a class="marca" href="/conheca"><i></i><img src="/site/nome.svg" height="17" alt="Expert Licitante"></a><nav><a class="lnk" href="/conheca">Conheça</a>
 <a class="entrar" href="/login">Entrar</a>{cta_topo}</nav></div></header>
 <div class="hero"><div class="w"><span class="tag">Ferramenta gratuita</span><h1>Calculadora de prazos<br>de licitação – Lei 14.133</h1>
 <p>Impugnação, esclarecimento, prazo mínimo do edital, recurso, contrarrazões, regularização de ME/EPP e vigência de ata – em dias úteis, com o artigo da lei.</p></div></div>

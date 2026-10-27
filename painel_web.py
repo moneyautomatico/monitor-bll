@@ -394,7 +394,7 @@ def acesso_novo(ip, navegador):
 
 def pg_login(erro="", destino="/", admin=False):
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar – Expert Licitante</title>{TEMA_JS}
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrar – Expert Licitante</title><link rel="icon" href="/site/favicon.svg" type="image/svg+xml">{TEMA_JS}
 <style>
 *{{box-sizing:border-box}}html,body{{height:100%;margin:0}}
 body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#17241c;display:grid;grid-template-columns:1.1fr 1fr;background:#f3f5f4}}
@@ -435,7 +435,7 @@ button.entrar:hover{{transform:translateY(-1px);box-shadow:0 14px 28px rgba(31,9
 :root[data-theme=dark] .tema{{background:#1a211d;border-color:#2a332e}}
 @media (max-width:860px){{body{{grid-template-columns:1fr}}.arte{{padding:28px;min-height:auto}}.chamada h1{{font-size:26px}}.chips,.rodape{{display:none}}}}
 </style></head><body>
-<section class="arte"><div class="marca"><div class="logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>Expert Licitante</div>
+<section class="arte"><div class="marca"><img src="/site/escudo.svg" width="38" height="61" alt=""><img src="/site/nome.svg" height="20" alt="Expert Licitante"></div>
 <div class="chamada"><h1>Todas as suas licitações, num só lugar.</h1>
 <p>Mensagens do pregoeiro, classificação dos lotes, recursos e diligências da BLL, BNC e Portal de Compras — com alerta na hora.</p>
 <div class="chips"><span class="chip">🔔 Alertas em tempo real</span><span class="chip">📊 Classificação por lote</span><span class="chip">🤖 Análise de editais</span></div></div>
@@ -851,9 +851,8 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvet
 /* topo */
 header{position:sticky;top:0;z-index:50;background:linear-gradient(180deg,rgba(7,22,15,.97),rgba(13,36,25,.95));backdrop-filter:saturate(1.4) blur(12px);
 -webkit-backdrop-filter:saturate(1.4) blur(12px);border-bottom:1px solid rgba(255,255,255,.07);box-shadow:0 6px 20px rgba(0,0,0,.12);padding:0 18px;gap:14px;min-height:60px}
-header>b{display:flex;align-items:center;gap:9px;font-size:17px;letter-spacing:-.2px;padding:12px 0}
-header>b:before{content:"EL";width:30px;height:30px;border-radius:9px;background:conic-gradient(from 210deg,#7ef0b4,#34c27a,#1f8f57,#7ef0b4);
-display:grid;place-items:center;color:#07160f;font-size:12px;font-weight:900;box-shadow:0 4px 12px rgba(52,194,122,.35)}
+header>b{display:flex;align-items:center;gap:10px;font-size:15.5px;letter-spacing:.12em;text-transform:uppercase;padding:9px 0;color:#f4efe3;font-family:"Times New Roman",Georgia,"Noto Serif",serif;font-weight:700}
+header>b:before{content:"";width:26px;height:42px;background:url(/site/escudo.svg) center/contain no-repeat;flex:none}
 nav{gap:2px;align-items:center}nav a{color:#c3d6ca;padding:8px 11px;margin:10px 0;border:0;border-radius:10px;font-size:13.5px;font-weight:500;transition:background .15s,color .15s}
 nav a:hover{background:rgba(255,255,255,.07);color:#fff}nav a.on{background:rgba(52,194,122,.16);color:#fff;box-shadow:inset 0 0 0 1px rgba(126,240,180,.25)}
 nav .sub-m{background:rgba(13,36,25,.98);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:6px;top:calc(100% - 4px);
@@ -928,7 +927,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     meta = '<meta http-equiv="refresh" content="60">' if recarregar else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Expert Licitante</title>
-<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#07160f"><link rel="apple-touch-icon" href="/icone-192.png">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#07160f"><link rel="apple-touch-icon" href="/icone-192.png"><link rel="icon" href="/site/favicon.svg" type="image/svg+xml">
 {TEMA_JS}<style>{ESTILO}{ESTILO_MODERNO}</style></head><body><header><b>Expert Licitante</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="topo" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)" style="margin-left:auto">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓<span class="rot"> Ajuda</span></a>{f'<a class="sair" href="/conta" title="Minha conta – {e(u["login"])} ({e(PAPEL_NOME.get(u["papel"], ""))})">👤<span class="rot"> {e(u["login"])}</span></a>' if u else ""}<a class="sair" href="/sair">Sair</a></header>{faixa_teste(u) if u else ""}<main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();
 document.querySelectorAll('nav .sub-m a').forEach(a=>{{if(a.getAttribute('href')===location.pathname)a.classList.add('aqui');}});
@@ -9424,10 +9423,10 @@ class Painel(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(dados_p)
             return
-        if re.fullmatch(r"/site/[a-z0-9-]{1,40}\.webp", caminho) and (PASTA / caminho.lstrip("/")).is_file():   # telas da página de vendas
+        if re.fullmatch(r"/site/[a-z0-9-]{1,40}\.(webp|svg)", caminho) and (PASTA / caminho.lstrip("/")).is_file():   # telas e logomarca
             dados_p = (PASTA / caminho.lstrip("/")).read_bytes()
             self.send_response(200)
-            self.send_header("Content-Type", "image/webp")
+            self.send_header("Content-Type", "image/svg+xml" if caminho.endswith(".svg") else "image/webp")
             self.send_header("Cache-Control", "public, max-age=86400")
             self.send_header("Content-Length", str(len(dados_p)))
             self.cabecalhos_seguranca()
