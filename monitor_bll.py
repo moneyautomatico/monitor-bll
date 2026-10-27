@@ -1065,6 +1065,17 @@ def ler_classificacao(db, page, p, primeira_vez, diag=False):
         velho = not ant or time.time() - (ant[4] or 0) > (120 if viva else 600 if atencao else 6 * 3600)
         if "CANCELAD" in lt["fase"].upper() or not (mudou or velho or diag):
             continue
+        if viva and (mudou or velho):
+            # fase de lances: registra JÁ a fase/1º/melhor (o registro da sessão costuma não abrir durante os lances).
+            # É isso que liga o copiloto (leitura a cada ~25 s) e mostra o lote na tela "Disputa ao vivo".
+            if ant:
+                db.execute("UPDATE classificacao SET fase=?, primeiro=?, melhor=?, lido_em=?, atualizado=? WHERE chave=?",
+                           (lt["fase"], lt["primeiro"], lt["melhor"], time.time(), agora, chave))
+            else:
+                db.execute("INSERT OR IGNORE INTO classificacao VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (chave, p["processo"], p["promotor"], lt["lote"], lt.get("descricao", ""), lt["fase"], lt["primeiro"],
+                            lt["melhor"], "[]", None, "", time.time(), agora))
+            db.commit()
         oficial = ler_classif_oficial(page, lt["lote"])
         if oficial:
             melhor_l = valor_br(lt.get("melhor") or "")

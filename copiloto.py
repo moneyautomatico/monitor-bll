@@ -98,16 +98,43 @@ def _somos(m, primeiro, nosso_num):
     return bool(nosso_num and mo and mo.group(1) == nosso_num)
 
 
+RE_HORA_DISPUTA = re.compile(r"(\d{2})/(\d{2})/(\d{4})\D{1,6}(\d{1,2})\s*[h:]\s*(\d{2})")
+
+
+def hora_disputa(txt):
+    """'27/10/2026 09:16', '27/10/2026 - 09h16'... -> datetime (ou None)."""
+    mo = RE_HORA_DISPUTA.search(txt or "")
+    if not mo:
+        return None
+    d, me, a, h, mi = (int(x) for x in mo.groups())
+    try:
+        return datetime(a, me, d, h, mi)
+    except ValueError:
+        return None
+
+
 def _vivos(m, db):
-    """Processos com algum lote em fase de disputa lido nos últimos 15 min."""
+    """Processos com algum lote em fase de disputa lido nos últimos 15 min – e os que têm sessão marcada agora
+    (de 15 min antes até 4 h depois do horário), para o copiloto olhar a sala sem esperar o ciclo normal perceber."""
     lim = time.time() - 900
     rows = db.execute("SELECT DISTINCT c.processo, c.promotor, p.url FROM classificacao c JOIN processos p "
                       "ON p.processo=c.processo AND p.promotor=c.promotor WHERE c.lido_em > ? AND p.url != ''", (lim,)).fetchall()
-    out = []
+    out, ja = [], set()
     for proc, prom, url in rows:
         fases = [f for (f,) in db.execute("SELECT fase FROM classificacao WHERE processo=? AND promotor=?", (proc, prom))]
         if any(any(v in (f or "").upper() for v in m.FASES_VIVAS) for f in fases):
-            out.append({"processo": proc, "promotor": prom, "url": url})
+            out.append({"processo": proc, "promotor": prom, "url": url, "motivo": "fase"})
+            ja.add((proc, prom))
+    agora = datetime.now()
+    for proc, prom, disp, url, sit in db.execute("SELECT processo, promotor, disputa, url, situacao FROM processos WHERE url != ''"):
+        h = hora_disputa(disp)
+        if (proc, prom) in ja or not h or not (h - timedelta(minutes=15) <= agora <= h + timedelta(hours=4)):
+            continue
+        if any(x in (sit or "").upper() for x in ("HOMOLOG", "CANCELAD", "REVOGAD", "FRACASSAD", "DESERT", "SUSPENS")):
+            continue
+        if m.estado(db, f"copiloto_fim_{proc}|{prom}|{agora:%Y%m%d}"):
+            continue
+        out.append({"processo": proc, "promotor": prom, "url": url, "motivo": "horario"})
     return out
 
 
@@ -132,6 +159,25 @@ def ler_sala(m, db, page, p, comportamento):
         page.wait_for_timeout(1500)
     lotes = m.avaliar(page, m.JS_LOTES) or []
     agora_txt = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    pos = ("HOMOLOG", "ADJUDIC", "FRACASS", "DESERT", "ENCERR", "CANCEL") + tuple(m.FASES_ATENCAO)
+    if lotes and all(any(v in (lt.get("fase") or "").upper() for v in pos) for lt in lotes):
+        p["pos_disputa"] = True   # a sala já passou dos lances: não precisa mais olhar a cada 25 s
+        m.estado(db, f"copiloto_fim_{p['processo']}|{p['promotor']}|{datetime.now():%Y%m%d}", "1")
+    if not any(any(v in (lt.get("fase") or "").upper() for v in m.FASES_VIVAS) for lt in lotes):
+        k = f"copiloto_log_{p['processo']}|{p['promotor']}"
+        ult = float(m.estado(db, k) or 0)
+        if time.time() - ult > 600:   # no máximo 1 registro a cada 10 min por processo
+            fases = sorted({(lt.get("fase") or "?") for lt in lotes})
+            m.log(f"Copiloto: {p['processo']} – " + (f"nenhum lote em lances agora (fases na sala: {', '.join(fases)[:200]})" if lotes
+                                                      else "não achei a tabela de lotes na sala"))
+            m.estado(db, k, str(time.time()))
+            kd = f"copiloto_diag_{p['processo']}|{p['promotor']}|{datetime.now():%Y%m%d}"
+            if p.get("motivo") == "horario" and not m.estado(db, kd):   # 1 foto da sala por dia, para ajustar a leitura
+                try:
+                    m.salvar_diag(page, f"copiloto_{p['processo'].replace('/', '-')}_{datetime.now():%H%M}")
+                except Exception:  # noqa: BLE001
+                    pass
+                m.estado(db, kd, "1")
     empresa = m.CFG.get("EMPRESA_NOME", "")
     tabela_pisos = pisos()
     algum_vivo = False
@@ -209,7 +255,7 @@ def janela_rapida(m, db, page, segundos):
         ainda = []
         for p in vivos:
             try:
-                if ler_sala(m, db, page, p, comp):
+                if ler_sala(m, db, page, p, comp) or (p.get("motivo") == "horario" and not p.get("pos_disputa")):
                     ainda.append(p)
             except Exception as ex:  # noqa: BLE001
                 m.log(f"Copiloto: erro lendo {p['processo']}: {ex}")
