@@ -717,6 +717,8 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .it-l3{display:flex;gap:6px;align-items:center}.it-urg{margin-left:auto}.it-urg+.it-arq{margin-left:6px}
 .it-arq{margin-left:auto;opacity:.35;cursor:pointer;padding:0 4px;border-radius:6px;font-size:14px}.it:hover .it-arq{opacity:1}.it-arq:hover{background:var(--verde2)}
 .it-volta{font-size:11px;font-weight:700;color:var(--verde);background:var(--verde2);border-radius:999px;padding:1px 7px}
+.it-sit{font-size:10.5px;font-weight:700;letter-spacing:.2px;text-transform:uppercase;border-radius:999px;padding:1px 7px;background:var(--borda);color:var(--sub);white-space:nowrap}
+.it-sit.fim{background:var(--borda);color:var(--sub)}.it-sit.vivo{background:#e53935;color:#fff}.it-sit.atencao{background:var(--avisobg);color:var(--aviso)}
 .selo{color:#fff;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap}
 .mc-dir{background:var(--card);border:1px solid var(--borda);border-radius:12px;display:flex;flex-direction:column;min-height:0;min-width:0}
 .cv-vazio{padding:40px;text-align:center;color:var(--sub)}
@@ -2871,6 +2873,24 @@ def arquivado(g, arq):
         return True
 
 
+def tag_situacao(sit):
+    """Etiqueta curta e colorida com a situação do processo na plataforma (lista do chat)."""
+    sit = (sit or "").strip()
+    if not sit:
+        return ""
+    s_ = sit.upper()
+    if any(x in s_ for x in SIT_ENCERRADA):
+        cl = "fim"
+    elif any(x in s_ for x in ("DISPUTA", "ABERT", "LANCE", "RANDOM", "FECHAD")):
+        cl = "vivo"
+    elif any(x in s_ for x in ("RECURS", "CONTRARRAZ", "HABILIT", "JULGAMENTO", "NEGOCIA", "DILIGEN", "ADJUDIC", "SUSPENS", "ACEIT")):
+        cl = "atencao"
+    else:
+        cl = ""
+    curto = sit if len(sit) <= 20 else sit[:19] + "…"
+    return f'<span class="it-sit {cl}" title="Situação: {e(sit)}">{e(curto)}</span>'
+
+
 def situacoes_empresa(eid):
     db = EMPRESAS / eid / "bll_monitor.db"
     try:
@@ -3092,6 +3112,10 @@ def pg_chat(q):
     plats += sorted({g["plat"] for g in lista} - set(plats))
     arq = chats_arquivados()
     n_arq = sum(1 for g in lista if arquivado(g, arq))
+    sits = {}
+    for g in lista:
+        if g["eid"] not in sits:
+            sits[g["eid"]] = situacoes_empresa(g["eid"])
     abas = ('<button class="aba on" data-f="todos" onclick="aba(this)">Todos</button>'
             '<button class="aba" data-f="naolidos" onclick="aba(this)">Não lidos</button>'
             '<button class="aba" data-f="urgentes" onclick="aba(this)">Urgentes</button>' +
@@ -3117,7 +3141,7 @@ def pg_chat(q):
         itens += (f'<a class="it{" on" if on else ""}" href="#" data-url="{e(url)}" data-plat="{e(g["plat"])}" data-emp="{e(g["nome"])}" data-nl="{1 if nl else 0}" '
                   f'data-arq="{1 if e_arq else 0}" data-proc="{e(chave_proc(g))}"{" style=display:none" if e_arq else ""} '
                   f'data-urg="{1 if urg else 0}" data-busca="{e(busca_txt)}" onclick="return abrir(this)">'
-                  f'<div class="it-l1"><b>{e(g["processo"])}</b><span class="it-data">{e(quando)}'
+                  f'<div class="it-l1"><b>{e(g["processo"])}</b><span class="it-data">{tag_situacao(sits[g["eid"]].get((g["processo"], g["promotor"]), ""))}{e(quando)}'
                   f'<i class="ponto"{"" if nl else " hidden"}></i></span></div>'
                   f'<div class="it-org">{e(g["promotor"])}</div>'
                   f'<div class="it-l3">{selo_plat(g["plat"])}<span class="sub">{e(g["nome"])}</span>'
