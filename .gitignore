@@ -46,3 +46,6 @@ catalogo/
 avisos.jsonl
 lixeira.json
 testes_empresas.json
+robo.json
+robo_log.jsonl
+robo.tmp.*

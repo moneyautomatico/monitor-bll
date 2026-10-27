@@ -61,6 +61,7 @@ import precos
 import propostas
 import trava_teste
 import iniciante
+import robo
 
 PASTA = Path(__file__).resolve().parent
 EMPRESAS = PASTA / "empresas"
@@ -6992,6 +6993,67 @@ def form_piso(emp, proc, prom, lote, atual, compacto=False):
             + (f'<span class="sub">piso atual: <b>R$ {copiloto._br(p["piso"])}</b></span>' if p.get("piso") else "") + '</form>')
 
 
+def plataforma_empresa(nome):
+    for eid in nomes_empresas().get((nome or "").upper().strip(), []):
+        pl = ler_env(EMPRESAS / f"{eid}.env").get("PLATAFORMA", "bll").lower()
+        if pl in ("bll", "bnc"):
+            return pl
+    return ""
+
+
+def form_robo(emp, proc, prom, lote, voltar):
+    k = copiloto.chave_piso(emp, proc, prom, lote)
+    c = robo.cfg_lote(k)
+    est = robo.estado(k)
+    plat = plataforma_empresa(emp)
+    liberado = robo.real_liberado(plat)
+    piso = (copiloto.pisos().get(k) or {}).get("piso")
+    sel = lambda nome, ops, atual: ('<select class="campo" name="' + nome + '" style="width:auto">' + "".join(   # noqa: E731
+        f'<option value="{v}"{" selected" if v == atual else ""}{" disabled" if dis else ""}>{t}</option>' for v, t, dis in ops) + "</select>")
+    st = ("🟢 <b>ligado</b> · " + ("envia lances (modo real)" if c.get("modo") == "real" and liberado else "ensaio (só mostra o lance que daria)")) if c.get("ativo") else "⚪ desligado"
+    st += f' · {int(est.get("n") or 0)} lance(s) do robô' if est.get("n") else ""
+    return (f'<form method="post" action="/disputa/robo" class="robo-f"><input type="hidden" name="csrf" value="{CSRF}">'
+            f'<input type="hidden" name="k" value="{e(k)}"><input type="hidden" name="voltar" value="{e(voltar)}">'
+            f'<div class="sub">🤖 Robô: {st}{" · piso R$ " + copiloto._br(piso) if piso else " · <b style=color:var(--erro)>defina o piso antes</b>"}</div>'
+            f'<div class="grade">'
+            f'<label class="sub">modo{sel("modo", [("ensaio", "Ensaio (não envia)", False), ("real", "Real – envia lances" + ("" if liberado else " (aguardando liberação)"), not liberado)], c.get("modo"))}</label>'
+            f'<label class="sub">desce{sel("dec_tipo", [("valor", "R$", False), ("pct", "%", False)], c.get("dec_tipo"))}</label>'
+            f'<label class="sub">decremento<input class="campo" name="decremento" value="{e(c.get("decremento"))}" style="width:90px"></label>'
+            f'<label class="sub">dif. mínima do edital (R$)<input class="campo" name="dif_minima" value="{e(c.get("dif_minima"))}" style="width:90px"></label>'
+            f'<label class="sub">intervalo (s)<input class="campo" name="intervalo" value="{e(c.get("intervalo"))}" style="width:70px"></label>'
+            f'<label class="sub">máx. lances<input class="campo" name="max_lances" value="{e(c.get("max_lances"))}" style="width:70px"></label>'
+            f'<label class="sub">trava de salto (%)<input class="campo" name="salto_max" value="{e(c.get("salto_max"))}" style="width:70px"></label></div>'
+            f'<label class="ck sub" style="margin-top:6px"><input type="checkbox" name="aceite" value="1"> Conferi que o edital permite e entendo que os lances enviados são de responsabilidade da empresa (obrigatório no modo real)</label>'
+            f'<div class="acoes"><button name="ativo" value="1">{"💾 Salvar e manter ligado" if c.get("ativo") else "▶️ Ligar o robô neste lote"}</button>'
+            + ('<button class="perigo" name="ativo" value="0">⏹ Desligar</button>' if c.get("ativo") else "") + "</div></form>")
+
+
+def html_robo_topo():
+    lig = [k for nome in nomes_empresas() for k in robo.ativos(nome)]
+    if not lig:
+        return ('<div class="msg">🤖 <b>Robô de lances:</b> desligado. Ligue lote a lote (em cada lote ao vivo ou em “Preparar os pisos”). '
+                'Ele nunca desce do seu piso, respeita a diferença mínima do edital e o intervalo entre lances, e começa em <b>ensaio</b> '
+                '(só mostra o lance que daria).</div>')
+    return (f'<div class="msg erro" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">🤖 <b>Robô ligado em {len(lig)} lote(s)</b>'
+            f'<form method="post" action="/disputa/robo/parar" style="margin-left:auto" onsubmit="return confirm(\'Desligar o robô em TODOS os lotes agora?\')">'
+            f'<input type="hidden" name="csrf" value="{CSRF}"><button class="perigo">⛔ Parar o robô em tudo</button></form></div>')
+
+
+def html_robo_hist(emps):
+    regs = []
+    for nome in emps:
+        regs += robo.historico(nome.upper().strip() + "|", 40)
+    regs.sort(key=lambda r: r["quando"], reverse=True)
+    if not regs:
+        return ""
+    ic = {"lance": "💰", "ensaio": "🧪", "parou": "⏹", "falhou": "⚠️", "config": "⚙️"}
+    linhas = "".join(f'<tr><td>{e(r["quando"][8:10] + "/" + r["quando"][5:7] + " " + r["quando"][11:19])}</td>'
+                     f'<td>{e(" · ".join(r["chave"].split("|")[1:2] + ["L" + r["chave"].split("|")[-1]]))}</td>'
+                     f'<td>{ic.get(r["acao"], "")} {e(r["acao"])}{" ✔️" if r.get("ok") else (" ❌" if r.get("ok") is False else "")}</td>'
+                     f'<td>{("R$ " + robo.br(r["valor"])) if r.get("valor") else "—"}</td><td class="txt">{e(r.get("motivo", ""))}</td></tr>' for r in regs[:40])
+    return (f'<h2 style="margin-top:26px">🤖 Histórico do robô</h2><table><tr><th>Quando</th><th>Lote</th><th>Ação</th><th>Valor</th><th>Motivo</th></tr>{linhas}</table>')
+
+
 def pg_disputa(q, aviso=""):
     vivos = disputas_ao_vivo()
     agora = datetime.now()
@@ -7012,6 +7074,7 @@ def pg_disputa(q, aviso=""):
 <div><small>seu piso</small><b>{"R$ " + copiloto._br(piso) if piso else "—"}</b></div><div>{_sparkline(d["hist"])}</div></div>
 <div class="dv-txt" style="color:{cor}">{e(txt)}</div>
 <details><summary class="sub" style="cursor:pointer">definir/alterar piso</summary>{form_piso(d["empresa"], d["processo"], d["promotor"], d["lote"], "/disputa")}</details>
+{"<details" + (" open" if robo.cfg_lote(copiloto.chave_piso(d["empresa"], d["processo"], d["promotor"], d["lote"])).get("ativo") else "") + "><summary class=sub style=cursor:pointer>🤖 robô de lances</summary>" + form_robo(d["empresa"], d["processo"], d["promotor"], d["lote"], "/disputa") + "</details>" if plataforma_empresa(d["empresa"]) else ""}
 <div class="sub"><a href="{e(chat)}">abrir o chat do processo</a> · {e(d["promotor"][:70])}</div></div>"""
     hoje_txt = agora.strftime("%d/%m/%Y")
     marcadas = []
@@ -7042,23 +7105,28 @@ def pg_disputa(q, aviso=""):
             lote = nlote(r[2])
             linhas_prep += (f'<tr><td><b>L{e(lote)}</b><div class="sub">{e((r[3] or "")[:80])}</div></td><td class="ocultar">{e(r[4] or "")}</td>'
                             f'<td>{e(r[6] or "—")}<div class="sub">nosso: {e(r[9] or "—")}</div></td>'
-                            f'<td>{form_piso(nome, proc, prom, r[2], volta)}</td></tr>')
+                            f'<td>{form_piso(nome, proc, prom, r[2], volta)}<details style="margin-top:6px"><summary class="sub" style="cursor:pointer">🤖 robô de lances</summary>'
+                            f'{form_robo(nome, proc, prom, r[2], volta)}</details></td></tr>')
         if not linhas_prep:
             linhas_prep = '<tr><td colspan="4">O monitor ainda não leu os lotes deste processo.</td></tr>'
     corpo = f"""<style>.dv{{background:var(--card);border:1px solid var(--borda);border-left:7px solid;border-radius:12px;padding:12px 16px;margin:10px 0}}
 .dv-cab{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}.dv-num{{display:flex;gap:22px;flex-wrap:wrap;align-items:center;margin:8px 0}}
 .dv-num small{{display:block;color:var(--sub);font-size:12px}}.dv-num b{{font-size:20px}}.dv-txt{{font-weight:700;margin:4px 0 6px}}
-.piso label{{display:flex;flex-direction:column;font-weight:400}}</style>
+.piso label,.robo-f label{{display:flex;flex-direction:column;font-weight:400}}.robo-f{{border-top:1px dashed var(--borda);margin-top:6px;padding-top:6px}}
+.robo-f .grade{{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:6px}}.robo-f .campo{{width:auto;margin:2px 0 0}}
+.robo-f label.ck{{flex-direction:row;gap:6px;align-items:center;margin-top:8px}}.robo-f label.ck input{{width:auto}}</style>
 <h2>🎯 Disputa ao vivo (copiloto)</h2>
 <p class="sub">Durante a fase de lances (BLL/BNC), o monitor relê a sala a cada ~25 s e avisa no Telegram/ntfy quando vocês são
-superados, quando voltam ao 1º e se ainda dá para cobrir sem passar do <b>piso</b> (custo + margem mínima). <b>Os lances
-continuam sendo dados por vocês</b> – o sistema só lê. Esta página atualiza sozinha.</p>
+superados, quando voltam ao 1º e se ainda dá para cobrir sem passar do <b>piso</b> (custo + margem mínima). <b>Os lances são dados por vocês</b>
+– ou pelo <b>🤖 robô de lances</b>, só nos lotes em que você ligar. Esta página atualiza sozinha.</p>
+{html_robo_topo()}
 <div id="ao-vivo">{cards or aviso_hoje or '<div class="msg">Nenhuma disputa ao vivo agora. Quando um lote entrar em disputa, ele aparece aqui (e chega aviso no Telegram).</div>'}</div>
 <h2 style="margin-top:26px">Preparar os pisos antes da sessão</h2>
 <p class="sub">Informe o <b>custo</b> do lote/item e a <b>margem mínima</b> (o sistema calcula o piso) ou digite o piso direto.
 O copiloto usa o piso para dizer se ainda dá para cobrir o concorrente.</p>
 <div class="form" style="max-width:none"><select class="campo" onchange="location.href='/disputa?prep='+encodeURIComponent(this.value)">{sel}</select>
-{f'<table style="margin-top:10px"><tr><th>Lote</th><th class="ocultar">Fase</th><th>Melhor lance</th><th>Piso</th></tr>{linhas_prep}</table>' if sel_q else ''}</div>
+{f'<table style="margin-top:10px"><tr><th>Lote</th><th class="ocultar">Fase</th><th>Melhor lance</th><th>Piso e robô</th></tr>{linhas_prep}</table>' if sel_q else ''}</div>
+{html_robo_hist(emps)}
 <script>setInterval(()=>{{const a=document.activeElement; if(a&&['INPUT','SELECT','TEXTAREA'].includes(a.tagName))return;
  if(document.querySelector('details[open] .piso'))return;
  fetch(location.pathname+'?parcial=1',{{credentials:'same-origin'}}).then(r=>r.ok?r.text():null).then(h=>{{if(h!==null)document.getElementById('ao-vivo').innerHTML=h;}});}},10000);</script>"""
@@ -7815,6 +7883,13 @@ Novos testes avisam no seu Telegram.</p>
 <div><label>Login na plataforma</label><input class="campo" name="login_plataforma"></div>
 <div><label>Ou tudo de uma conta (login no painel)</label><input class="campo" name="conta"></div></div>
 <div class="acoes"><button class="sec">Liberar novo teste</button></div></form></div>
+<h2 style="margin-top:22px">🤖 Robô de lances</h2><div class="form">
+<form method="post" action="/config/robo"><input type="hidden" name="csrf" value="{CSRF}">
+<p class="sub">O robô começa sempre em <b>ensaio</b> (só mostra o lance que daria). Libere o envio real de uma plataforma só depois de conferir o ensaio
+numa disputa de verdade (o histórico fica em Disputa → 🤖 Histórico do robô). Cada licitante ainda precisa ligar lote a lote e confirmar a responsabilidade.</p>
+<label class="ck"><input type="checkbox" name="ROBO_REAL_BLL" value="1" {"checked" if c.get("ROBO_REAL_BLL") == "1" else ""}> Liberar envio real na <b>BLL</b></label>
+<label class="ck"><input type="checkbox" name="ROBO_REAL_BNC" value="1" {"checked" if c.get("ROBO_REAL_BNC") == "1" else ""}> Liberar envio real na <b>BNC</b></label>
+<div class="acoes"><button>Salvar</button></div></form></div>
 <h2 style="margin-top:22px">☀️ Resumo diário no Telegram</h2><div class="form">
 <form method="post" action="/config/resumo"><input type="hidden" name="csrf" value="{CSRF}">
 <label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" name="RESUMO_ATIVO" value="1" {"checked" if c.get("RESUMO_ATIVO", "1") != "0" else ""}>
@@ -10330,9 +10405,41 @@ class Painel(BaseHTTPRequestHandler):
             if p == "/pergunte/limpar":
                 assistente.limpar_conversa(login_atual())
                 return self.redirecionar("/pergunte")
+            if p == "/disputa/robo/parar":
+                for nome in nomes_empresas():
+                    for k in robo.ativos(nome):
+                        robo.desligar_lote(k)
+                        robo.log(k, "parou", None, f"parado por {login_atual()} (parar tudo)", "—")
+                self.auditar("robô de lances: parar tudo")
+                return self.redirecionar("/disputa?ok=feito")
+            if p == "/disputa/robo":
+                k = f.get("k", "")
+                volta = f.get("voltar", "/disputa")
+                volta = volta if volta.startswith("/") and not volta.startswith("//") else "/disputa"
+                sep = "&" if "?" in volta else "?"
+                if k.count("|") != 3 or k.split("|")[0] not in nomes_empresas():
+                    return self.redirecionar(volta)
+                if f.get("ativo") == "0":
+                    robo.desligar_lote(k)
+                    robo.log(k, "config", None, f"desligado por {login_atual()}", "—")
+                    self.auditar("robô de lances: desligou", k)
+                    return self.redirecionar(volta + sep + "ok=feito")
+                cfg_r, err_r = robo.validar(f)
+                if not err_r and not (copiloto.pisos().get(k) or {}).get("piso"):
+                    err_r = "Defina o piso deste lote antes de ligar o robô."
+                if not err_r and cfg_r["modo"] == "real" and f.get("aceite") != "1":
+                    err_r = "Para o modo real, marque a confirmação de que o edital permite e de que os lances são de responsabilidade da empresa."
+                if not err_r and cfg_r["modo"] == "real" and not robo.real_liberado(plataforma_empresa(k.split("|")[0])):
+                    err_r = "O modo real desta plataforma ainda não foi liberado pelo administrador."
+                if err_r:
+                    return self.enviar(pg_disputa({"prep": ""}, e(err_r)))
+                robo.salvar_lote(k, cfg_r, login_atual())
+                robo.log(k, "config", None, f"ligado por {login_atual()} · modo {cfg_r['modo']} · desce {cfg_r['decremento']}{'%' if cfg_r['dec_tipo'] == 'pct' else ' R$'}", cfg_r["modo"])
+                self.auditar(f"robô de lances: ligou ({cfg_r['modo']})", k)
+                return self.redirecionar(volta + sep + "ok=feito")
             if p == "/disputa/piso":
                 k = f.get("k", "")
-                if k.count("|") == 3:
+                if k.count("|") == 3 and k.split("|")[0] in nomes_empresas():
                     custo, margem, piso = _num(f.get("custo")), _num(f.get("margem")), _num(f.get("piso"))
                     copiloto.salvar_piso(k, custo, margem if margem is not None else 0, None if custo is not None else piso)
                 volta = f.get("voltar", "/disputa")
@@ -10345,6 +10452,11 @@ class Painel(BaseHTTPRequestHandler):
                                     "ASSINATURA_CARENCIA": re.sub(r"\D", "", f.get("ASSINATURA_CARENCIA", "3"))[:2] or "0",
                                     "VENDAS_WHATSAPP": re.sub(r"\D", "", f.get("VENDAS_WHATSAPP", ""))[:15]})
                 self.auditar("alterou a página de vendas / teste grátis")
+                return self.redirecionar("/config?ok=config")
+            if p == "/config/robo":
+                gravar_env(CONFIG, {"ROBO_REAL_BLL": "1" if f.get("ROBO_REAL_BLL") == "1" else "0",
+                                    "ROBO_REAL_BNC": "1" if f.get("ROBO_REAL_BNC") == "1" else "0"})
+                self.auditar("robô de lances: liberação do modo real", f"BLL={f.get('ROBO_REAL_BLL', '0')} BNC={f.get('ROBO_REAL_BNC', '0')}")
                 return self.redirecionar("/config?ok=config")
             if p == "/config/teste-liberar":
                 n = trava_teste.liberar(f.get("cnpj", ""), f.get("plataforma", "bll"), f.get("login_plataforma", "") if f.get("login_plataforma", "").strip() else "",

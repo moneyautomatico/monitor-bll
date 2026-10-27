@@ -58,6 +58,11 @@ def analise_piso(melhor, piso, somos_primeiro):
     return f"⛔ o melhor lance (R$ {_br(melhor)}) já está ABAIXO do seu piso (R$ {_br(piso)}) – cobrir dá prejuízo", folga
 
 
+def _sem_rs(v):
+    """'R$ 1.234,56' -> '1.234,56' (as mensagens já põem o R$)."""
+    return re.sub(r"^\s*R\$\s*", "", str(v or ""))
+
+
 def _br(v):
     return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -206,24 +211,28 @@ def ler_sala(m, db, page, p, comportamento):
         cab = f"{p['processo']} · L{int(lt['lote']) if str(lt['lote']).isdigit() else lt['lote']} – {h.escape((lt.get('descricao') or '')[:60])}"
         mudou = bool(ant) and (ant[0] != (lt.get("primeiro") or "") or (m.valor_br(ant[1] or "") or 0) != (melhor or 0))
         if not ant:
-            _avisar(m, f"🎯 <b>Disputa ao vivo</b> – {h.escape(empresa)}", f"{cab}\n1º: {h.escape(lider)} – R$ {h.escape(lt.get('melhor') or '')}"
+            _avisar(m, f"🎯 <b>Disputa ao vivo</b> – {h.escape(empresa)}", f"{cab}\n1º: {h.escape(lider)} – R$ {h.escape(_sem_rs(lt.get('melhor')))}"
                     f"\n{txt_piso}{hist_txt}", False)
             aviso_em = time.time()
         elif mudou and somos and not ant[2]:
-            _avisar(m, f"🟢 <b>Você está em 1º</b> – {h.escape(empresa)}", f"{cab}\nMelhor lance: R$ {h.escape(lt.get('melhor') or '')}\n{txt_piso}", False)
+            _avisar(m, f"🟢 <b>Você está em 1º</b> – {h.escape(empresa)}", f"{cab}\nMelhor lance: R$ {h.escape(_sem_rs(lt.get('melhor')))}\n{txt_piso}", False)
             aviso_em = time.time()
         elif mudou and not somos and ant[2]:
-            _avisar(m, f"🥊 <b>SUPERADO</b> – {h.escape(empresa)}", f"{cab}\n1º agora: {h.escape(lider)} – R$ {h.escape(lt.get('melhor') or '')}"
+            _avisar(m, f"🥊 <b>SUPERADO</b> – {h.escape(empresa)}", f"{cab}\n1º agora: {h.escape(lider)} – R$ {h.escape(_sem_rs(lt.get('melhor')))}"
                     f"\n{txt_piso}{hist_txt}", True)
             aviso_em = time.time()
         elif mudou and not somos and piso and melhor and melhor <= piso < (m.valor_br(ant[1] or "") or 0):
-            _avisar(m, f"⛔ <b>Passou do seu piso</b> – {h.escape(empresa)}", f"{cab}\n1º: {h.escape(lider)} – R$ {h.escape(lt.get('melhor') or '')}"
+            _avisar(m, f"⛔ <b>Passou do seu piso</b> – {h.escape(empresa)}", f"{cab}\n1º: {h.escape(lider)} – R$ {h.escape(_sem_rs(lt.get('melhor')))}"
                     f"\n{txt_piso}", True)
             aviso_em = time.time()
         elif mudou and not somos and time.time() - (aviso_em or 0) > RESUMO_A_CADA:
-            _avisar(m, f"⚡ <b>Novo lance no L{lt['lote']}</b> – {h.escape(empresa)}", f"{cab}\n1º: {h.escape(lider)} – R$ {h.escape(lt.get('melhor') or '')}"
+            _avisar(m, f"⚡ <b>Novo lance no L{lt['lote']}</b> – {h.escape(empresa)}", f"{cab}\n1º: {h.escape(lider)} – R$ {h.escape(_sem_rs(lt.get('melhor')))}"
                     f"\n{txt_piso}", False)
             aviso_em = time.time()
+        try:
+            robo_lote(m, db, page, p, lt, chave_piso(empresa, p["processo"], p["promotor"], lt["lote"]), melhor, somos, piso, h.escape(cab))
+        except Exception as ex_r:  # noqa: BLE001 – o robô nunca derruba o copiloto
+            m.log(f"Robô: erro no {p['processo']} L{lt['lote']}: {ex_r!r}")
         db.execute("INSERT OR REPLACE INTO ao_vivo VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                    (chave, p["processo"], p["promotor"], lt["lote"], lt.get("descricao", ""), lt.get("fase", ""),
                     lt.get("primeiro", ""), lt.get("melhor", ""), 1 if somos else 0, agora_txt, aviso_em))
@@ -247,9 +256,12 @@ def janela_rapida(m, db, page, segundos):
         comp = {}
     corte = (datetime.now() - timedelta(days=2)).strftime("%Y%m%d")   # histórico de lances: guarda 2 dias
     db.execute("DELETE FROM ao_vivo_hist WHERE substr(quando,7,4)||substr(quando,4,2)||substr(quando,1,2) < ?", (corte,))
+    import robo
+    com_robo = bool(robo.ativos(m.CFG.get("EMPRESA_NOME", "")))
+    intervalo = 5 if com_robo else INTERVALO
     inicio = time.time()
-    fim = inicio + min(segundos, JANELA_MAX)
-    m.log(f"Copiloto: {len(vivos)} processo(s) em disputa – leitura rápida a cada {INTERVALO} s.")
+    fim = inicio + (2400 if com_robo else min(segundos, JANELA_MAX))   # com robô: até 40 min seguidos na sala
+    m.log(f"Copiloto: {len(vivos)} processo(s) em disputa – leitura rápida a cada {intervalo} s{' (robô ligado)' if com_robo else ''}.")
     while time.time() < fim and vivos:
         rodada = time.time()
         ainda = []
@@ -261,7 +273,68 @@ def janela_rapida(m, db, page, segundos):
                 m.log(f"Copiloto: erro lendo {p['processo']}: {ex}")
                 ainda.append(p)
         vivos = ainda
-        espera = INTERVALO - (time.time() - rodada)
+        espera = intervalo - (time.time() - rodada)
         if espera > 0 and time.time() + espera < fim:
             time.sleep(espera)
     return int(time.time() - inicio)
+
+
+# ------------------------------------------------------------------ robô de lances (decisão em robo.py)
+def robo_lote(m, db, page, p, lt, chave, melhor, somos, piso, cab):
+    import robo
+    cfg = robo.cfg_lote(chave)
+    if not cfg.get("ativo") or robo.ler().get("parar_tudo"):
+        return
+    est = robo.estado(chave)
+    plat = m.CFG.get("PLATAFORMA", "bll").lower()
+    real = cfg.get("modo") == "real" and robo.real_liberado(plat)
+    modo = "real" if real else "ensaio"
+    kd = f"robo_diag_{chave}|{datetime.now():%Y%m%d}"
+    if not m.estado(db, kd):   # 1 foto da sala por dia com o robô ligado (para conferir a tela de lance)
+        try:
+            m.salvar_diag(page, f"robo_{p['processo'].replace('/', '-')}_L{lt['lote']}_{datetime.now():%H%M}")
+        except Exception:  # noqa: BLE001
+            pass
+        m.estado(db, kd, "1")
+    acao, valor, motivo = robo.decidir(cfg, piso, melhor, somos, None, True, time.time(), est)
+    if acao == "nada":
+        return
+    if acao == "parar":
+        if est.get("ultimo_motivo") != motivo:
+            robo.log(chave, "parou", None, motivo, modo)
+            robo.desligar_lote(chave)
+            robo.registrar_estado(chave, ultimo_motivo=motivo)
+            _avisar(m, "🤖 <b>Robô parou</b>", f"{cab}\n{motivo}", True)
+        return
+    # acao == "lance"
+    if not real:
+        if est.get("ensaio_melhor") != melhor:   # um registro por situação da sala
+            robo.log(chave, "ensaio", valor, motivo, modo)
+            robo.registrar_estado(chave, ensaio_melhor=melhor, ensaio_ts=time.time())
+            aviso = "" if cfg.get("modo") != "real" else "\n⚠️ Modo real escolhido, mas a plataforma ainda não foi liberada pelo administrador – ficou em ensaio."
+            _avisar(m, "🤖 <b>Robô (ensaio)</b> daria lance", f"{cab}\nR$ {robo.br(valor)} – {motivo}{aviso}", False)
+        return
+    try:   # UMA tentativa só (repetir poderia mandar o lance duas vezes)
+        res = page.evaluate(robo.JS_ENVIAR, [str(lt["lote"]), robo.valor_tela(valor)]) or {}
+    except Exception as ex_e:  # noqa: BLE001 – a página mudou no meio: confere na sala abaixo
+        res = {"ok": True, "etapa": f"página recarregou durante o envio ({str(ex_e)[:60]})"}
+    n = int(est.get("n") or 0) + 1
+    robo.registrar_estado(chave, ultimo_ts=time.time(), ultimo_valor=valor, n=n, ultimo_motivo="")
+    if not res.get("ok"):
+        robo.log(chave, "falhou", valor, f"{motivo} · tela: {res.get('etapa', '?')}", modo, False)
+        robo.desligar_lote(chave)
+        _avisar(m, "🤖 <b>Robô NÃO conseguiu dar o lance</b> – desligado neste lote", f"{cab}\nR$ {robo.br(valor)} · {res.get('etapa', '?')}\nDê o lance manualmente.", True)
+        return
+    # confere na sala: o melhor lance tem que ser o nosso
+    page.wait_for_timeout(2500)
+    conferido = False
+    for x in (m.avaliar(page, m.JS_LOTES) or []):
+        if str(x.get("lote")) == str(lt["lote"]):
+            conferido = abs((m.valor_br(x.get("melhor") or "") or 0) - valor) < 0.005
+    robo.log(chave, "lance", valor, motivo, modo, conferido)
+    if conferido:
+        _avisar(m, "🤖 <b>Robô deu lance</b>", f"{cab}\nR$ {robo.br(valor)} – {motivo} ({n}º lance do robô)", False)
+    else:
+        robo.desligar_lote(chave)
+        _avisar(m, "🤖 <b>Lance do robô não apareceu na sala</b> – desligado neste lote",
+                f"{cab}\nTentou R$ {robo.br(valor)}. Confira a sala e dê o lance manualmente.", True)
