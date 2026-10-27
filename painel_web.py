@@ -894,6 +894,10 @@ header button.menu-btn,header .tema,header .topo{box-shadow:none;background:rgba
 @media (max-width:900px){header{padding:0 12px}nav{align-items:stretch}nav a{margin:0}nav .area>a{border-radius:10px}nav .sub-m{border:0;background:none;backdrop-filter:none;box-shadow:none}}
 .fab-ia{background:linear-gradient(135deg,#2aa565,#1d7a4c)!important;box-shadow:0 10px 26px rgba(29,122,76,.4)!important;border:1px solid rgba(255,255,255,.18)}
 .hoje li{border-radius:12px!important;box-shadow:var(--sombra);transition:transform .15s}.hoje li:hover{transform:translateX(2px)}
+header{flex-wrap:nowrap}header>nav{flex-wrap:nowrap;min-width:0}
+@media (max-width:1750px){nav a{padding:8px 8px;font-size:13px}header{gap:10px}.topo,.tema,header .sair{padding:7px 9px}}
+@media (max-width:1500px){header .rot{display:none}nav a{padding:8px 7px;font-size:12.5px}}
+@media (max-width:900px){header{flex-wrap:wrap}}
 @media (prefers-reduced-motion:reduce){main{animation:none}.card,.kpi,button,.btn{transition:none}}
 @media print{body{background:#fff}header{position:static}}
 """
@@ -920,7 +924,7 @@ def pagina(titulo, corpo, aba="/", aviso="", erro=False, recarregar=False):
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">{meta}
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Licitatudo</title>
 <link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#07160f"><link rel="apple-touch-icon" href="/icone-192.png">
-{TEMA_JS}<style>{ESTILO}{ESTILO_MODERNO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="topo" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)" style="margin-left:auto">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓ Ajuda</a>{f'<a class="sair" href="/conta" title="Minha conta ({e(PAPEL_NOME.get(u["papel"], ""))})">👤 {e(u["login"])}</a>' if u else ""}<a class="sair" href="/sair">Sair</a></header>{faixa_teste(u) if u else ""}<main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
+{TEMA_JS}<style>{ESTILO}{ESTILO_MODERNO}</style></head><body><header><b>Licitatudo</b><button class="menu-btn" type="button" onclick="this.closest('header').classList.toggle('aberto')" aria-label="Menu">☰</button><nav>{nav}</nav><button class="topo" type="button" onclick="abrirBusca()" title="Buscar (Ctrl+K)" style="margin-left:auto">🔍</button>{sino}<button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button><a class="sair" href="/ajuda" title="Ajuda desta tela" onclick="this.href='/ajuda?de='+encodeURIComponent(location.pathname)">❓<span class="rot"> Ajuda</span></a>{f'<a class="sair" href="/conta" title="Minha conta – {e(u["login"])} ({e(PAPEL_NOME.get(u["papel"], ""))})">👤<span class="rot"> {e(u["login"])}</span></a>' if u else ""}<a class="sair" href="/sair">Sair</a></header>{faixa_teste(u) if u else ""}<main>{msg}{corpo}</main>{BUSCA_JS}{GLOSSARIO_JS}{'' if aba == "/pergunte" else BOTAO_IA}<script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();
 document.querySelectorAll('nav .sub-m a').forEach(a=>{{if(a.getAttribute('href')===location.pathname)a.classList.add('aqui');}});
 if('serviceWorker' in navigator){{navigator.serviceWorker.register('/sw.js').catch(()=>{{}});}}</script></body></html>"""
@@ -6874,6 +6878,9 @@ def _sparkline(vals, larg=160, alt=34):
             f'<polyline points="{pts}" fill="none" stroke="#1565c0" stroke-width="2"/></svg>')
 
 
+FASES_VIVAS_PAINEL = ("DISPUTA", "RANDÔMICO", "RANDOMICO", "FECHADO", "DESEMPATE", "ABERTO", "LANCE")
+
+
 def disputas_ao_vivo():
     """Lotes em disputa lidos pelo copiloto nos últimos 10 min, de todas as empresas BLL/BNC."""
     out = []
@@ -6893,9 +6900,24 @@ def disputas_ao_vivo():
                     hist = [h[0] for h in con.execute("SELECT melhor FROM ao_vivo_hist WHERE chave=? ORDER BY rowid DESC LIMIT 40", (r[0],))][::-1]
                     out.append({"empresa": nome, "eid": eid, "chave": r[0], "processo": r[1], "promotor": r[2], "lote": r[3],
                                 "descricao": r[4], "fase": r[5], "primeiro": r[6], "melhor": r[7], "somos": bool(r[8]),
-                                "lido": lido, "hist": hist})
+                                "lido": lido, "hist": hist, "fonte": "copiloto"})
                 con.close()
             except Exception:  # noqa: BLE001  (tabela ainda não existe: copiloto nunca rodou)
+                pass
+            # reserva: lotes em fase de lances vistos pela leitura normal da classificação (mesmo sem o copiloto)
+            try:
+                ja = {(x["processo"], x["promotor"], str(x["lote"])) for x in out if x["eid"] == eid}
+                con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+                for proc, prom, lote, desc, fase, prim, melhor, pos, lido_em in con.execute(
+                        "SELECT processo, promotor, lote, descricao, fase, primeiro, melhor, nossa_pos, lido_em FROM classificacao WHERE lido_em > ?",
+                        (time.time() - 1200,)):
+                    if (proc, prom, str(lote)) in ja or not any(v in (fase or "").upper() for v in FASES_VIVAS_PAINEL):
+                        continue
+                    out.append({"empresa": nome, "eid": eid, "chave": "", "processo": proc, "promotor": prom, "lote": lote,
+                                "descricao": desc or "", "fase": fase or "", "primeiro": prim or "", "melhor": re.sub(r"^\s*R\$\s*", "", melhor or ""), "somos": pos == 1,
+                                "lido": datetime.fromtimestamp(lido_em), "hist": [], "fonte": "ciclo"})
+                con.close()
+            except Exception:  # noqa: BLE001
                 pass
     return sorted(out, key=lambda x: (x["somos"], x["processo"], x["lote"]))
 
@@ -6928,12 +6950,22 @@ def pg_disputa(q, aviso=""):
         cards += f"""<div class="dv" style="border-left-color:{cor}">
 <div class="dv-cab"><b>{e(d["processo"])} · L{e(lote)}</b> <span class="sub">{e(d["descricao"][:70])}</span>
 <span class="tag" style="background:{cor};color:#fff">{"🟢 VOCÊ EM 1º" if d["somos"] else "🥊 fora do 1º"}</span>
-<span class="sub" style="margin-left:auto">{e(d["empresa"])} · {e(d["fase"])} · lido há {idade}s</span></div>
+<span class="sub" style="margin-left:auto">{e(d["empresa"])} · {e(d["fase"])} · lido há {idade}s{" (leitura normal do monitor – o copiloto rápido ainda não assumiu)" if d.get("fonte") == "ciclo" else ""}</span></div>
 <div class="dv-num"><div><small>1º colocado</small><b>{e(d["primeiro"] or "—")}</b></div><div><small>melhor lance</small><b>R$ {e(d["melhor"] or "—")}</b></div>
 <div><small>seu piso</small><b>{"R$ " + copiloto._br(piso) if piso else "—"}</b></div><div>{_sparkline(d["hist"])}</div></div>
 <div class="dv-txt" style="color:{cor}">{e(txt)}</div>
 <details><summary class="sub" style="cursor:pointer">definir/alterar piso</summary>{form_piso(d["empresa"], d["processo"], d["promotor"], d["lote"], "/disputa")}</details>
 <div class="sub"><a href="{e(chat)}">abrir o chat do processo</a> · {e(d["promotor"][:70])}</div></div>"""
+    hoje_txt = agora.strftime("%d/%m/%Y")
+    marcadas = []
+    if not vivos:
+        for x in empresas():
+            for proc, prom, sit, disp, *_ in x["procs"]:
+                if (disp or "").startswith(hoje_txt):
+                    marcadas.append(f'{e(proc)} – {e(prom[:50])} ({e(x["nome"])} · {e(x["plat"])}) às {e(disp[11:16])} · situação: {e(sit or "—")}')
+    aviso_hoje = ('<div class="msg">📅 <b>Disputas marcadas para hoje:</b><ul>' + "".join(f"<li>{m}</li>" for m in marcadas[:10]) +
+                  '</ul>Quando a fase de lances começar, o monitor percebe na próxima leitura (até o intervalo configurado da empresa) e o lote aparece aqui. '
+                  'Só BLL e BNC têm o copiloto rápido (a cada ~25 s).</div>') if marcadas else ""
     # preparar pisos antes da sessão
     emps = nomes_empresas()
     opcoes, linhas_prep = [], ""
@@ -6964,7 +6996,7 @@ def pg_disputa(q, aviso=""):
 <p class="sub">Durante a fase de lances (BLL/BNC), o monitor relê a sala a cada ~25 s e avisa no Telegram/ntfy quando vocês são
 superados, quando voltam ao 1º e se ainda dá para cobrir sem passar do <b>piso</b> (custo + margem mínima). <b>Os lances
 continuam sendo dados por vocês</b> – o sistema só lê. Esta página atualiza sozinha.</p>
-<div id="ao-vivo">{cards or '<div class="msg">Nenhuma disputa ao vivo agora. Quando um lote entrar em disputa, ele aparece aqui (e chega aviso no Telegram).</div>'}</div>
+<div id="ao-vivo">{cards or aviso_hoje or '<div class="msg">Nenhuma disputa ao vivo agora. Quando um lote entrar em disputa, ele aparece aqui (e chega aviso no Telegram).</div>'}</div>
 <h2 style="margin-top:26px">Preparar os pisos antes da sessão</h2>
 <p class="sub">Informe o <b>custo</b> do lote/item e a <b>margem mínima</b> (o sistema calcula o piso) ou digite o piso direto.
 O copiloto usa o piso para dizer se ainda dá para cobrir o concorrente.</p>
@@ -6974,7 +7006,7 @@ O copiloto usa o piso para dizer se ainda dá para cobrir o concorrente.</p>
  if(document.querySelector('details[open] .piso'))return;
  fetch(location.pathname+'?parcial=1',{{credentials:'same-origin'}}).then(r=>r.ok?r.text():null).then(h=>{{if(h!==null)document.getElementById('ao-vivo').innerHTML=h;}});}},10000);</script>"""
     if q.get("parcial") == "1":
-        return cards or '<div class="msg">Nenhuma disputa ao vivo agora.</div>'
+        return cards or aviso_hoje or '<div class="msg">Nenhuma disputa ao vivo agora.</div>'
     return pagina("Disputa ao vivo", corpo, "/disputa", aviso)
 
 
