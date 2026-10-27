@@ -3677,21 +3677,30 @@ def pg_comprasgov(eid, aviso="", erro=False):
             + (f' · página inicial: {e(st.get("inicio_titulo") or st.get("inicio", ""))}' if st.get("inicio") else "")
             + (f' · a última sessão durou {e(st["duracao_sessao"])}' if st.get("duracao_sessao") else "") + "</p>")
     if con:
-        corpo = (CG_JS.replace("__EID__", e(eid)).replace("__CSRF__", CSRF)
+        faixa = (f'<div class="msg">🔐 <b>Certificado carregado:</b> {e(con.cert_info)}. Na tela do gov.br clique em <b>Seu certificado digital</b> '
+                 '(não digite o CPF).</div>' if con.cert_info else
+                 '<div class="msg">📱 Conexão <b>sem certificado</b>. Use <i>Login com QR code</i>. Para entrar com o certificado, '
+                 'clique em ✅ Concluir e abra de novo pelo quadro 🔐.</div>')
+        corpo = faixa + (CG_JS.replace("__EID__", e(eid)).replace("__CSRF__", CSRF)
                  .replace("__LARG__", str(comprasgov.LARG)).replace("__ALT__", str(comprasgov.ALT)))
     else:
-        corpo = (f'<form method="post" action="/comprasgov/abrir" enctype="multipart/form-data" autocomplete="off">'
-                 f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="eid" value="{e(eid)}">'
-                 '<div class="cg-passos"><h3 style="margin:0 0 6px">🔐 Vai entrar com o certificado digital A1 (.pfx)?</h3>'
-                 '<p class="sub">Escolha o arquivo e digite a senha. Eles ficam <b>só na memória</b> do servidor enquanto o navegador abre e são '
-                 'descartados em seguida – nada é gravado. Na tela do gov.br, clique em <i>Seu certificado digital</i>. '
-                 'Sem certificado, use <i>Login com QR code</i> (app gov.br no celular) ou CPF e senha.</p>'
-                 '<label>Certificado (.pfx ou .p12)</label><input type="file" name="pfx" accept=".pfx,.p12">'
-                 '<label>Senha do certificado</label><input class="campo" type="password" name="senha_cert" autocomplete="off" style="max-width:320px">'
-                 '<p class="sub" style="margin:8px 0 0">Vai usar QR code, banco ou CPF e senha? Deixe estes dois campos em branco.</p></div>'
-                 f'<div class="acoes"><button>🔌 Abrir a conexão</button><a class="btn sec" href="/empresas">Voltar</a></div></form>'
-                 '<p class="sub">A conexão abre um navegador no servidor por até 15 minutos sem uso. Enquanto ela estiver aberta, '
-                 'o monitor desta empresa espera.</p>')
+        oculto = f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="eid" value="{e(eid)}">'
+        corpo = ('<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:6px">'
+                 f'<form method="post" action="/comprasgov/abrir" enctype="multipart/form-data" autocomplete="off" class="cg-passos" style="margin:0">{oculto}'
+                 '<input type="hidden" name="modo" value="cert"><h3 style="margin:0 0 6px">🔐 Entrar com o certificado digital A1</h3>'
+                 '<p class="sub">Escolha o arquivo <b>.pfx</b> da empresa e digite a senha. Eles ficam <b>só na memória</b> enquanto o navegador abre '
+                 'e são descartados em seguida – nada é gravado.</p>'
+                 '<label>1. Arquivo do certificado (.pfx ou .p12)</label><input type="file" name="pfx" accept=".pfx,.p12" required>'
+                 '<label>2. Senha do certificado</label><input class="campo" type="password" name="senha_cert" autocomplete="off" required style="max-width:320px">'
+                 '<div class="acoes"><button>🔐 Abrir com o certificado</button></div>'
+                 '<p class="sub" style="margin:0">3. Na tela do gov.br, <b>não digite o CPF</b>: clique direto em <i>Seu certificado digital</i>.</p></form>'
+                 f'<form method="post" action="/comprasgov/abrir" enctype="multipart/form-data" class="cg-passos" style="margin:0">{oculto}'
+                 '<input type="hidden" name="modo" value="sem"><h3 style="margin:0 0 6px">📱 Entrar com QR code, banco ou CPF</h3>'
+                 '<p class="sub">Abre o gov.br sem certificado. O mais prático é <i>Login com QR code</i>: leia com o aplicativo gov.br no celular. '
+                 '(Pelo CPF, o gov.br pode recusar o captcha vindo do servidor.)</p>'
+                 '<div class="acoes"><button class="sec">Abrir sem certificado</button></div></form></div>'
+                 '<p class="sub">A conexão fica aberta por até 15 minutos sem uso. Enquanto ela estiver aberta, o monitor desta empresa espera. '
+                 '<a href="/empresas">Voltar</a></p>')
     msg = f'<div class="msg {"erro" if erro else ""}">{e(aviso)}</div>' if aviso else ""
     html_ = CG_HTML.replace("__NOME__", e(cfg.get("EMPRESA_NOME", eid))).replace("__AVISO__", msg + info).replace("__CORPO__", corpo)
     return pagina("Conectar Compras.gov.br", html_, "/empresas")
@@ -9989,6 +9998,8 @@ class Painel(BaseHTTPRequestHandler):
                 return self.redirecionar("/empresas")
             pfx = next((d for n, d in arqs if d), None)
             senha_c = campos.pop("senha_cert", "")
+            if campos.get("modo") == "cert" and (not pfx or not senha_c):
+                return self.enviar(pg_comprasgov(eid, "Escolha o arquivo .pfx do certificado e digite a senha.", True))
             cert = None
             if pfx:
                 ok_c, info_c = comprasgov.conferir_certificado(pfx, senha_c)

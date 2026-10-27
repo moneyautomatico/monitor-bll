@@ -28,7 +28,7 @@ OCIOSO_MAX = 15 * 60          # fecha a conexão depois de 15 min sem uso
 MAX_CONEXOES = 2              # conexões abertas ao mesmo tempo no servidor (memória)
 HOSTS_OK = re.compile(r"(^|\.)(gov\.br|serpro\.gov\.br|comprasnet\.gov\.br)$", re.I)
 HOSTS_LOGIN = re.compile(r"(^|\.)(acesso\.gov\.br|sso\.acesso\.gov\.br)$", re.I)
-ORIGENS_CERT = ("https://certificado.sso.acesso.gov.br", "https://sso.acesso.gov.br")
+ORIGENS_CERT = ("https://certificado.sso.acesso.gov.br", "https://sso.acesso.gov.br", "https://certificado.acesso.gov.br")
 TECLAS = {"Enter", "Tab", "Backspace", "Delete", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End",
           "PageUp", "PageDown", "Shift+Tab"}
 
