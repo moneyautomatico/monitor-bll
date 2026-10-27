@@ -2,7 +2,7 @@
 # Blindagem do servidor do Licitatudo. Pode rodar mais de uma vez sem problema.
 #   bash seguranca.sh                 -> usa o endereço grátis <ip>.sslip.io para o HTTPS
 #   bash seguranca.sh meu.dominio.com www.meu.dominio.com -> usa o seu domínio (aponte o DNS para o IP do servidor antes);
-#                                     o endereço sslip.io continua funcionando junto
+#                                     só o domínio atende (www redireciona para ele; o endereço sslip.io é desligado)
 # O que faz:
 #   1. Permissões: arquivos com senhas/tokens só o administrador lê.
 #   2. Atualizações de segurança automáticas do Ubuntu.
@@ -88,8 +88,14 @@ echo "==> 5/6 HTTPS (cadeado) no painel"
 IP="$(curl -s -4 --max-time 10 https://api.ipify.org || hostname -I | awk '{print $1}')"
 SSLIP="$(echo "$IP" | tr . -).sslip.io"
 DOMINIO="${1:-$SSLIP}"
-# todos os endereços atendidos (o 1º é o principal; o sslip.io continua funcionando para links antigos)
-ENDERECOS="$(printf '%s\n' "$@" "$SSLIP" | awk 'NF && !v[$0]++' | paste -sd, - | sed 's/,/, /g')"
+# com domínio próprio: só ele atende (os outros endereços informados, ex. www, redirecionam para ele; o sslip.io deixa de existir)
+REDIRS=""
+for extra in "${@:2}"; do
+  REDIRS="${REDIRS}
+${extra} {
+	redir https://${DOMINIO}{uri} permanent
+}"
+done
 if ! command -v caddy >/dev/null; then
   apt-get install -y -q debian-keyring debian-archive-keyring apt-transport-https curl gnupg >/dev/null 2>&1
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
@@ -101,11 +107,11 @@ for p in 80 443; do
   iptables -C INPUT -p tcp --dport $p -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport $p -j ACCEPT
 done
 cat > /etc/caddy/Caddyfile <<EOF
-${ENDERECOS} {
+${DOMINIO} {
 	encode gzip
 	header -Server
 	reverse_proxy 127.0.0.1:${PORTA}
-}
+}${REDIRS}
 EOF
 systemctl enable caddy >/dev/null 2>&1; systemctl restart caddy
 echo "  aguardando o certificado de ${DOMINIO} (até 2 minutos)..."
