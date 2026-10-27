@@ -3115,7 +3115,7 @@ def pg_chat(q):
         e_arq = arquivado(g, arq)
         voltou = chave_proc(g) in arq and not e_arq
         itens += (f'<a class="it{" on" if on else ""}" href="#" data-url="{e(url)}" data-plat="{e(g["plat"])}" data-emp="{e(g["nome"])}" data-nl="{1 if nl else 0}" '
-                  f'data-arq="{1 if e_arq else 0}" data-proc="{e(chave_proc(g))}" '
+                  f'data-arq="{1 if e_arq else 0}" data-proc="{e(chave_proc(g))}"{" style=display:none" if e_arq else ""} '
                   f'data-urg="{1 if urg else 0}" data-busca="{e(busca_txt)}" onclick="return abrir(this)">'
                   f'<div class="it-l1"><b>{e(g["processo"])}</b><span class="it-data">{e(quando)}'
                   f'<i class="ponto"{"" if nl else " hidden"}></i></span></div>'
