@@ -2954,16 +2954,19 @@ def html_conversa(g, cfg_chat, mapa=None):
     tot = {c: sum(v.values()) for c, v in cats.items()}
     tot_n = {c: sum(v.values()) for c, v in novas.items()}
 
-    def menu(cat, rotulo, todos, padrao=False):
+    def menu(cat, rotulo, todos, padrao=False, so_todos=False):
         # o número entre parênteses é o de NÃO LIDAS: zera quando você clica em "Marcar como lido"
+        # so_todos: a lista mostra só "Todos…" (as subdivisões ficam escondidas, mas continuam valendo para o "lido")
+        esc = " hidden" if so_todos else ""
+
         def op(x):
             n = novas[cat].get(x, 0)
             estilo = ' style="color:#c62828;font-weight:700"' if n else ""
-            return (f'<option value="{e(x)}" data-novas="{n}" data-rot="{e(_rot_sub(x))}"{estilo}>'
+            return (f'<option value="{e(x)}" data-novas="{n}" data-rot="{e(_rot_sub(x))}"{estilo}{esc}>'
                     f'{e(_rot_sub(x))} ({n}{" 🔴" if n else ""})</option>')
         ops = "".join(op(x) for x in sorted(cats[cat], key=_ordem_sub))
         nt = tot_n[cat]
-        vazio = f'<option value="" data-rot="{rotulo}">{rotulo} ({nt}{" 🔴" if nt else ""})</option>'
+        vazio = f'<option value="" data-rot="{rotulo}"{esc}>{rotulo} ({nt}{" 🔴" if nt else ""})</option>'
         sel_todos = ' selected' if padrao else ''
         selo = f'<em class="selo-nova">NOVA MENSAGEM</em>' if nt else ""
         return (f'<label class="fm-l"><span title="O número entre parênteses é o de mensagens não lidas">{rotulo} {selo}</span>'
@@ -2998,7 +3001,7 @@ def html_conversa(g, cfg_chat, mapa=None):
             f'<div class="cv-filtro">'
             + menu("lote", "Lotes (mensagens)", "Todos os lotes", padrao=True)
             + menu("dilig", "Diligências", "Todas as diligências")
-            + menu("evento", "Processo (eventos)", "Todos os eventos")
+            + menu("evento", "Processo (eventos)", "Todos os eventos", so_todos=True)
             + '</div>' + faixa + barra_msgs() +
             f'<div class="cv-lista">{itens or "<div class=sub>Sem mensagens.</div>"}</div>')
 
