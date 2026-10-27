@@ -214,8 +214,13 @@ class Conexao:
             with sync_playwright() as pw:
                 extra = {}
                 if self._cert:   # certificado A1: o navegador apresenta ao gov.br quando ele pedir (o licitante escolheu usar)
-                    extra["client_certificates"] = [{"origin": o, "pfx": self._cert[0], "passphrase": self._cert[1]}
-                                                    for o in ORIGENS_CERT]
+                    pem_cert, pem_chave = pem_do_pfx(self._cert[0], self._cert[1])
+                    if pem_cert:   # convertido na memória: o navegador não lê .pfx com criptografia antiga (comum em A1)
+                        extra["client_certificates"] = [{"origin": o, "cert": pem_cert, "key": pem_chave} for o in ORIGENS_CERT]
+                    else:
+                        extra["client_certificates"] = [{"origin": o, "pfx": self._cert[0], "passphrase": self._cert[1]}
+                                                        for o in ORIGENS_CERT]
+                    pem_cert = pem_chave = None
                 self._cert = None
                 ctx = pw.chromium.launch_persistent_context(
                     str(pasta(self.eid) / "perfil_navegador"), headless=not tela, env=amb, locale="pt-BR",
@@ -366,6 +371,20 @@ _CONEXOES = {}
 _TRAVA = threading.Lock()
 
 
+def pem_do_pfx(pfx, senha):
+    """(certificado + cadeia em PEM, chave em PEM) – só em memória. (None, None) se não der para converter."""
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.serialization import pkcs12
+        chave, cert, cadeia = pkcs12.load_key_and_certificates(pfx, senha.encode("utf-8"))
+        pem = cert.public_bytes(serialization.Encoding.PEM) + b"".join(
+            c.public_bytes(serialization.Encoding.PEM) for c in (cadeia or []))
+        k = chave.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        return pem, k
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
 def conferir_certificado(pfx, senha):
     """Abre o .pfx só para conferir a senha e mostrar de quem é e até quando vale. Nada é gravado."""
     try:
@@ -393,6 +412,8 @@ def abrir(eid, login, cert=None):
         c = _CONEXOES.get(eid)
         if c and c.vivo:
             return c
+        if c:
+            c.t.join(timeout=25)
         vivas = [k for k, x in _CONEXOES.items() if x.vivo]
         if len(vivas) >= MAX_CONEXOES:
             raise RuntimeError("Há outras conexões abertas no servidor agora. Tente de novo em alguns minutos.")
@@ -416,6 +437,7 @@ def fechar(eid):
     try:
         return c.pedir("fechar", prazo=30)
     finally:
+        c.t.join(timeout=25)   # espera o navegador fechar e a trava do perfil ser solta
         c.vivo = False
 
 
