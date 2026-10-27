@@ -156,6 +156,6 @@ echo
 echo "================= RESUMO ================="
 [ -n "$HTTPS_OK" ] && echo " Painel: https://${DOMINIO}" || echo " Painel: http://${IP}:${PORTA} (sem HTTPS ainda)"
 echo " Próximos passos manuais (recomendados):"
-echo "  - Painel → Configurações → Segurança: troque a senha do painel por uma de 12+ caracteres."
+echo "  - Painel → 👤 Minha conta: troque a senha do painel por uma de 12+ caracteres."
 echo "  - Hostinger: use uma senha forte para o root do servidor e ative a verificação em 2 etapas da conta."
 echo "=========================================="
