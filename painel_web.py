@@ -1013,7 +1013,7 @@ def pagina_admin(titulo, corpo, aviso="", erro=False):
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Administração Expert Licitante</title>
 {TEMA_JS}<style>{ESTILO}header{{background:linear-gradient(90deg,#2a1f4d,#3b2a6b)!important}}</style></head><body>
-<header><b>🛡️ Expert Licitante · Administração</b><nav></nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>
+<header><b style="display:flex;align-items:center;gap:9px"><img src="/site/escudo.svg" height="30" alt="">Expert Licitante · Administração</b><nav></nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>
 <a class="sair" href="/" target="_blank" title="Abrir o painel de uso diário">↗ Abrir o painel</a>
 <span class="sair" style="cursor:default">👤 {e(u["login"]) if u else ""}</span><a class="sair" href="/admin/sair">Sair</a></header><main>{msg}{corpo}</main><script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();</script></body></html>"""
@@ -7366,7 +7366,7 @@ def pg_comunicado_imprimir():
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><title>Comunicado – custos de IA</title>
 <style>body{{font-family:Georgia,serif;max-width:720px;margin:30px auto;padding:0 20px;line-height:1.6;color:#111}}
 pre{{white-space:pre-wrap;font-family:inherit;font-size:15px}}button{{padding:8px 14px}}@media print{{button{{display:none}}}}</style></head>
-<body><button onclick="window.print()">🖨 Imprimir / Salvar em PDF</button><pre>{e(txt)}</pre></body></html>"""
+<body><button onclick="window.print()">🖨 Imprimir / Salvar em PDF</button><p><img src="/site/logo-horizontal.svg" height="56" alt="Expert Licitante"></p><pre>{e(txt)}</pre></body></html>"""
 
 
 # ------------------------------------------------------------------ usuários: Minha conta e painel do administrador
@@ -9423,10 +9423,10 @@ class Painel(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(dados_p)
             return
-        if re.fullmatch(r"/site/[a-z0-9-]{1,40}\.(webp|svg)", caminho) and (PASTA / caminho.lstrip("/")).is_file():   # telas e logomarca
+        if re.fullmatch(r"/site/[a-z0-9-]{1,40}\.(webp|svg|png)", caminho) and (PASTA / caminho.lstrip("/")).is_file():   # telas e logomarca
             dados_p = (PASTA / caminho.lstrip("/")).read_bytes()
             self.send_response(200)
-            self.send_header("Content-Type", "image/svg+xml" if caminho.endswith(".svg") else "image/webp")
+            self.send_header("Content-Type", "image/svg+xml" if caminho.endswith(".svg") else ("image/png" if caminho.endswith(".png") else "image/webp"))
             self.send_header("Cache-Control", "public, max-age=86400")
             self.send_header("Content-Length", str(len(dados_p)))
             self.cabecalhos_seguranca()

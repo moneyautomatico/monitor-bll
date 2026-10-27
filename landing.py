@@ -95,7 +95,7 @@ def pagina(dias=7, whatsapp="", cadastro_aberto=True):
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Expert Licitante – sua licitação no piloto automático</title>
 <meta name="description" content="Monitor do pregoeiro 24 h com alarme no celular, prazos da Lei 14.133, preço com lucro e habilitação em um PDF. Teste grátis por {dias} dias, sem cartão.">
 <meta name="theme-color" content="#07160f"><link rel="icon" href="/site/favicon.svg" type="image/svg+xml"><link rel="manifest" href="/manifest.webmanifest">
-<meta property="og:title" content="Expert Licitante – sua licitação no piloto automático"><meta property="og:description" content="Teste grátis por {dias} dias, sem cartão.">
+<meta property="og:title" content="Expert Licitante – sua licitação no piloto automático"><meta property="og:image" content="https://expertlicitante.com.br/site/compartilhar.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta property="og:description" content="Teste grátis por {dias} dias, sem cartão.">
 <style>
 :root{{--v:#34c27a;--v2:#1f8f57;--esc:#07160f;--esc2:#0d2419;--txt:#0f1f17;--sub:#5a6a61;--borda:#e3ebe6;--bg:#f6f9f7}}
 *{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--txt);background:var(--bg);line-height:1.55;-webkit-font-smoothing:antialiased}}
@@ -206,7 +206,7 @@ footer{{background:var(--esc);color:#7f998b;font-size:13px;padding:26px 0;border
 monta a proposta com preço que dá lucro e deixa a habilitação pronta em um PDF.</p>
 <div class="botoes">{cta}{cta_wa}</div>
 <div class="mini"><span>{ic("check")} {dias} dias grátis</span><span>{ic("check")} Sem cartão de crédito</span><span>{ic("check")} Conta pronta em 1 minuto</span><span>{ic("check")} Cancele quando quiser</span></div>
-<div class="tela rv"><div class="tela-in"><div class="bar"><span class="pts"><i></i><i></i><i></i></span><b>Expert Licitante</b><span>🏠 Hoje</span><span>🗂️ Licitações</span><span>🎯 Disputa</span><span>📄 Documentos</span></div>
+<div class="tela rv"><div class="tela-in"><div class="bar"><span class="pts"><i></i><i></i><i></i></span><b><img src="/site/escudo.svg" height="16" alt="" style="vertical-align:-3px;margin-right:6px">Expert Licitante</b><span>🏠 Hoje</span><span>🗂️ Licitações</span><span>🎯 Disputa</span><span>📄 Documentos</span></div>
 <div class="grid"><div><div style="font-weight:800;margin-bottom:10px">🏠 Hoje – o que precisa de você</div>
 <div class="it"><span>🏁</span><div><b>Disputa HOJE às 09:00 – Pregão 45/2026</b><small>Prefeitura Municipal · 86% pronto · falta: pacote</small></div><span class="bt">Abrir</span></div>
 <div class="it"><span>⏰</span><div><b>Proposta ajustada em até 2 horas</b><small>Pedido do pregoeiro no chat · Pregão 33/2026</small></div><span class="bt">Ver</span></div>
@@ -259,9 +259,9 @@ monta a proposta com preço que dá lucro e deixa a habilitação pronta em um P
 
 <section id="faq" style="padding-top:0"><div class="w"><div class="tit rv"><span class="tag">Dúvidas</span><h2>Perguntas frequentes</h2></div><div class="faq">{faq}</div></div></section>
 
-<section class="final"><div class="w"><h2>Teste {dias} dias grátis.<br><span class="grad">Sem cartão. Sem compromisso.</span></h2>
+<section class="final"><div class="w"><img src="/site/brasao.svg" width="120" height="130" alt="Brasão Expert Licitante" style="display:block;margin:0 auto 18px"><h2>Teste {dias} dias grátis.<br><span class="grad">Sem cartão. Sem compromisso.</span></h2>
 <p>Crie a conta em 1 minuto e amanhã cedo receba no Telegram o resumo do seu dia de licitações.</p><div class="botoes">{cta}{cta_wa}</div></div></section>
-<footer><div class="w"><span>© Expert Licitante · licitação no piloto automático</span><span><a href="/prazos" style="text-decoration:none">Calculadora de prazos</a> · <a href="/login" style="text-decoration:none">Entrar</a></span></div></footer>
+<footer><div class="w"><span><img src="/site/escudo.svg" height="22" alt="" style="vertical-align:middle;margin-right:8px">© Expert Licitante · licitação no piloto automático</span><span><a href="/prazos" style="text-decoration:none">Calculadora de prazos</a> · <a href="/login" style="text-decoration:none">Entrar</a></span></div></footer>
 {f'<a class="wa" href="{e(wa)}" target="_blank" rel="noopener">💬 WhatsApp</a>' if wa else ""}
 <script>
 (function(){{const t=document.getElementById('topo');const f=()=>t.classList.toggle('rolou',scrollY>20);f();addEventListener('scroll',f,{{passive:true}});
@@ -289,7 +289,7 @@ border-radius:10px;outline:none}}input:focus{{border-color:#2f8a5b;box-shadow:0 
 .ck{{display:flex;gap:8px;align-items:flex-start;font-weight:400;font-size:13px;margin-top:14px}}button{{width:100%;margin-top:18px;font:inherit;font-weight:700;color:#fff;border:0;
 border-radius:12px;padding:14px;cursor:pointer;background:linear-gradient(135deg,#2f8a5b,#1f5c3f)}}.erro{{background:#fde8e6;color:#b3261e;border-radius:10px;padding:10px 12px;font-size:14px;margin-bottom:8px}}
 .hp{{position:absolute;left:-9999px}}.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}}</style></head><body><div class="cx">
-<p style="margin:0 0 14px"><a href="/">← Expert Licitante</a></p><h1>Teste grátis por {dias} dias</h1>
+<p style="margin:0 0 14px"><a href="/conheca"><img src="/site/logo-horizontal.svg" height="46" alt="Expert Licitante"></a></p><h1>Teste grátis por {dias} dias</h1>
 <p class="s">Sem cartão de crédito. Você já entra no painel e o assistente mostra cada passo.</p>
 {f'<div class="erro">{e(erro)}</div>' if erro else ""}
 <form method="post" action="/teste-gratis" autocomplete="on"><input type="hidden" name="t" value="{e(token)}">
@@ -512,5 +512,5 @@ def pagina_prazos(q=None, cadastro_aberto=True, dias=7):
 {vende}
 <p class="nota">Contagem em dias úteis com os feriados nacionais (inclui Carnaval e Corpus Christi). Feriados estaduais e municipais, pontos facultativos
 e regras próprias do edital podem mudar a data – confira sempre o edital e o sistema da licitação. Esta calculadora é uma ajuda e não substitui orientação jurídica.</p>
-</main><footer><div class="w"><span>© Expert Licitante · licitação no piloto automático</span><span><a href="/conheca" style="text-decoration:none">Conheça o Expert Licitante</a></span></div></footer>
+</main><footer><div class="w"><span><img src="/site/escudo.svg" height="22" alt="" style="vertical-align:middle;margin-right:8px">© Expert Licitante · licitação no piloto automático</span><span><a href="/conheca" style="text-decoration:none">Conheça o Expert Licitante</a></span></div></footer>
 </body></html>"""
