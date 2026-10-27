@@ -105,7 +105,7 @@ a{{color:inherit}}.w{{max-width:1160px;margin:auto;padding:0 22px}}
 .topo{{position:fixed;inset:0 0 auto 0;z-index:40;transition:.25s}}.topo .w{{display:flex;align-items:center;gap:20px;height:68px}}
 .topo.rolou{{background:rgba(7,22,15,.82);backdrop-filter:blur(14px);border-bottom:1px solid rgba(255,255,255,.08)}}
 .marca{{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px;color:#fff;text-decoration:none;letter-spacing:-.2px}}
-.marca i{{width:26px;height:42px;background:url(/site/escudo.svg) center/contain no-repeat}}
+.marca i{{width:50px;height:52px;background:url(/site/escudo.svg) center/contain no-repeat}}
 .topo nav{{margin-left:auto;display:flex;gap:22px;align-items:center;font-size:14px}}.topo nav a{{color:#c6d8cd;text-decoration:none}}.topo nav a:hover{{color:#fff}}
 .topo nav .entrar{{color:#fff;border:1px solid rgba(255,255,255,.22);padding:8px 14px;border-radius:10px}}
 .cta{{display:inline-flex;align-items:center;gap:8px;background:linear-gradient(135deg,#5ee39d,#34c27a 45%,#1f8f57);color:#04140c!important;text-decoration:none;font-weight:800;
@@ -206,7 +206,7 @@ footer{{background:var(--esc);color:#7f998b;font-size:13px;padding:26px 0;border
 monta a proposta com preço que dá lucro e deixa a habilitação pronta em um PDF.</p>
 <div class="botoes">{cta}{cta_wa}</div>
 <div class="mini"><span>{ic("check")} {dias} dias grátis</span><span>{ic("check")} Sem cartão de crédito</span><span>{ic("check")} Conta pronta em 1 minuto</span><span>{ic("check")} Cancele quando quiser</span></div>
-<div class="tela rv"><div class="tela-in"><div class="bar"><span class="pts"><i></i><i></i><i></i></span><b><img src="/site/escudo.svg" height="16" alt="" style="vertical-align:-3px;margin-right:6px">Expert Licitante</b><span>🏠 Hoje</span><span>🗂️ Licitações</span><span>🎯 Disputa</span><span>📄 Documentos</span></div>
+<div class="tela rv"><div class="tela-in"><div class="bar"><span class="pts"><i></i><i></i><i></i></span><b><img src="/site/escudo.svg" height="18" alt="" style="vertical-align:-4px;margin-right:6px">Expert Licitante</b><span>🏠 Hoje</span><span>🗂️ Licitações</span><span>🎯 Disputa</span><span>📄 Documentos</span></div>
 <div class="grid"><div><div style="font-weight:800;margin-bottom:10px">🏠 Hoje – o que precisa de você</div>
 <div class="it"><span>🏁</span><div><b>Disputa HOJE às 09:00 – Pregão 45/2026</b><small>Prefeitura Municipal · 86% pronto · falta: pacote</small></div><span class="bt">Abrir</span></div>
 <div class="it"><span>⏰</span><div><b>Proposta ajustada em até 2 horas</b><small>Pedido do pregoeiro no chat · Pregão 33/2026</small></div><span class="bt">Ver</span></div>
@@ -261,7 +261,7 @@ monta a proposta com preço que dá lucro e deixa a habilitação pronta em um P
 
 <section class="final"><div class="w"><img src="/site/brasao.svg" width="120" height="130" alt="Brasão Expert Licitante" style="display:block;margin:0 auto 18px"><h2>Teste {dias} dias grátis.<br><span class="grad">Sem cartão. Sem compromisso.</span></h2>
 <p>Crie a conta em 1 minuto e amanhã cedo receba no Telegram o resumo do seu dia de licitações.</p><div class="botoes">{cta}{cta_wa}</div></div></section>
-<footer><div class="w"><span><img src="/site/escudo.svg" height="22" alt="" style="vertical-align:middle;margin-right:8px">© Expert Licitante · licitação no piloto automático</span><span><a href="/prazos" style="text-decoration:none">Calculadora de prazos</a> · <a href="/login" style="text-decoration:none">Entrar</a></span></div></footer>
+<footer><div class="w"><span><img src="/site/escudo.svg" height="28" alt="" style="vertical-align:middle;margin-right:8px">© Expert Licitante · licitação no piloto automático</span><span><a href="/prazos" style="text-decoration:none">Calculadora de prazos</a> · <a href="/login" style="text-decoration:none">Entrar</a></span></div></footer>
 {f'<a class="wa" href="{e(wa)}" target="_blank" rel="noopener">💬 WhatsApp</a>' if wa else ""}
 <script>
 (function(){{const t=document.getElementById('topo');const f=()=>t.classList.toggle('rolou',scrollY>20);f();addEventListener('scroll',f,{{passive:true}});
@@ -289,7 +289,7 @@ border-radius:10px;outline:none}}input:focus{{border-color:#2f8a5b;box-shadow:0 
 .ck{{display:flex;gap:8px;align-items:flex-start;font-weight:400;font-size:13px;margin-top:14px}}button{{width:100%;margin-top:18px;font:inherit;font-weight:700;color:#fff;border:0;
 border-radius:12px;padding:14px;cursor:pointer;background:linear-gradient(135deg,#2f8a5b,#1f5c3f)}}.erro{{background:#fde8e6;color:#b3261e;border-radius:10px;padding:10px 12px;font-size:14px;margin-bottom:8px}}
 .hp{{position:absolute;left:-9999px}}.duas{{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}}</style></head><body><div class="cx">
-<p style="margin:0 0 14px"><a href="/conheca"><img src="/site/logo-horizontal.svg" height="46" alt="Expert Licitante"></a></p><h1>Teste grátis por {dias} dias</h1>
+<p style="margin:0 0 14px"><a href="/conheca"><img src="/site/logo-horizontal.svg" height="50" alt="Expert Licitante"></a></p><h1>Teste grátis por {dias} dias</h1>
 <p class="s">Sem cartão de crédito. Você já entra no painel e o assistente mostra cada passo.</p>
 {f'<div class="erro">{e(erro)}</div>' if erro else ""}
 <form method="post" action="/teste-gratis" autocomplete="on"><input type="hidden" name="t" value="{e(token)}">
@@ -432,7 +432,7 @@ CSS_PUB = """
 a{color:inherit}.w{max-width:1000px;margin:auto;padding:0 22px}.ic{width:22px;height:22px}
 .topo{background:var(--esc)}.topo .w{display:flex;align-items:center;gap:16px;height:66px;max-width:1160px}
 .marca{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;color:#fff;text-decoration:none}
-.marca i{width:25px;height:40px;background:url(/site/escudo.svg) center/contain no-repeat}
+.marca i{width:48px;height:50px;background:url(/site/escudo.svg) center/contain no-repeat}
 .topo nav{margin-left:auto;display:flex;gap:10px;align-items:center;font-size:14px}.topo nav a{color:#c6d8cd;text-decoration:none}
 .topo nav .entrar{color:#fff;border:1px solid rgba(255,255,255,.22);padding:8px 13px;border-radius:10px}
 .cta{display:inline-flex;align-items:center;gap:8px;background:linear-gradient(135deg,#5ee39d,#34c27a 45%,#1f8f57);color:#04140c!important;text-decoration:none;font-weight:800;padding:14px 24px;border-radius:14px;box-shadow:0 12px 30px rgba(52,194,122,.3);border:0;font-size:16px;cursor:pointer;font-family:inherit}
@@ -512,5 +512,5 @@ def pagina_prazos(q=None, cadastro_aberto=True, dias=7):
 {vende}
 <p class="nota">Contagem em dias úteis com os feriados nacionais (inclui Carnaval e Corpus Christi). Feriados estaduais e municipais, pontos facultativos
 e regras próprias do edital podem mudar a data – confira sempre o edital e o sistema da licitação. Esta calculadora é uma ajuda e não substitui orientação jurídica.</p>
-</main><footer><div class="w"><span><img src="/site/escudo.svg" height="22" alt="" style="vertical-align:middle;margin-right:8px">© Expert Licitante · licitação no piloto automático</span><span><a href="/conheca" style="text-decoration:none">Conheça o Expert Licitante</a></span></div></footer>
+</main><footer><div class="w"><span><img src="/site/escudo.svg" height="28" alt="" style="vertical-align:middle;margin-right:8px">© Expert Licitante · licitação no piloto automático</span><span><a href="/conheca" style="text-decoration:none">Conheça o Expert Licitante</a></span></div></footer>
 </body></html>"""

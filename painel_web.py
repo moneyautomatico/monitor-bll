@@ -435,7 +435,7 @@ button.entrar:hover{{transform:translateY(-1px);box-shadow:0 14px 28px rgba(31,9
 :root[data-theme=dark] .tema{{background:#1a211d;border-color:#2a332e}}
 @media (max-width:860px){{body{{grid-template-columns:1fr}}.arte{{padding:28px;min-height:auto}}.chamada h1{{font-size:26px}}.chips,.rodape{{display:none}}}}
 </style></head><body>
-<section class="arte"><div class="marca"><img src="/site/escudo.svg" width="38" height="61" alt=""><img src="/site/nome.svg" height="20" alt="Expert Licitante"></div>
+<section class="arte"><div class="marca"><img src="/site/escudo.svg" width="62" height="65" alt=""><img src="/site/nome.svg" height="20" alt="Expert Licitante"></div>
 <div class="chamada"><h1>Todas as suas licitações, num só lugar.</h1>
 <p>Mensagens do pregoeiro, classificação dos lotes, recursos e diligências da BLL, BNC e Portal de Compras — com alerta na hora.</p>
 <div class="chips"><span class="chip">🔔 Alertas em tempo real</span><span class="chip">📊 Classificação por lote</span><span class="chip">🤖 Análise de editais</span></div></div>
@@ -852,7 +852,7 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvet
 header{position:sticky;top:0;z-index:50;background:linear-gradient(180deg,rgba(7,22,15,.97),rgba(13,36,25,.95));backdrop-filter:saturate(1.4) blur(12px);
 -webkit-backdrop-filter:saturate(1.4) blur(12px);border-bottom:1px solid rgba(255,255,255,.07);box-shadow:0 6px 20px rgba(0,0,0,.12);padding:0 18px;gap:14px;min-height:60px}
 header>b{display:flex;align-items:center;gap:10px;font-size:15.5px;letter-spacing:.12em;text-transform:uppercase;padding:9px 0;color:#f4efe3;font-family:"Times New Roman",Georgia,"Noto Serif",serif;font-weight:700}
-header>b:before{content:"";width:26px;height:42px;background:url(/site/escudo.svg) center/contain no-repeat;flex:none}
+header>b:before{content:"";width:42px;height:44px;background:url(/site/escudo.svg) center/contain no-repeat;flex:none}
 nav{gap:2px;align-items:center}nav a{color:#c3d6ca;padding:8px 11px;margin:10px 0;border:0;border-radius:10px;font-size:13.5px;font-weight:500;transition:background .15s,color .15s}
 nav a:hover{background:rgba(255,255,255,.07);color:#fff}nav a.on{background:rgba(52,194,122,.16);color:#fff;box-shadow:inset 0 0 0 1px rgba(126,240,180,.25)}
 nav .sub-m{background:rgba(13,36,25,.98);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:6px;top:calc(100% - 4px);
@@ -1013,7 +1013,7 @@ def pagina_admin(titulo, corpo, aviso="", erro=False):
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(titulo)} – Administração Expert Licitante</title>
 {TEMA_JS}<style>{ESTILO}header{{background:linear-gradient(90deg,#2a1f4d,#3b2a6b)!important}}</style></head><body>
-<header><b style="display:flex;align-items:center;gap:9px"><img src="/site/escudo.svg" height="30" alt="">Expert Licitante · Administração</b><nav></nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>
+<header><b style="display:flex;align-items:center;gap:9px"><img src="/site/escudo.svg" height="36" alt="">Expert Licitante · Administração</b><nav></nav><button class="tema" onclick="trocarTema()" title="Modo escuro">🌙</button>
 <a class="sair" href="/" target="_blank" title="Abrir o painel de uso diário">↗ Abrir o painel</a>
 <span class="sair" style="cursor:default">👤 {e(u["login"]) if u else ""}</span><a class="sair" href="/admin/sair">Sair</a></header><main>{msg}{corpo}</main><script>(function(){{function p(){{try{{fetch('/ping?p='+encodeURIComponent(location.pathname+location.search)+'&v='+(document.hidden?0:1),{{credentials:'same-origin',cache:'no-store'}});}}catch(e){{}}}}
 setInterval(p,40000);document.addEventListener('visibilitychange',p);}})();</script></body></html>"""
