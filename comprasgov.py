@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -28,6 +28,7 @@ OCIOSO_MAX = 15 * 60          # fecha a conexão depois de 15 min sem uso
 MAX_CONEXOES = 2              # conexões abertas ao mesmo tempo no servidor (memória)
 HOSTS_OK = re.compile(r"(^|\.)(gov\.br|serpro\.gov\.br|comprasnet\.gov\.br)$", re.I)
 HOSTS_LOGIN = re.compile(r"(^|\.)(acesso\.gov\.br|sso\.acesso\.gov\.br)$", re.I)
+ORIGENS_CERT = ("https://certificado.sso.acesso.gov.br", "https://sso.acesso.gov.br")
 TECLAS = {"Enter", "Tab", "Backspace", "Delete", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End",
           "PageUp", "PageDown", "Shift+Tab"}
 
@@ -161,8 +162,9 @@ def iniciar_xvfb():
 
 # ------------------------------------------------------------------ a conexão (um navegador por empresa, numa thread própria)
 class Conexao:
-    def __init__(self, eid, login):
+    def __init__(self, eid, login, cert=None):
         self.eid, self.login = eid, login
+        self._cert = cert          # (bytes do .pfx, senha) – só na memória, até o navegador abrir
         self.q = queue.Queue()
         self.uso = time.time()
         self.erro = ""
@@ -195,9 +197,15 @@ class Conexao:
             xvfb, tela = iniciar_xvfb()
             amb = dict(os.environ, DISPLAY=tela) if tela else None
             with sync_playwright() as pw:
+                extra = {}
+                if self._cert:   # certificado A1: o navegador apresenta ao gov.br quando ele pedir (o licitante escolheu usar)
+                    extra["client_certificates"] = [{"origin": o, "pfx": self._cert[0], "passphrase": self._cert[1]}
+                                                    for o in ORIGENS_CERT]
+                self._cert = None
                 ctx = pw.chromium.launch_persistent_context(
                     str(pasta(self.eid) / "perfil_navegador"), headless=not tela, env=amb, locale="pt-BR",
-                    viewport={"width": LARG, "height": ALT}, accept_downloads=False)
+                    viewport={"width": LARG, "height": ALT}, accept_downloads=False, **extra)
+                extra.clear()
                 ctx.set_default_timeout(20000)
                 cook = pasta(self.eid) / "cookies_sessao.json"
                 try:
@@ -337,7 +345,29 @@ _CONEXOES = {}
 _TRAVA = threading.Lock()
 
 
-def abrir(eid, login):
+def conferir_certificado(pfx, senha):
+    """Abre o .pfx só para conferir a senha e mostrar de quem é e até quando vale. Nada é gravado."""
+    try:
+        from cryptography.hazmat.primitives.serialization import pkcs12
+    except Exception:  # noqa: BLE001
+        return None, ""
+    try:
+        chave, cert, _ = pkcs12.load_key_and_certificates(pfx, senha.encode("utf-8"))
+    except ValueError:
+        return False, "A senha do certificado não confere (ou o arquivo não é um certificado .pfx/.p12)."
+    if not cert or not chave:
+        return False, "O arquivo não tem o certificado com a chave privada."
+    nome = next((a.value for a in cert.subject if a.oid.dotted_string == "2.5.4.3"), "")
+    try:
+        vale = cert.not_valid_after_utc
+    except AttributeError:
+        vale = cert.not_valid_after
+    if vale.replace(tzinfo=None) < datetime.now(timezone.utc).replace(tzinfo=None):
+        return False, f"Este certificado venceu em {vale:%d/%m/%Y}."
+    return True, f"{nome} – válido até {vale:%d/%m/%Y}"
+
+
+def abrir(eid, login, cert=None):
     with _TRAVA:
         c = _CONEXOES.get(eid)
         if c and c.vivo:
@@ -345,7 +375,7 @@ def abrir(eid, login):
         vivas = [k for k, x in _CONEXOES.items() if x.vivo]
         if len(vivas) >= MAX_CONEXOES:
             raise RuntimeError("Há outras conexões abertas no servidor agora. Tente de novo em alguns minutos.")
-        c = Conexao(eid, login)
+        c = Conexao(eid, login, cert)
         _CONEXOES[eid] = c
     c.pronto.wait(60)
     if not c.vivo:

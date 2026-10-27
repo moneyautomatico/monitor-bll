@@ -3680,9 +3680,16 @@ def pg_comprasgov(eid, aviso="", erro=False):
         corpo = (CG_JS.replace("__EID__", e(eid)).replace("__CSRF__", CSRF)
                  .replace("__LARG__", str(comprasgov.LARG)).replace("__ALT__", str(comprasgov.ALT)))
     else:
-        corpo = (f'<form method="post" action="/comprasgov/abrir"><input type="hidden" name="csrf" value="{CSRF}">'
-                 f'<input type="hidden" name="eid" value="{e(eid)}"><div class="acoes"><button>🔌 Abrir a conexão</button>'
-                 f'<a class="btn sec" href="/empresas">Voltar</a></div></form>'
+        corpo = (f'<form method="post" action="/comprasgov/abrir" enctype="multipart/form-data" autocomplete="off">'
+                 f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="eid" value="{e(eid)}">'
+                 '<details class="cg-passos"><summary><b>🔐 Entrar com o certificado digital A1 (.pfx) da empresa</b> – opcional</summary>'
+                 '<p class="sub">Escolha o arquivo e digite a senha. Eles ficam <b>só na memória</b> do servidor enquanto o navegador abre e são '
+                 'descartados em seguida – nada é gravado. Na tela do gov.br, clique em <i>Seu certificado digital</i>. '
+                 'Sem certificado, use <i>Login com QR code</i> (app gov.br no celular) ou CPF e senha.</p>'
+                 '<label>Certificado (.pfx ou .p12)</label><input type="file" name="pfx" accept=".pfx,.p12">'
+                 '<label>Senha do certificado</label><input class="campo" type="password" name="senha_cert" autocomplete="off" style="max-width:320px">'
+                 '</details>'
+                 f'<div class="acoes"><button>🔌 Abrir a conexão</button><a class="btn sec" href="/empresas">Voltar</a></div></form>'
                  '<p class="sub">A conexão abre um navegador no servidor por até 15 minutos sem uso. Enquanto ela estiver aberta, '
                  'o monitor desta empresa espera.</p>')
     msg = f'<div class="msg {"erro" if erro else ""}">{e(aviso)}</div>' if aviso else ""
@@ -9971,6 +9978,31 @@ class Painel(BaseHTTPRequestHandler):
         if not self.autorizado():
             return
         tam = int(self.headers.get("Content-Length", "0") or 0)
+        if self.path.rstrip("/") == "/comprasgov/abrir":   # pode trazer o certificado A1 (fica só na memória)
+            if tam > 300 * 1024:
+                return self.enviar(pagina("Erro", "<h2>Arquivo grande demais</h2><p>O certificado .pfx tem poucos KB.</p>"), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            eid = campos.get("eid", "")
+            if not eid_comprasgov(eid) or not self.permitido("/comprasgov/abrir", {"eid": eid}):
+                return self.redirecionar("/empresas")
+            pfx = next((d for n, d in arqs if d), None)
+            senha_c = campos.pop("senha_cert", "")
+            cert = None
+            if pfx:
+                ok_c, info_c = comprasgov.conferir_certificado(pfx, senha_c)
+                if ok_c is False:
+                    return self.enviar(pg_comprasgov(eid, info_c, True))
+                cert = (pfx, senha_c)
+            self.auditar("ação /comprasgov/abrir", "com certificado A1" if cert else "sem certificado")
+            try:
+                comprasgov.abrir(eid, login_atual(), cert)
+            except Exception as ex:  # noqa: BLE001
+                return self.enviar(pg_comprasgov(eid, str(ex), True))
+            finally:
+                pfx = senha_c = cert = None
+            return self.redirecionar(f"/comprasgov?eid={eid}")
         if self.path.rstrip("/") == "/classificacao/upload":
             if tam > 20 * 1024 * 1024:
                 return self.enviar(pagina("Erro", "<h2>Arquivo grande demais</h2>"), 413)
