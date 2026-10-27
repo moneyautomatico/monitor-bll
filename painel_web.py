@@ -3682,13 +3682,13 @@ def pg_comprasgov(eid, aviso="", erro=False):
     else:
         corpo = (f'<form method="post" action="/comprasgov/abrir" enctype="multipart/form-data" autocomplete="off">'
                  f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="eid" value="{e(eid)}">'
-                 '<details class="cg-passos"><summary><b>🔐 Entrar com o certificado digital A1 (.pfx) da empresa</b> – opcional</summary>'
+                 '<div class="cg-passos"><h3 style="margin:0 0 6px">🔐 Vai entrar com o certificado digital A1 (.pfx)?</h3>'
                  '<p class="sub">Escolha o arquivo e digite a senha. Eles ficam <b>só na memória</b> do servidor enquanto o navegador abre e são '
                  'descartados em seguida – nada é gravado. Na tela do gov.br, clique em <i>Seu certificado digital</i>. '
                  'Sem certificado, use <i>Login com QR code</i> (app gov.br no celular) ou CPF e senha.</p>'
                  '<label>Certificado (.pfx ou .p12)</label><input type="file" name="pfx" accept=".pfx,.p12">'
                  '<label>Senha do certificado</label><input class="campo" type="password" name="senha_cert" autocomplete="off" style="max-width:320px">'
-                 '</details>'
+                 '<p class="sub" style="margin:8px 0 0">Vai usar QR code, banco ou CPF e senha? Deixe estes dois campos em branco.</p></div>'
                  f'<div class="acoes"><button>🔌 Abrir a conexão</button><a class="btn sec" href="/empresas">Voltar</a></div></form>'
                  '<p class="sub">A conexão abre um navegador no servidor por até 15 minutos sem uso. Enquanto ela estiver aberta, '
                  'o monitor desta empresa espera.</p>')
