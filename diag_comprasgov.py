@@ -39,6 +39,10 @@ print("== CONEXÃO ==")
 for k in ("conectado_em", "conectado_por", "inicio_titulo", "ultima_ok", "no_ar_ha", "aviso_caiu", "duracao_sessao"):
     if st.get(k):
         print(f"  {k}: {st[k]}")
+print("\n== CAMINHO DO LOGIN / NAVEGAÇÃO (últimos 40) ==")
+for ln in ((d / "comprasgov_navegacao.jsonl").read_text(encoding="utf-8").splitlines()[-40:] if (d / "comprasgov_navegacao.jsonl").exists() else []):
+    r = json.loads(ln)
+    print(f"  [{r['em']}] {r['evento']:7} {r['url']}" + (f"  ERRO: {r['erro']}" if r.get("erro") else ""))
 print("\n== TELAS SALVAS (🧭) ==")
 for ln in (d / "comprasgov_telas.jsonl").read_text(encoding="utf-8").splitlines() if (d / "comprasgov_telas.jsonl").exists() else []:
     t = json.loads(ln)

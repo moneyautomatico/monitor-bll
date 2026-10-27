@@ -122,6 +122,20 @@ def caminho_limpo(url):
     return f"{s.hostname}{RE_NUM.sub('/{n}', s.path)}" + (("?" + "&".join(chaves)) if chaves else "")
 
 
+def registrar_navegacao(eid, evento, url, erro=""):
+    """Caminho do login (só endereço sem parâmetros) – para diagnosticar o certificado / a entrada."""
+    try:
+        reg = {"em": datetime.now().strftime("%d/%m %H:%M:%S"), "evento": evento, "url": caminho_limpo(url), "erro": str(erro or "")[:200]}
+        a = pasta(eid) / "comprasgov_navegacao.jsonl"
+        if a.exists() and a.stat().st_size > 1_000_000:
+            a.replace(a.with_suffix(".jsonl.1"))
+        with open(a, "a", encoding="utf-8") as f:
+            f.write(json.dumps(reg, ensure_ascii=False) + "\n")
+        os.chmod(a, 0o600)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def registrar_resposta(eid, resp):
     try:
         url = resp.url
@@ -165,6 +179,7 @@ class Conexao:
     def __init__(self, eid, login, cert=None):
         self.eid, self.login = eid, login
         self._cert = cert          # (bytes do .pfx, senha) – só na memória, até o navegador abrir
+        self.cert_info = cert[2] if cert and len(cert) > 2 else ""   # só o nome do titular e a validade (para mostrar)
         self.q = queue.Queue()
         self.uso = time.time()
         self.erro = ""
@@ -214,7 +229,13 @@ class Conexao:
                 except Exception:  # noqa: BLE001
                     pass
                 pg = ctx.pages[0] if ctx.pages else ctx.new_page()
+                def ligar(p_):
+                    p_.on("framenavigated", lambda fr: registrar_navegacao(self.eid, "abriu", fr.url) if fr.parent_frame is None else None)
+                ligar(pg)
+                ctx.on("page", ligar)
                 ctx.on("response", lambda r: registrar_resposta(self.eid, r))
+                ctx.on("requestfailed", lambda rq: registrar_navegacao(self.eid, "falhou", rq.url, rq.failure)
+                       if HOSTS_LOGIN.search(urlsplit(rq.url).hostname or "") else None)
                 ctx.on("page", lambda p: setattr(self, "_pg_nova", p))
                 self._pg_nova = None
                 inicio = ler_estado(self.eid).get("inicio") or INICIO
@@ -402,7 +423,7 @@ def resumo_estado(eid):
     """Para a página Empresas: conectado / caiu / nunca conectou."""
     d = ler_estado(eid)
     if atual(eid):
-        return "🟡 conexão aberta agora"
+        return "🟡 conexão aberta agora" + (f" · 🔐 certificado carregado: {atual(eid).cert_info}" if atual(eid).cert_info else " · sem certificado")
     if d.get("aviso_caiu"):
         return f"🔴 sessão caiu em {d['aviso_caiu']} – reconecte"
     if d.get("conectado_em"):

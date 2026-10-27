@@ -9994,7 +9994,7 @@ class Painel(BaseHTTPRequestHandler):
                 ok_c, info_c = comprasgov.conferir_certificado(pfx, senha_c)
                 if ok_c is False:
                     return self.enviar(pg_comprasgov(eid, info_c, True))
-                cert = (pfx, senha_c)
+                cert = (pfx, senha_c, info_c or "sim")
             self.auditar("ação /comprasgov/abrir", "com certificado A1" if cert else "sem certificado")
             try:
                 comprasgov.abrir(eid, login_atual(), cert)
