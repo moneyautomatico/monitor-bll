@@ -53,6 +53,20 @@ FAQ = [
 ]
 
 
+SITE = "https://expertlicitante.com.br"
+
+
+def og(titulo, descricao, caminho):
+    """Prévia do link no WhatsApp, Telegram, LinkedIn e Facebook (título, texto e imagem do brasão)."""
+    t, d = e(titulo), e(descricao)
+    return (f'<meta property="og:type" content="website"><meta property="og:site_name" content="Expert Licitante">'
+            f'<meta property="og:locale" content="pt_BR"><meta property="og:url" content="{SITE}{caminho}">'
+            f'<meta property="og:title" content="{t}"><meta property="og:description" content="{d}">'
+            f'<meta property="og:image" content="{SITE}/site/compartilhar.png"><meta property="og:image:width" content="1200">'
+            f'<meta property="og:image:height" content="630"><meta property="og:image:alt" content="Brasão Expert Licitante">'
+            f'<meta name="twitter:card" content="summary_large_image"><link rel="canonical" href="{SITE}{caminho}">')
+
+
 def pagina(dias=7, whatsapp="", cadastro_aberto=True):
     wa = ("https://wa.me/" + "".join(c for c in whatsapp if c.isdigit()) + "?text=" +
           urllib.parse.quote("Olá! Vim pelo site do Expert Licitante e quero saber mais.")) if whatsapp else ""
@@ -95,7 +109,7 @@ def pagina(dias=7, whatsapp="", cadastro_aberto=True):
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Expert Licitante – sua licitação no piloto automático</title>
 <meta name="description" content="Monitor do pregoeiro 24 h com alarme no celular, prazos da Lei 14.133, preço com lucro e habilitação em um PDF. Teste grátis por {dias} dias, sem cartão.">
 <meta name="theme-color" content="#07160f"><link rel="icon" href="/site/favicon.svg" type="image/svg+xml"><link rel="manifest" href="/manifest.webmanifest">
-<meta property="og:title" content="Expert Licitante – sua licitação no piloto automático"><meta property="og:image" content="https://expertlicitante.com.br/site/compartilhar.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta property="og:description" content="Teste grátis por {dias} dias, sem cartão.">
+{og("Expert Licitante – sua licitação no piloto automático", f"Vigia o chat do pregoeiro 24 h e avisa no celular, calcula os prazos da Lei 14.133 e deixa proposta e habilitação prontas. Teste grátis por {dias} dias, sem cartão.", "/conheca")}
 <style>
 :root{{--v:#34c27a;--v2:#1f8f57;--esc:#07160f;--esc2:#0d2419;--txt:#0f1f17;--sub:#5a6a61;--borda:#e3ebe6;--bg:#f6f9f7}}
 *{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--txt);background:var(--bg);line-height:1.55;-webkit-font-smoothing:antialiased}}
@@ -280,7 +294,7 @@ def pagina_cadastro(dias, token, erro="", campos=None, whatsapp=""):
     c = campos or {}
     v = lambda k: e(c.get(k, ""))  # noqa: E731
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Teste grátis – Expert Licitante</title><meta name="theme-color" content="#173f2c"><link rel="icon" href="/site/favicon.svg" type="image/svg+xml">
+<title>Teste grátis – Expert Licitante</title>{og(f"Teste grátis por {dias} dias – Expert Licitante", "Crie sua conta em 1 minuto, sem cartão de crédito, e acompanhe suas licitações no celular.", "/teste-gratis")}<meta name="theme-color" content="#173f2c"><link rel="icon" href="/site/favicon.svg" type="image/svg+xml">
 <style>*{{box-sizing:border-box}}body{{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f7faf8;color:#14211a;
 display:grid;place-items:center;min-height:100vh;padding:24px}}.cx{{width:100%;max-width:440px;background:#fff;border:1px solid #dde6e0;border-radius:18px;padding:28px;
 box-shadow:0 24px 50px rgba(20,33,26,.1)}}a{{color:#1f5c3f}}h1{{font-size:24px;margin:0 0 6px}}p.s{{color:#55645b;margin:0 0 18px;font-size:14.5px}}
@@ -488,7 +502,7 @@ def pagina_prazos(q=None, cadastro_aberto=True, dias=7):
     vende = (f'<div class="vende"><div><h2>Pare de contar prazo na mão.</h2><p>No Expert Licitante, cada licitação já nasce com esses prazos na agenda '
              f'e o aviso chega no Telegram e no celular 24 h e 2 h antes.</p></div>{cta}</div>') if cta else ""
     return f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Calculadora de prazos de licitação – Lei 14.133 | Expert Licitante</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Calculadora de prazos de licitação – Lei 14.133 | Expert Licitante</title>{og("Calculadora grátis de prazos – Lei 14.133", "Impugnação, esclarecimento, recurso, contrarrazões, ME/EPP e vigência de ata em dias úteis. Grátis e sem cadastro.", "/prazos")}
 <meta name="description" content="Calcule grátis o prazo de impugnação, esclarecimento, recurso, contrarrazões, regularização ME/EPP e vigência de ata pela Lei 14.133, em dias úteis.">
 <meta name="theme-color" content="#07160f"><link rel="icon" href="/site/favicon.svg" type="image/svg+xml"><style>{CSS_PUB}</style></head><body>
 <header class="topo"><div class="w"><a class="marca" href="/conheca"><i></i><img src="/site/nome.svg" height="17" alt="Expert Licitante"></a><nav><a class="lnk" href="/conheca">Conheça</a>
