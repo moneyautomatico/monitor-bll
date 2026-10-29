@@ -853,7 +853,9 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvet
 /* topo */
 header{position:sticky;top:0;z-index:50;background:linear-gradient(180deg,rgba(7,22,15,.97),rgba(13,36,25,.95));backdrop-filter:saturate(1.4) blur(12px);
 -webkit-backdrop-filter:saturate(1.4) blur(12px);border-bottom:1px solid rgba(255,255,255,.07);box-shadow:0 6px 20px rgba(0,0,0,.12);padding:0 18px;gap:14px;min-height:60px}
-header>b{display:flex;align-items:center;gap:10px;font-size:15.5px;letter-spacing:.12em;text-transform:uppercase;padding:9px 0;color:#f4efe3;font-family:"Times New Roman",Georgia,"Noto Serif",serif;font-weight:700}
+header>b{display:flex;align-items:center;gap:10px;font-size:15.5px;letter-spacing:.12em;text-transform:uppercase;padding:9px 0;color:#f4efe3;font-family:"Times New Roman",Georgia,"Noto Serif",serif;font-weight:700;white-space:nowrap;flex:none}
+@media(max-width:1280px){header>b{font-size:13px;letter-spacing:.06em;gap:7px}header>b:before{width:34px;height:36px}nav a{padding:8px 8px}}
+@media(max-width:1180px){header>b{font-size:0;gap:0}}
 header>b:before{content:"";width:42px;height:44px;background:url(/site/escudo.svg) center/contain no-repeat;flex:none}
 nav{gap:2px;align-items:center}nav a{color:#c3d6ca;padding:8px 11px;margin:10px 0;border:0;border-radius:10px;font-size:13.5px;font-weight:500;transition:background .15s,color .15s}
 nav a:hover{background:rgba(255,255,255,.07);color:#fff}nav a.on{background:rgba(52,194,122,.16);color:#fff;box-shadow:inset 0 0 0 1px rgba(126,240,180,.25)}
@@ -3716,17 +3718,53 @@ def eid_comprasgov(eid):
 
 
 # ------------------------------------------------------------------ extensão do Chrome (Licitanet bloqueia o servidor)
+EXT_CSS = """<style>
+.pp{display:grid;gap:12px;margin:14px 0}.pp-e{display:grid;grid-template-columns:44px 1fr;gap:14px;background:var(--card);border:1px solid var(--borda);
+border-radius:14px;padding:14px 16px;transition:.2s}.pp-n{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font-weight:800;
+background:var(--borda);color:var(--txt)}.pp-e.feito .pp-n{background:#1f8f57;color:#fff}.pp-e.atual{border:2px solid #34c27a;box-shadow:0 8px 24px rgba(52,194,122,.15)}
+.pp-e.atual .pp-n{background:#34c27a;color:#07160f}.pp-e h3{margin:2px 0 4px;font-size:16px}.pp-e p{margin:4px 0;font-size:14px;line-height:1.55}
+.pp-e.feito h3:after{content:" ✅";}.pp-e .acoes{margin:8px 0 0}.pp-ok{font-size:13px;color:#1f8f57;font-weight:600}.pp-esp{font-size:13px;color:var(--sub)}
+.pp-barra{height:8px;border-radius:99px;background:var(--borda);overflow:hidden}.pp-barra i{display:block;height:100%;background:#34c27a;transition:width .4s}
+.pp-chrome{display:inline-flex;gap:6px;align-items:center;background:var(--bg);border:1px solid var(--borda);border-radius:8px;padding:4px 8px;font-family:monospace}
+</style>"""
+
+EXT_JS = r"""<script>
+(function(){
+const EID='__EID__';
+function marca(n,feito,txt){const el=document.getElementById('pp'+n);if(!el)return;el.classList.toggle('feito',!!feito);
+ const s=el.querySelector('.pp-st');if(s&&txt!==undefined)s.innerHTML=txt;}
+function baixou(){try{return localStorage.getItem('ext_baixou_'+EID)==='1'}catch(e){return false}}
+window.marcarBaixou=function(){try{localStorage.setItem('ext_baixou_'+EID,'1')}catch(e){};atualizar();};
+function atualizar(){fetch('/extensao/estado?eid='+encodeURIComponent(EID),{credentials:'same-origin',cache:'no-store'}).then(r=>r.json()).then(d=>{
+ const passos=[d.codigo,d.codigo&&(baixou()||d.conectado),d.conectado,d.conectado,d.lista,d.sala,d.diag];
+ marca(1,passos[0]);marca(2,passos[1]);marca(3,passos[2]);
+ marca(4,d.conectado,d.conectado?'<span class=pp-ok>✅ A extensão já falou com o painel ('+d.quando+').</span>':'<span class=pp-esp>⏳ Aguardando a extensão… (esta tela atualiza sozinha)</span>');
+ marca(5,d.lista,d.deslogado?'<span class=pp-esp>🔐 A Licitanet está na tela de login no seu Chrome – entre na sua conta.</span>':(d.lista?'<span class=pp-ok>✅ Lista lida: '+d.n_proc+' processo(s).</span>':'<span class=pp-esp>⏳ Aguardando a lista de processos…</span>'));
+ marca(6,d.sala,d.sala?'<span class=pp-ok>✅ Chat lido ('+d.n_salas+' sala(s) conhecida(s)).</span>':'<span class=pp-esp>⏳ Aguardando uma sala de disputa aberta…</span>');
+ marca(7,d.diag,d.diag?'<span class=pp-ok>✅ Diagnóstico recebido – veja abaixo.</span>':'<span class=pp-esp>⏳ Aguardando o diagnóstico…</span>');
+ const feitos=passos.filter(Boolean).length;document.getElementById('pp-bar').style.width=Math.round(feitos/7*100)+'%';
+ document.getElementById('pp-cont').textContent=feitos+' de 7';
+ let atual=passos.findIndex(x=>!x);document.querySelectorAll('.pp-e').forEach((e,i)=>e.classList.toggle('atual',i===atual));
+ const fim=document.getElementById('pp-fim');if(fim)fim.style.display=feitos===7?'':'none';
+}).catch(()=>{});}
+atualizar();setInterval(atualizar,5000);
+})();
+</script>"""
+
+
 def pg_extensao(eid, aviso="", erro=False, codigo=""):
     cfg = ler_env(EMPRESAS / f"{eid}.env")
     nome = cfg.get("EMPRESA_NOME", eid)
     info = extensao.info_codigo(eid)
-    st = extensao.situacao(eid)
     msg = f'<div class="msg {"erro" if erro else ""}">{e(aviso)}</div>' if aviso else ""
-    novo = (f'<div class="msg" style="border:2px solid #34c27a"><b>🔑 Código de conexão (aparece só agora – copie e cole na extensão):</b>'
-            f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input class="campo" id="cod" value="{e(codigo)}" readonly style="flex:1 1 280px;font-family:monospace">'
-            f'<button type="button" class="sec" onclick="navigator.clipboard.writeText(document.getElementById(\'cod\').value);this.textContent=\'✅ Copiado\'">📋 Copiar</button></div>'
-            '<p class="sub" style="margin:8px 0 0">Não mande este código por mensagem: quem tiver ele consegue enviar dados para esta empresa no painel. '
-            'Se vazar, gere outro (o antigo para de valer).</p></div>') if codigo else ""
+    caixa_cod = (f'<div class="msg" style="border:2px solid #34c27a;margin-top:8px"><b>🔑 Seu código de conexão</b> (aparece só agora – copie):'
+                 f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input class="campo" id="cod" value="{e(codigo)}" readonly style="flex:1 1 260px;font-family:monospace">'
+                 f'<button type="button" onclick="navigator.clipboard.writeText(document.getElementById(\'cod\').value);this.textContent=\'✅ Copiado\'">📋 Copiar</button></div>'
+                 '<p class="sub" style="margin:8px 0 0">Não mande este código por mensagem. Se perder ou vazar, gere outro (o antigo para de valer).</p></div>') if codigo else ""
+    gerar = (f'<form method="post" action="/extensao/codigo" style="display:inline"><input type="hidden" name="csrf" value="{CSRF}">'
+             f'<input type="hidden" name="eid" value="{e(eid)}"><button{" class=sec" if info else ""}>🔑 {"Gerar outro código" if info else "Gerar código de conexão"}</button></form>')
+    revogar = (f'<form method="post" action="/extensao/desligar" style="display:inline" onsubmit="return confirm(\'Desligar a extensão desta empresa? O código atual para de valer.\')">'
+               f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="eid" value="{e(eid)}"><button class="sec">Desligar a extensão</button></form>') if info else ""
     diags = []
     a_d = EMPRESAS / eid / "extensao_diag.jsonl"
     for ln in (a_d.read_text(encoding="utf-8").splitlines()[-5:] if a_d.exists() else []):
@@ -3738,31 +3776,60 @@ def pg_extensao(eid, aviso="", erro=False, codigo=""):
                          f'lotes: {e(x.get("lotes", "?"))}{" · ⚠️ tela de login" if x.get("login") else ""}</li>')
         except Exception:  # noqa: BLE001
             continue
-    gerar = (f'<form method="post" action="/extensao/codigo" style="display:inline"><input type="hidden" name="csrf" value="{CSRF}">'
-             f'<input type="hidden" name="eid" value="{e(eid)}"><button{" class=sec" if info else ""}>🔑 {"Gerar outro código" if info else "Gerar código de conexão"}</button></form>')
-    revogar = (f'<form method="post" action="/extensao/desligar" style="display:inline" onsubmit="return confirm(\'Desligar a extensão desta empresa? O código atual para de valer.\')">'
-               f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="eid" value="{e(eid)}"><button class="sec">Desligar</button></form>') if info else ""
-    corpo = f"""<h2>🧩 Extensão do Chrome – {e(nome)}</h2>
-<p class="sub">A Licitanet bloqueia o servidor (responde <i>403 Forbidden</i> para ele), mas abre normalmente no <b>seu</b> computador.
-A extensão fica no seu Chrome e <b>só lê</b> o que já está na tela – a lista de processos e o chat da sala de disputa – e manda para o painel,
-que dispara os alertas no Telegram e no celular. Ela não clica, não digita e não envia nada na Licitanet.</p>
-{msg}{novo}
-<div class="cg-passos"><b>Situação:</b> {e(extensao.resumo(eid))}{(" · código criado em " + e(info.get("criado", ""))) if info else ""}
-{(" · versão " + e(st.get("versao", ""))) if st.get("versao") else ""}<div class="acoes" style="margin:8px 0 0">{gerar}{revogar}</div></div>
-<h3>Como instalar (uma vez)</h3>
-<ol class="sub" style="line-height:1.8;font-size:14px;color:var(--txt)">
-<li><a class="btn sec" href="/extensao.zip">⬇️ Baixar a extensão (.zip)</a> e extraia o arquivo numa pasta que você não vá apagar (ex.: Documentos).</li>
-<li>No Chrome, abra <code>chrome://extensions</code> e ligue o <b>Modo do desenvolvedor</b> (canto superior direito).</li>
-<li>Clique em <b>Carregar sem compactação</b> e escolha a pasta <b>expert-licitante-extensao</b>.</li>
-<li>Clique no ícone 🧩 do Chrome, fixe o <b>Expert Licitante – Monitor</b>, abra-o, cole o <b>código de conexão</b> e clique em <b>Salvar e testar</b>.</li>
-<li>Entre na Licitanet e deixe abertas a <b>lista de processos</b> e a <b>sala de disputa</b> dos processos que quer vigiar.</li>
-<li>Em cada tela, clique no ícone da extensão → <b>🧭 Diagnóstico desta aba</b>. O resultado aparece abaixo.</li></ol>
-<p class="sub">Importante: o computador precisa ficar ligado, com o Chrome aberto e logado na Licitanet, no horário em que você quer ser avisado.
-Na sala de disputa, a extensão lê o chat do lote que estiver selecionado na tela e as notificações de mensagens. Se a extensão parar de mandar
-dados por mais de 15 minutos no horário de monitoramento, você recebe um aviso no Telegram.</p>
-<h3>🧭 Últimos diagnósticos</h3><ul class="sub">{"".join(diags) or "<li>nenhum ainda</li>"}</ul>
-<p><a class="btn sec" href="/empresas">Voltar</a></p>"""
-    return pagina("Extensão do Chrome", corpo, "/empresas")
+    p = lambda n, tit, corpo: f'<div class="pp-e" id="pp{n}"><div class="pp-n">{n}</div><div><h3>{tit}</h3>{corpo}</div></div>'  # noqa: E731
+    passos = "".join([
+        p(1, "Gere o código de conexão",
+          '<p>O código liga a extensão do seu Chrome a esta empresa no painel.</p>'
+          f'<div class="acoes">{gerar}</div>{caixa_cod}'
+          + ('<p class="pp-esp">Já existe um código (criado em ' + e(info.get("criado", "")) + '). Se não tiver mais ele, gere outro.</p>' if info and not codigo else "")),
+        p(2, "Baixe a extensão",
+          '<p>Baixe o arquivo e <b>extraia</b> (botão direito → <i>Extrair tudo</i>) numa pasta que você não vá apagar, por exemplo <b>Documentos</b>. '
+          'Vai aparecer a pasta <b>expert-licitante-extensao</b>.</p>'
+          '<div class="acoes"><a class="btn" href="/extensao.zip" onclick="setTimeout(marcarBaixou,800)">⬇️ Baixar a extensão (.zip)</a>'
+          '<button type="button" class="sec" onclick="marcarBaixou()">Já baixei e extraí</button></div>'),
+        p(3, "Instale no Chrome",
+          '<p>1. Na barra de endereço do Chrome, digite <span class="pp-chrome">chrome://extensions</span> '
+          '<button type="button" class="sec" style="padding:4px 10px" onclick="navigator.clipboard.writeText(\'chrome://extensions\');this.textContent=\'✅ Copiado\'">📋 Copiar</button> e tecle Enter.</p>'
+          '<p>2. No canto superior direito, ligue a chave <b>Modo do desenvolvedor</b>.</p>'
+          '<p>3. Clique em <b>Carregar sem compactação</b> e escolha a pasta <b>expert-licitante-extensao</b>.</p>'
+          '<p>4. Clique no ícone 🧩 (quebra-cabeça) do Chrome e no 📌 ao lado de <b>Expert Licitante – Monitor</b> para deixar o brasão fixo na barra.</p>'
+          '<p class="pp-esp">Este passo fica ✅ sozinho quando a extensão falar com o painel (passo 4).</p>'),
+        p(4, "Cole o código na extensão",
+          '<p>Clique no <b>brasão do Expert Licitante</b> na barra do Chrome, cole o código no campo <b>Código de conexão</b> e clique em <b>Salvar e testar</b>. '
+          'Deve aparecer <b>✅ Conectada: ' + e(nome) + '</b>.</p><p class="pp-st"></p>'),
+        p(5, "Entre na Licitanet e abra a lista de processos",
+          '<p>Entre na Licitanet normalmente e deixe aberta a tela com a <b>lista de processos</b> (Início / Processos).</p>'
+          '<div class="acoes"><a class="btn sec" href="https://portal.licitanet.com.br/" target="_blank" rel="noopener">Abrir a Licitanet ↗</a></div><p class="pp-st"></p>'),
+        p(6, "Abra a sala de disputa",
+          '<p>Abra a <b>sala de disputa</b> de um processo (em disputa ou já disputado) e deixe a aba aberta. Faça isso com cada processo que quiser vigiar no dia.</p>'
+          '<p class="pp-st"></p>'),
+        p(7, "Faça o diagnóstico",
+          '<p>Com a sala aberta, clique no brasão da extensão → <b>🧭 Diagnóstico desta aba</b>. Faça também na lista de processos.</p><p class="pp-st"></p>'),
+    ])
+    corpo = f"""{EXT_CSS}<h2>🧩 Conectar a Licitanet – {e(nome)}</h2>
+<p class="sub">A Licitanet bloqueia o servidor, mas abre normalmente no <b>seu</b> computador. Por isso a ligação é feita por uma extensão no seu Chrome,
+que <b>só lê</b> a lista de processos e o chat e manda para o painel – os alertas chegam no Telegram e no celular. Ela não clica, não digita e não envia nada na Licitanet.</p>
+{msg}<div style="display:flex;gap:12px;align-items:center;margin-top:10px"><div class="pp-barra" style="flex:1"><i id="pp-bar" style="width:0"></i></div><b id="pp-cont">0 de 7</b></div>
+<div class="pp">{passos}</div>
+<div class="msg" id="pp-fim" style="display:none">🎉 <b>Tudo pronto!</b> A partir de agora as mensagens novas do pregoeiro chegam no Telegram e no celular.
+Deixe o computador ligado, com o Chrome aberto e logado na Licitanet, e a sala de disputa aberta nos dias de disputa.</div>
+<details class="sub"><summary><b>🧭 Últimos diagnósticos</b> (para o suporte)</summary><ul>{"".join(diags) or "<li>nenhum ainda</li>"}</ul></details>
+<p class="sub"><b>Bom saber:</b> na sala de disputa a extensão lê o chat do lote selecionado na tela e as notificações de mensagens. Se ela ficar mais de
+15 minutos sem mandar dados no horário de monitoramento, ou se a Licitanet sair do login, você recebe um aviso no Telegram.</p>
+<div class="acoes">{revogar}<a class="btn sec" href="/empresas">Voltar para Empresas</a></div>
+{EXT_JS.replace("__EID__", e(eid))}"""
+    return pagina("Conectar a Licitanet", corpo, "/empresas")
+
+
+def estado_extensao(eid):
+    st = extensao.situacao(eid)
+    ult = float(st.get("ultima") or 0)
+    min_ = int((time.time() - ult) // 60) if ult else None
+    return {"codigo": extensao.tem_codigo(eid), "conectado": bool(ult) and extensao.tem_codigo(eid),
+            "quando": "" if min_ is None else ("agora" if min_ < 1 else f"há {min_} min"),
+            "lista": bool(st.get("ultimo_processos")), "sala": bool(st.get("ultimo_mensagens")),
+            "n_salas": len(st.get("salas") or {}), "n_proc": st.get("n_processos", 0),
+            "diag": (EMPRESAS / eid / "extensao_diag.jsonl").exists(), "deslogado": st.get("estado") == "deslogado"}
 
 
 def eid_extensao(eid):
@@ -9752,7 +9819,7 @@ class Painel(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(dados)
             return
-        if not p.startswith(("/mensagens/processo", "/mensagens/busca", "/consumo.csv", "/meu-consumo.csv", "/backup/", "/comprasgov/tela")) \
+        if not p.startswith(("/mensagens/processo", "/mensagens/busca", "/consumo.csv", "/meu-consumo.csv", "/backup/", "/comprasgov/tela", "/extensao/estado")) \
                 and not p.endswith(("/docx", "/arquivo", "/pacote")):
             marcar_presenca(self, self.path)
         if p.startswith(("/admin/empresas", "/admin/preferencias", "/admin/meu-consumo")):
@@ -9780,6 +9847,19 @@ class Painel(BaseHTTPRequestHandler):
                 if not eid_extensao(eid_x) or not self.permitido(p, {"eid": eid_x}):
                     return self.redirecionar("/empresas")
                 return self.enviar(pg_extensao(eid_x))
+            if p == "/extensao/estado":
+                eid_x = q.get("eid", "")
+                if not eid_extensao(eid_x) or not self.permitido(p, {"eid": eid_x}):
+                    return self.redirecionar("/empresas")
+                dados_x = json.dumps(estado_extensao(eid_x)).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(dados_x)))
+                self.cabecalhos_seguranca()
+                self.end_headers()
+                self.wfile.write(dados_x)
+                return
             if p == "/extensao.zip":
                 host = self.headers.get("Host", "")
                 servidor = f"https://{host}" if re.fullmatch(r"[a-z0-9.-]+(:\d+)?", host or "") and "." in host else "https://expertlicitante.com.br"

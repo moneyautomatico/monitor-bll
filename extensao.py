@@ -134,6 +134,7 @@ def registrar(eid, ev):
         st["estado"] = "lendo"
         st["ultimo_" + ev["tipo"]] = time.time()
     if ev["tipo"] == "processos":
+        st["n_processos"] = len(ev.get("lista", []))
         salas = st.setdefault("salas", {})
         for p in ev.get("lista", []):
             if p.get("sala"):
