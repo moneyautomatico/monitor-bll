@@ -804,11 +804,11 @@ AREAS = [
     ("/contratos", "💼 Pós-venda", [("/contratos", "💼 Contratos"), ("/atas", "📑 Atas de registro de preço"), ("/relatorio", "📈 Relatório do mês")]),
     ("/iniciante", "🎓 Aprender", [("/iniciante", "🎓 Central do iniciante"), ("/pronto", "✅ Estou pronto para licitar?"),
                                   ("/trilha", "🧭 Minha primeira licitação"), ("/simulador", "🎮 Simulador de disputa"),
-                                  ("/modelos", "📝 Modelos prontos"), ("/evolucao", "📈 Minha evolução")]),
+                                  ("/modelos", "📝 Modelos prontos"), ("/evolucao", "📈 Minha evolução"), ("/licitanet", "🧩 Conectar a Licitanet")]),
     ("/empresas", "⋯ Mais", [("/empresas", "🏢 Empresas"), ("/preferencias", "⚙️ Minhas configurações"), ("/meu-consumo", "💳 Custos de IA"),
                             ("/avisos", "🔔 Avisos"), ("/bem-vindo", "🚀 Primeiros passos"), ("/lixeira", "🗑 Lixeira"), ("/ajuda", "❓ Ajuda"), ("/conta", "👤 Minha conta")]),
 ]
-ABA_AREA = {"/documentos": "/propostas", "/mensagens": "/disputa", "/processos": "/disputa", "/concorrentes": "/disputa", "/agenda": "/licitacoes",
+ABA_AREA = {"/licitanet": "/iniciante", "/documentos": "/propostas", "/mensagens": "/disputa", "/processos": "/disputa", "/concorrentes": "/disputa", "/agenda": "/licitacoes",
             "/oportunidades": "/licitacoes", "/buscar": "/licitacoes", "/editais": "/licitacoes", "/preferencias": "/empresas", "/ajuda": "/empresas",
             "/pergunte": "/empresas", "/pronto": "/iniciante", "/trilha": "/iniciante", "/simulador": "/iniciante", "/modelos": "/iniciante",
             "/evolucao": "/iniciante"}
@@ -3557,8 +3557,8 @@ def pg_empresas(aviso="", erro=False):
     return pagina("Empresas", abas_admin_topo(corpo, "emp"), "/empresas", aviso, erro)
 
 
-def form_empresa(eid=None):
-    cfg = ler_env(EMPRESAS / f"{eid}.env") if eid else {}
+def form_empresa(eid=None, plat_padrao=""):
+    cfg = ler_env(EMPRESAS / f"{eid}.env") if eid else ({"PLATAFORMA": plat_padrao} if plat_padrao in ("bll", "bnc", "pcp", "licitanet", "comprasgov") else {})
     g = lambda k, d="": e(cfg.get(k, d))  # noqa: E731
     dono_f = cfg.get("EMPRESA_DONO", "") if eid else login_atual()
     ucd = usuarios.cfg(dono_f) if dono_f else {}
@@ -3837,6 +3837,24 @@ def estado_extensao(eid):
             "lista": bool(st.get("ultimo_processos")), "sala": bool(st.get("ultimo_mensagens")),
             "n_salas": len(st.get("salas") or {}), "n_proc": st.get("n_processos", 0),
             "diag": (EMPRESAS / eid / "extensao_diag.jsonl").exists(), "deslogado": st.get("estado") == "deslogado"}
+
+
+def pg_licitanet():
+    """Atalho (Aprender / Ajuda): leva ao passo a passo da extensão da empresa Licitanet do usuário."""
+    lic = [x for x in empresas() if x["cfg"].get("PLATAFORMA", "").lower() == "licitanet" and pode_editar_empresa(x["id"])]
+    if len(lic) == 1:
+        return None, f"/extensao?eid={lic[0]['id']}"
+    if lic:
+        itens = "".join(f'<a class="btn sec" style="display:block;margin:8px 0;text-align:left" href="/extensao?eid={e(x["id"])}">🏢 {e(x["nome"])}'
+                        f'<div class="sub" style="font-weight:400">{e(extensao.resumo(x["id"]))}</div></a>' for x in lic)
+        corpo = (f'<h2>🧩 Conectar a Licitanet</h2><p class="sub">Escolha a empresa. A mesma extensão do Chrome serve para todas: '
+                 f'gere o código de cada uma e adicione na extensão.</p><div style="max-width:560px">{itens}</div>')
+    else:
+        corpo = ('<h2>🧩 Conectar a Licitanet</h2><p class="sub">A Licitanet bloqueia o acesso vindo do servidor, então a ligação é feita por uma '
+                 '<b>extensão no seu Chrome</b>, que só lê a lista de processos e o chat e manda para o painel. Primeiro cadastre a empresa:</p>'
+                 '<div class="acoes"><a class="btn" href="/empresas/nova?plataforma=licitanet">➕ Cadastrar empresa da Licitanet</a></div>'
+                 '<p class="sub">Depois de salvar, você vai direto para o passo a passo de instalação (7 etapas que se marcam sozinhas).</p>')
+    return pagina("Conectar a Licitanet", corpo, "/licitanet"), ""
 
 
 def eid_extensao(eid):
@@ -9852,7 +9870,10 @@ class Painel(BaseHTTPRequestHandler):
             if p == "/empresas":
                 return self.enviar(pg_empresas(AVISOS.get(q.get("ok", ""), "")))
             if p == "/empresas/nova":
-                return self.enviar(form_empresa())
+                return self.enviar(form_empresa(plat_padrao=q.get("plataforma", "")))
+            if p == "/licitanet":
+                html_l, ir_l = pg_licitanet()
+                return self.redirecionar(ir_l) if ir_l else self.enviar(html_l)
             if p == "/extensao":
                 eid_x = q.get("eid", "")
                 if not eid_extensao(eid_x) or not self.permitido(p, {"eid": eid_x}):

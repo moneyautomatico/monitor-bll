@@ -12,9 +12,20 @@ SECOES = [
                 "No chat do pregoeiro, clique em <b>❓ O que significa?</b> embaixo da mensagem para saber o que fazer."],
      "dicas": ["Comece por compras pequenas e perto de você – a primeira vitória ensina mais que qualquer curso.",
                "Nunca dê lance abaixo do seu lance mínimo: ganhar com prejuízo é pior que perder."]},
+    {"id": "licitanet", "icone": "🧩", "titulo": "Conectar a Licitanet (extensão do Chrome)", "tela": "/licitanet",
+     "resumo": "A Licitanet bloqueia o servidor, então o chat e a lista de processos chegam por uma extensão no seu Chrome, que só lê a tela.",
+     "passos": ["Abra <b>🎓 Aprender → 🧩 Conectar a Licitanet</b> (ou Empresas → <b>🧩 Extensão</b> na empresa da Licitanet). Lá está o passo a passo com 7 etapas que se marcam sozinhas.",
+                "Gere o <b>código de conexão</b> da empresa e baixe a extensão (.zip). Extraia numa pasta que você não vá apagar.",
+                "No Chrome, abra <b>chrome://extensions</b>, ligue o <b>Modo do desenvolvedor</b> e clique em <b>Carregar sem compactação</b> escolhendo a pasta <b>expert-licitante-extensao</b>.",
+                "Clique no brasão da extensão, cole o código em <b>Adicionar empresa</b>. Tem várias empresas? Adicione o código de cada uma.",
+                "Entre na Licitanet e deixe abertas a <b>lista de processos</b> e a <b>sala de disputa</b> dos processos do dia.",
+                "Clique em <b>🧭 Diagnóstico desta aba</b> na extensão para confirmar a leitura."],
+     "dicas": ["A extensão não clica, não digita e não envia nada na Licitanet – só lê o que já está na tela.",
+               "O computador precisa ficar ligado, com o Chrome aberto e logado. Se parar, você recebe aviso no Telegram.",
+               "Em cada aba, a extensão manda os dados para a empresa logada (nome no topo da Licitanet). Se não reconhecer, ela pergunta e não envia nada antes."]},
     {"id": "inicio", "icone": "🚀", "titulo": "Primeiros passos", "tela": "/licitacoes",
      "resumo": "O que configurar no primeiro dia para o sistema trabalhar por você.",
-     "passos": ["Em <b>Empresas</b>, cadastre cada empresa com o login da plataforma de licitação (é com ele que o monitor lê o chat e a disputa).",
+     "passos": ["Em <b>Empresas</b>, cadastre cada empresa com o login da plataforma de licitação (é com ele que o monitor lê o chat e a disputa). Na <b>Licitanet</b> a ligação é pela extensão do Chrome – veja “Conectar a Licitanet”.",
                 "Em <b>Documentos → Declarações</b>, preencha os <b>Dados da empresa</b> (CNPJ, endereço com cidade/UF, representante, banco) e envie a <b>logo</b>.",
                 "Em <b>⚙️ Configurações</b>, ligue o seu <b>bot do Telegram</b> e o <b>alarme ntfy</b> (veja a seção “Telegram e alarme”).",
                 "Em <b>Documentos → Certidões</b>, envie os PDFs das certidões – o sistema lê a validade sozinho.",
@@ -220,6 +231,9 @@ SECOES = [
 ]
 
 FAQ = [
+    ("Como conecto a Licitanet?",
+     "A Licitanet bloqueia o acesso vindo do servidor, então usamos uma extensão no seu Chrome que só lê a lista de processos e o chat e manda para o painel. "
+     "Abra 🎓 Aprender → 🧩 Conectar a Licitanet e siga as 7 etapas (elas se marcam sozinhas). Serve para várias empresas no mesmo Chrome."),
     ("O que é o ETP e como ele me ajuda?",
      "ETP é o Estudo Técnico Preliminar que o órgão faz antes do edital (Lei 14.133, art. 18). Na análise do edital, use “📘 Explicar o ETP”: "
      "o sistema mostra como o órgão chegou ao preço (e se parece defasado), as quantidades, as contradições com o edital e já monta os pontos "
@@ -255,7 +269,8 @@ ABA_SECAO = {"/": "inicio", "/licitacoes": "licitacoes", "/mensagens": "mensagen
              "/editais": "editais", "/documentos": "documentos", "/contratos": "contratos", "/empresas": "empresas",
              "/preferencias": "alertas", "/pergunte": "pergunte"}
 ABA_SECAO.update({"/catalogo": "catalogo", "/orgao": "orgao", "/atas": "atas", "/atestados": "atestados", "/certidoes": "certidoes",
-                  "/pacote": "pacote", "/propostas": "propostas", "/relatorio": "relatorio", "/resultado": "processos"})
+                  "/pacote": "pacote", "/propostas": "propostas", "/relatorio": "relatorio", "/resultado": "processos",
+                  "/licitanet": "licitanet", "/extensao": "licitanet"})
 
 
 def secao_da_aba(aba):
