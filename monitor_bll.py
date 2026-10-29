@@ -2471,8 +2471,11 @@ def rodar_extensao(db, uma_vez=False):
             parada = (time.time() - float(st.get("ultima") or 0)) / 60
             if dentro_do_horario() and st.get("ultima") and parada > 15:
                 if not avisou_parada:
-                    telegram(f"🧩 <b>{e_html(CFG.get('EMPRESA_NOME', ''))}</b>: a extensão do Chrome não manda dados há "
-                             f"{int(parada)} min. Confira se o computador está ligado, com o Chrome aberto e logado na Licitanet.")
+                    motivo = ("a extensão está ligada, mas não há aba da Licitanet desta empresa aberta no Chrome"
+                              if st.get("estado") == "sem_aba" and time.time() - float(st.get("contato") or 0) < 300 else
+                              "a extensão do Chrome não manda dados")
+                    telegram(f"🧩 <b>{e_html(CFG.get('EMPRESA_NOME', ''))}</b>: {motivo} há {int(parada)} min. "
+                             "Confira se o computador está ligado, com o Chrome aberto e logado na Licitanet (lista de processos ou sala de disputa aberta).")
                     avisou_parada = True
                 gerar_painel(db, f"🧩 Extensão sem contato há {int(parada)} min")
             elif st.get("estado") == "deslogado":

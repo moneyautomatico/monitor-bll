@@ -1,16 +1,40 @@
 {
   "manifest_version": 3,
   "name": "Expert Licitante – Monitor",
-  "version": "1.0.0",
-  "description": "Lê (sem clicar nem enviar nada) o chat do pregoeiro e a lista de processos da Licitanet no seu Chrome e manda os alertas para o painel Expert Licitante.",
-  "icons": {"16": "icones/16.png", "48": "icones/48.png", "128": "icones/128.png"},
-  "action": {"default_popup": "popup.html", "default_icon": {"16": "icones/16.png", "48": "icones/48.png"}},
-  "background": {"service_worker": "background.js"},
-  "permissions": ["storage", "alarms"],
-  "host_permissions": ["https://portal.licitanet.com.br/*", "https://expertlicitante.com.br/*"],
-  "content_scripts": [{
-    "matches": ["https://portal.licitanet.com.br/*"],
-    "js": ["content_licitanet.js"],
-    "run_at": "document_idle"
-  }]
+  "version": "1.1.0",
+  "description": "Lê (sem clicar nem enviar nada) o chat do pregoeiro e a lista de processos da Licitanet no seu Chrome e manda os alertas para o painel Expert Licitante. Uma ou várias empresas.",
+  "icons": {
+    "16": "icones/16.png",
+    "48": "icones/48.png",
+    "128": "icones/128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icones/16.png",
+      "48": "icones/48.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://portal.licitanet.com.br/*",
+    "https://expertlicitante.com.br/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://portal.licitanet.com.br/*"
+      ],
+      "js": [
+        "content_licitanet.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
 }

@@ -89,7 +89,8 @@ def validar_evento(ev):
     if not isinstance(ev, dict) or ev.get("tipo") not in TIPOS:
         return None
     out = {"tipo": ev["tipo"], "plataforma": _limpar_texto(ev.get("plataforma"), 20) or "licitanet",
-           "url": _limpar_texto(ev.get("url"), 300), "versao": _limpar_texto(ev.get("versao"), 12)}
+           "url": _limpar_texto(ev.get("url"), 300), "versao": _limpar_texto(ev.get("versao"), 12),
+           "empresa_tela": _limpar_texto(ev.get("empresa_tela"), 200)}
     if ev["tipo"] == "estado":
         out["estado"] = _limpar_texto(ev.get("estado"), 30)
     elif ev["tipo"] == "processos":
@@ -110,6 +111,33 @@ def validar_evento(ev):
     return out
 
 
+SUFIXOS = {"LTDA", "ME", "EPP", "EIRELI", "SA", "S", "A", "DE", "DA", "DO", "DAS", "DOS", "E", "EM", "LIMITADA", "MEI", "CIA"}
+
+
+def _palavras(nome):
+    import unicodedata
+    t = unicodedata.normalize("NFKD", nome or "").encode("ascii", "ignore").decode().upper()
+    return {w for w in re.split(r"[^A-Z0-9]+", t) if w and w not in SUFIXOS}
+
+
+GENERICAS = {"COMERCIAL", "COMERCIO", "ALIMENTOS", "ALIMENTICIOS", "SERVICOS", "SERVICO", "INDUSTRIA", "INDUSTRIAL", "DISTRIBUIDORA",
+             "DISTRIBUICAO", "ATACADO", "ATACADISTA", "VAREJO", "EMPRESA", "GRUPO", "BRASIL", "PRODUTOS", "MATERIAIS", "EQUIPAMENTOS",
+             "SOLUCOES", "TECNOLOGIA", "CONSTRUCOES", "ENGENHARIA", "IMPORTACAO", "EXPORTACAO", "REPRESENTACOES", "GERAL", "NACIONAL"}
+
+
+def nome_bate(tela, cadastrado):
+    """A empresa logada na aba (nome no topo do portal) é a mesma do cadastro?
+    As palavras do nome menor precisam estar todas no maior, e pelo menos uma não pode ser genérica (comercial, alimentos…)."""
+    a, b = _palavras(tela), _palavras(cadastrado)
+    if not a or not b:
+        return False
+    menor, maior = (a, b) if len(a) <= len(b) else (b, a)
+    comum = menor & maior
+    if len(comum) < len(menor) and len(comum) < max(2, round(0.8 * len(menor))):
+        return False
+    return bool(comum - GENERICAS) or comum == menor == maior
+
+
 def registrar(eid, ev):
     """Painel: grava o evento na fila e atualiza a situação da extensão."""
     ev["recebido"] = time.time()
@@ -126,10 +154,14 @@ def registrar(eid, ev):
             fcntl.flock(f, fcntl.LOCK_UN)
         os.chmod(a, 0o600)
     st = situacao(eid)
-    st["ultima"] = time.time()
+    st["contato"] = time.time()            # a extensão está ligada e falando com o painel
+    if not (ev["tipo"] == "estado" and ev.get("estado") == "sem_aba"):
+        st["ultima"] = time.time()         # … e está com a Licitanet desta empresa aberta
     st["versao"] = ev.get("versao") or st.get("versao", "")
     if ev["tipo"] == "estado":
         st["estado"] = ev.get("estado", "")
+    elif ev["tipo"] == "ping":
+        st["estado"] = "aberta" if st.get("estado") in ("sem_aba", "", None) else st["estado"]
     elif ev["tipo"] in ("processos", "mensagens"):
         st["estado"] = "lendo"
         st["ultimo_" + ev["tipo"]] = time.time()
@@ -184,8 +216,10 @@ def resumo(eid):
     if not tem_codigo(eid):
         return "⚪ extensão não conectada"
     st = situacao(eid)
-    if not st.get("ultima"):
+    if not st.get("ultima") and not st.get("contato"):
         return "🟡 código gerado – aguardando a extensão"
+    if st.get("estado") == "sem_aba":
+        return "🟠 extensão ligada, mas sem aba da Licitanet desta empresa aberta"
     min_ = int((time.time() - st["ultima"]) // 60)
     quando = "agora" if min_ < 1 else f"há {min_} min" if min_ < 120 else f"há {min_ // 60} h"
     if st.get("estado") == "deslogado":

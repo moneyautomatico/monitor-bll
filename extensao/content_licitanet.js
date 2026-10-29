@@ -3,13 +3,40 @@
   const VERSAO = chrome.runtime.getManifest().version;
   const enviados = new Set();
   let ultimaLista = "";
+  let enviando = false;
   const limpa = (s) => (s || "").replace(/\s+/g, " ").trim();
 
+  // nome da empresa logada (aparece no topo do portal) – serve para mandar os dados à empresa certa no painel
+  let empCache = {t: 0, v: ""};
+  function empresaTela() {
+    if (Date.now() - empCache.t < 30000) return empCache.v;
+    const re = /\b(LTDA|EIRELI|S\.?\/?A\.?|ME|EPP|MEI)\b|COMERCI|INDUSTRI|SERVI[CÇ]|DISTRIBUI|ALIMENT/i;
+    let melhor = "";
+    const els = document.body ? document.body.querySelectorAll("*") : [];
+    for (let i = 0; i < els.length && i < 2500; i++) {
+      const el = els[i];
+      if (el.children.length > 2) continue;
+      const r = el.getBoundingClientRect();
+      if (r.top > 140 || r.height === 0 || r.height > 70) continue;
+      const tx = limpa(el.innerText || "");
+      if (tx.length < 5 || tx.length > 120 || !re.test(tx)) continue;
+      const letras = tx.replace(/[^A-Za-zÀ-ú]/g, "");
+      if (!letras || letras.replace(/[^A-ZÀ-Ú]/g, "").length / letras.length < 0.7) continue;   // nome em maiúsculas
+      if (tx.length > melhor.length) melhor = tx;
+    }
+    empCache = {t: Date.now(), v: melhor};
+    return melhor;
+  }
+
   function envia(ev) {
+    ev.empresa_tela = empresaTela();
     ev.plataforma = "licitanet";
     ev.url = location.origin + location.pathname;
     ev.versao = VERSAO;
-    try { chrome.runtime.sendMessage({evento: ev}); } catch (e) { /* extensão recarregada */ }
+    return new Promise((ok) => {
+      try { chrome.runtime.sendMessage({evento: ev}, (r) => { void chrome.runtime.lastError; ok(r || {}); }); }
+      catch (e) { ok({}); }   // extensão recarregada
+    });
   }
 
   function naTelaDeLogin() {
@@ -62,18 +89,19 @@
     const lista = lerProcessos();
     if (lista.length) {
       const k = JSON.stringify(lista);
-      if (k !== ultimaLista) { ultimaLista = k; envia({tipo: "processos", lista}); }
+      if (k !== ultimaLista) envia({tipo: "processos", lista}).then((r) => { if (r.ok) ultimaLista = k; });
     }
     const sala = (location.pathname.match(/sala-disputa\/(\d+)/) || [])[1];
     if (sala) {
       const escopo = limpa((document.querySelector("#title-chat") || {}).innerText || "");
-      const novas = lerChat().filter((m) => {
-        const k = (m.id || m.cab + "|" + m.msg) + "|" + escopo;
-        if (enviados.has(k)) return false;
-        enviados.add(k);
-        return true;
-      });
-      if (novas.length) envia({tipo: "mensagens", sala, escopo, cabecalho: cabecalho(), mensagens: novas});
+      const chave = (m) => (m.id || m.cab + "|" + m.msg) + "|" + escopo;
+      const novas = lerChat().filter((m) => !enviados.has(chave(m)));
+      if (novas.length && !enviando) {   // só marca como enviada depois que o painel confirmou (senão tenta de novo)
+        enviando = true;
+        envia({tipo: "mensagens", sala, escopo, cabecalho: cabecalho(), mensagens: novas})
+          .then((r) => { if (r.ok) novas.forEach((m) => enviados.add(chave(m))); })
+          .finally(() => { enviando = false; });
+      }
     }
   }
 
@@ -95,7 +123,8 @@
     };
   }
   chrome.runtime.onMessage.addListener((m, r, responder) => {
-    if (m && m.diag) { responder(estrutura()); return false; }
+    if (m && m.qualEmpresa) { empCache.t = 0; responder({empresa: empresaTela()}); return false; }
+    if (m && m.diag) { const x = estrutura(); x.empresa_tela = empresaTela(); responder(x); return false; }
     return false;
   });
 

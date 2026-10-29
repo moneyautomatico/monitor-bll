@@ -3788,6 +3788,7 @@ def pg_extensao(eid, aviso="", erro=False, codigo=""):
         p(2, "Baixe a extensão",
           '<p>Baixe o arquivo e <b>extraia</b> (botão direito → <i>Extrair tudo</i>) numa pasta que você não vá apagar, por exemplo <b>Documentos</b>. '
           'Vai aparecer a pasta <b>expert-licitante-extensao</b>.</p>'
+          '<p class="pp-esp">Já tem a extensão instalada (versão 1.1 ou mais nova)? Pode pular para o passo 4.</p>'
           '<div class="acoes"><a class="btn" href="/extensao.zip" onclick="setTimeout(marcarBaixou,800)">⬇️ Baixar a extensão (.zip)</a>'
           '<button type="button" class="sec" onclick="marcarBaixou()">Já baixei e extraí</button></div>'),
         p(3, "Instale no Chrome",
@@ -3796,10 +3797,12 @@ def pg_extensao(eid, aviso="", erro=False, codigo=""):
           '<p>2. No canto superior direito, ligue a chave <b>Modo do desenvolvedor</b>.</p>'
           '<p>3. Clique em <b>Carregar sem compactação</b> e escolha a pasta <b>expert-licitante-extensao</b>.</p>'
           '<p>4. Clique no ícone 🧩 (quebra-cabeça) do Chrome e no 📌 ao lado de <b>Expert Licitante – Monitor</b> para deixar o brasão fixo na barra.</p>'
-          '<p class="pp-esp">Este passo fica ✅ sozinho quando a extensão falar com o painel (passo 4).</p>'),
-        p(4, "Cole o código na extensão",
-          '<p>Clique no <b>brasão do Expert Licitante</b> na barra do Chrome, cole o código no campo <b>Código de conexão</b> e clique em <b>Salvar e testar</b>. '
-          'Deve aparecer <b>✅ Conectada: ' + e(nome) + '</b>.</p><p class="pp-st"></p>'),
+          '<p class="pp-esp">Já instalou a extensão para outra empresa? Pule para o passo 4. Este passo fica ✅ sozinho quando a extensão falar com o painel.</p>'),
+        p(4, "Adicione a empresa na extensão",
+          '<p>Clique no <b>brasão do Expert Licitante</b> na barra do Chrome, cole o código em <b>Adicionar empresa</b> e clique em <b>➕ Adicionar empresa</b>. '
+          'Deve aparecer <b>🏢 ' + e(nome) + '</b> na lista de empresas conectadas.</p>'
+          '<p class="pp-esp">Tem mais de uma empresa na Licitanet? A mesma extensão serve para todas: adicione o código de cada uma. '
+          'Em cada aba, ela reconhece a empresa logada pelo nome no topo da Licitanet e manda os dados só para ela.</p><p class="pp-st"></p>'),
         p(5, "Entre na Licitanet e abra a lista de processos",
           '<p>Entre na Licitanet normalmente e deixe aberta a tela com a <b>lista de processos</b> (Início / Processos).</p>'
           '<div class="acoes"><a class="btn sec" href="https://portal.licitanet.com.br/" target="_blank" rel="noopener">Abrir a Licitanet ↗</a></div><p class="pp-st"></p>'),
@@ -3827,8 +3830,9 @@ Deixe o computador ligado, com o Chrome aberto e logado na Licitanet, e a sala d
 def estado_extensao(eid):
     st = extensao.situacao(eid)
     ult = float(st.get("ultima") or 0)
-    min_ = int((time.time() - ult) // 60) if ult else None
-    return {"codigo": extensao.tem_codigo(eid), "conectado": bool(ult) and extensao.tem_codigo(eid),
+    ref = float(st.get("contato") or ult or 0)
+    min_ = int((time.time() - ref) // 60) if ref else None
+    return {"codigo": extensao.tem_codigo(eid), "conectado": bool(ult or st.get("contato")) and extensao.tem_codigo(eid),
             "quando": "" if min_ is None else ("agora" if min_ < 1 else f"há {min_} min"),
             "lista": bool(st.get("ultimo_processos")), "sala": bool(st.get("ultimo_mensagens")),
             "n_salas": len(st.get("salas") or {}), "n_proc": st.get("n_processos", 0),
@@ -9509,6 +9513,9 @@ class Painel(BaseHTTPRequestHandler):
             ev = None
         if not ev:
             return resp(400, {"ok": False, "erro": "dados inválidos"})
+        nome_emp = ler_env(EMPRESAS / f"{eid}.env").get("EMPRESA_NOME", "")
+        if ev.get("empresa_tela") and not extensao.nome_bate(ev["empresa_tela"], nome_emp):   # nunca mistura empresas
+            return resp(409, {"ok": False, "empresa": nome_emp, "erro": f"Esta aba está logada em outra empresa ({ev['empresa_tela'][:60]}), não em {nome_emp}."})
         extensao.registrar(eid, ev)
         return resp(200, {"ok": True, "empresa": ler_env(EMPRESAS / f"{eid}.env").get("EMPRESA_NOME", "")})
 

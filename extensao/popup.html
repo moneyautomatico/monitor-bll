@@ -1,24 +1,28 @@
 <!doctype html>
 <html lang="pt-br"><head><meta charset="utf-8"><title>Expert Licitante – Monitor</title>
 <style>
-body{width:330px;margin:0;font:14px system-ui,Segoe UI,Roboto,sans-serif;color:#14211a;background:#f6f8f7}
+body{width:350px;margin:0;font:14px system-ui,Segoe UI,Roboto,sans-serif;color:#14211a;background:#f6f8f7}
 header{background:#0b2a1d;color:#f4efe3;padding:12px 14px;display:flex;align-items:center;gap:10px}
 header img{width:30px;height:32px}header b{letter-spacing:.08em;font-family:Georgia,"Times New Roman",serif}
-main{padding:12px 14px}label{display:block;font-size:12.5px;font-weight:600;margin:10px 0 4px}
-input{width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1.5px solid #d5ded8;border-radius:8px}
-button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:9px 12px;cursor:pointer;background:#1f6b47;color:#fff;margin-top:10px}
-button.sec{background:#fff;color:#1f6b47;border:1.5px solid #cfe0d6}.st{margin-top:12px;padding:9px 10px;border-radius:8px;background:#fff;border:1px solid #dfe7e2;font-size:13px;line-height:1.45}
-.erro{color:#a1271d}.ok{color:#17663f}small{color:#5c6b62}
+main{padding:12px 14px}h4{margin:12px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#3d5a4b}
+label{display:block;font-size:12.5px;font-weight:600;margin:8px 0 4px}
+input,select{width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1.5px solid #d5ded8;border-radius:8px;background:#fff}
+button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:8px 12px;cursor:pointer;background:#1f6b47;color:#fff;margin-top:8px}
+button.sec{background:#fff;color:#1f6b47;border:1.5px solid #cfe0d6}button.x{background:none;color:#a1271d;padding:2px 6px;margin:0}
+.emp{display:flex;align-items:center;justify-content:space-between;gap:8px;background:#fff;border:1px solid #dfe7e2;border-radius:8px;padding:7px 10px;margin:5px 0;font-size:13px}
+.st,.aba{margin-top:8px;padding:9px 10px;border-radius:8px;background:#fff;border:1px solid #dfe7e2;font-size:13px;line-height:1.45}
+.erro{color:#a1271d}.ok{color:#17663f}small{color:#5c6b62}details{margin-top:10px}
 </style></head>
 <body><header><img src="icones/48.png" alt=""><b>EXPERT LICITANTE</b></header>
 <main>
-<label for="codigo">Código de conexão <small>(painel → Empresas → 🧩 Extensão)</small></label>
-<input id="codigo" placeholder="EL-..." autocomplete="off">
-<label for="servidor">Endereço do painel</label>
-<input id="servidor">
-<button id="salvar">Salvar e testar</button> <button id="diag" class="sec">🧭 Diagnóstico desta aba</button>
+<h4>Empresas conectadas</h4><div id="lista"><small>nenhuma ainda</small></div>
+<label for="codigo">Adicionar empresa – código de conexão <small>(painel → Empresas → 🧩 Extensão)</small></label>
+<input id="codigo" placeholder="EL-..." autocomplete="off"><button id="add">➕ Adicionar empresa</button>
+<h4>Esta aba</h4><div class="aba" id="aba">…</div>
+<button id="diag" class="sec">🧭 Diagnóstico desta aba</button>
 <div class="st" id="st">…</div>
-<p><small>A extensão só lê a Licitanet nas abas que você deixar abertas (lista de processos e sala de disputa).
+<details><summary><small>Avançado</small></summary><label for="servidor">Endereço do painel</label><input id="servidor"><button id="salvarSrv" class="sec">Salvar endereço</button></details>
+<p><small>A extensão só lê a Licitanet nas abas que você deixar abertas (lista de processos e sala de disputa) e manda para a empresa logada em cada aba.
 Ela não clica, não digita e não envia nada na plataforma.</small></p>
 </main>
 <script src="config.js"></script><script src="popup.js"></script>
