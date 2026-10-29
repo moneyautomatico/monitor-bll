@@ -91,6 +91,89 @@ async function enviar(evento, tabId, codigoForcado) {
   return {ok: false, erro: j.erro, status};
 }
 
+// ----------------------------------------------------------------- aba vigia: uma aba que passa por todos os processos em andamento
+const PORTAL = "https://portal.licitanet.com.br";
+const HOME_PADRAO = PORTAL + "/home-avulso";
+const IGNORAR = /HOMOLOG|CANCEL|REVOG|ANULAD|FRACASS|DESERT/i;
+const EM_DISPUTA = /DISPUTA|LANCE|SESS[AÃ]O|ABERT/i;
+const PAUSA_VOLTA = 60000;
+const salaUrl = (s) => `${PORTAL}/sala-disputa/${s}`;
+const entre = (a, b) => a + Math.round(Math.random() * (b - a));
+async function vigia() { return (await chrome.storage.session.get("vigia")).vigia || null; }
+async function gravarVigia(v) { await chrome.storage.session.set({vigia: v}); }
+async function marcarBadge(ligada) {
+  await chrome.action.setBadgeText({text: ligada ? "V" : ""});
+  await chrome.action.setBadgeBackgroundColor({color: "#1f8f57"});
+}
+async function ligarVigia(home) {
+  const v = await vigia();
+  if (v && v.tabId) { try { await chrome.tabs.get(v.tabId); return v; } catch (e) { /* aba fechada */ } }
+  const casa = home || (await chrome.storage.local.get("vigiaHome")).vigiaHome || HOME_PADRAO;
+  const aba = await chrome.tabs.create({url: casa, pinned: true, active: false});
+  const nova = {tabId: aba.id, home: casa, fila: [], pos: 0, voltas: 0, inicio: Date.now(), ultimaVolta: 0, n: 0};
+  await gravarVigia(nova);
+  await chrome.storage.local.set({vigiaLigada: true, vigiaHome: casa});
+  await marcarBadge(true);
+  return nova;
+}
+async function desligarVigia() {
+  const v = await vigia();
+  await gravarVigia(null);
+  await chrome.storage.local.set({vigiaLigada: false});
+  await marcarBadge(false);
+  if (v && v.tabId) { try { await chrome.tabs.remove(v.tabId); } catch (e) { /* já fechada */ } }
+}
+chrome.runtime.onStartup.addListener(async () => {
+  if ((await chrome.storage.local.get("vigiaLigada")).vigiaLigada) ligarVigia();
+});
+
+async function tratarVigia(m, tabId) {
+  const v = await vigia();
+  if (!v || v.tabId !== tabId) return {vigia: false};
+  if (m.vigiaTarefa) return {vigia: true};
+  if (m.vigiaLista) {
+    const ativos = m.vigiaLista.filter((p) => p.sala && !IGNORAR.test(p.situacao || ""));
+    if (m.vigiaLista.length) {   // lista lida: esta é a página "casa" da vigia
+      v.home = (m.url || v.home).split("#")[0];
+      await chrome.storage.local.set({vigiaHome: v.home});
+      const disputa = ativos.filter((p) => EM_DISPUTA.test(p.situacao || "")).map((p) => p.sala);
+      const outros = ativos.filter((p) => !EM_DISPUTA.test(p.situacao || "")).map((p) => p.sala);
+      // os que estão em disputa entram no começo e de novo no meio da volta
+      const meio = Math.floor(outros.length / 2);
+      v.fila = [...disputa, ...outros.slice(0, meio), ...(outros.length > 3 ? disputa : []), ...outros.slice(meio)];
+      v.n = ativos.length;
+      v.sem_link = m.vigiaLista.filter((p) => !p.sala && !IGNORAR.test(p.situacao || "")).length;
+    }
+    v.pos = 0;
+    await gravarVigia(v);
+    if (!v.fila.length) return {ir: v.home, espera: 120000, texto: "nenhum processo em andamento com sala – nova olhada em 2 min"};
+    return {ir: salaUrl(v.fila[0]), espera: entre(3000, 6000), texto: `volta com ${v.fila.length} leitura(s) – abrindo a 1ª`};
+  }
+  if (m.vigiaPronto) {
+    v.pos = (v.pos || 0) + 1;
+    if (v.pos < v.fila.length) {
+      await gravarVigia(v);
+      return {ir: salaUrl(v.fila[v.pos]), espera: entre(3000, 6000), texto: `próxima: ${v.pos + 1} de ${v.fila.length}`};
+    }
+    v.voltas = (v.voltas || 0) + 1;
+    v.ultimaVolta = Date.now();
+    await gravarVigia(v);
+    return {ir: v.home, espera: PAUSA_VOLTA, texto: "volta completa – recomeça em 1 min"};
+  }
+  return {vigia: true};
+}
+
+chrome.runtime.onMessage.addListener((m, remetente, responder) => {
+  if (m && m.dormir) { setTimeout(() => responder({}), Math.min(+m.dormir || 0, 180000)); return true; }
+  if (m && (m.vigiaTarefa || m.vigiaLista || m.vigiaPronto)) {
+    tratarVigia(m, remetente.tab ? remetente.tab.id : null).then(responder);
+    return true;
+  }
+  if (m && m.ligarVigia) { ligarVigia(m.home).then(() => responder({ok: true})); return true; }
+  if (m && m.desligarVigia) { desligarVigia().then(() => responder({ok: true})); return true; }
+  return false;
+});
+
 chrome.runtime.onMessage.addListener((m, remetente, responder) => {
   if (m && m.evento) {
     const daLicitanet = remetente.tab && /^https:\/\/portal\.licitanet\.com\.br\//.test(remetente.tab.url || "");
@@ -102,6 +185,8 @@ chrome.runtime.onMessage.addListener((m, remetente, responder) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const v = await vigia();
+  if (v && v.tabId === tabId) { await gravarVigia(null); await chrome.storage.local.set({vigiaLigada: false}); await marcarBadge(false); }
   const s = await sessao();
   for (const k of ["abaFixa", "abaConta", "abaInfo"]) { const o = s[k] || {}; delete o[tabId]; await gravarSessao(k, o); }
 });

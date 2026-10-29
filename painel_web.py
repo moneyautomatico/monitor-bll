@@ -3812,8 +3812,11 @@ def pg_extensao(eid, aviso="", erro=False, codigo=""):
         p(5, "Entre na Licitanet e abra a lista de processos",
           '<p>Entre na Licitanet normalmente e deixe aberta a tela com a <b>lista de processos</b> (Início / Processos).</p>'
           '<div class="acoes"><a class="btn sec" href="https://portal.licitanet.com.br/" target="_blank" rel="noopener">Abrir a Licitanet ↗</a></div><p class="pp-st"></p>'),
-        p(6, "Abra a sala de disputa",
-          '<p>Abra a <b>sala de disputa</b> de um processo (em disputa ou já disputado) e deixe a aba aberta. Faça isso com cada processo que quiser vigiar no dia.</p>'
+        p(6, "Ligue a 🛡️ aba vigia (recomendado)",
+          '<p>Com a <b>lista de processos</b> aberta, clique no brasão da extensão → <b>▶️ Ligar aba vigia</b>. Ela cria uma aba fixada (à esquerda) que '
+          '<b>passa sozinha por todos os processos em andamento</b> – abre a sala, lê o chat de <b>cada lote</b> e da mensagem geral, vai para o próximo e recomeça '
+          'a volta. Os que estão em disputa entram duas vezes por volta.</p>'
+          '<p class="pp-esp">Não use a aba vigia para trabalhar (ela muda de página sozinha). Prefere sem vigia? Deixe aberta a sala de disputa de cada processo que quiser acompanhar.</p>'
           '<p class="pp-st"></p>'),
         p(7, "Faça o diagnóstico",
           '<p>Com a sala aberta, clique no brasão da extensão → <b>🧭 Diagnóstico desta aba</b>. Faça também na lista de processos.</p><p class="pp-st"></p>'),

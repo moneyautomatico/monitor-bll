@@ -70,3 +70,27 @@ $("diag").onclick = async () => {
       : "⚠️ Não enviei: " + ((r && r.erro) || "escolha a empresa desta aba acima."));
   });
 };
+
+async function desenharVigia() {
+  const {vigia} = await chrome.storage.session.get("vigia");
+  const {vigiaHome} = await chrome.storage.local.get("vigiaHome");
+  if (!vigia) {
+    $("vig").innerHTML = "Desligada. Ela usa <b>uma aba fixada</b> que passa sozinha por todos os processos em andamento (sala e lotes), só lendo. " +
+      "<small>Dica: abra a <b>lista de processos</b> da Licitanet e clique em Ligar aqui nela.</small>";
+    $("vigOn").style.display = ""; $("vigOff").style.display = "none"; return;
+  }
+  $("vigOn").style.display = "none"; $("vigOff").style.display = "";
+  $("vig").innerHTML = `<span class="ok">✅ Ligada</span> · processos na volta: <b>${vigia.n || 0}</b>` +
+    (vigia.fila && vigia.fila.length ? ` · lendo ${Math.min((vigia.pos || 0) + 1, vigia.fila.length)} de ${vigia.fila.length}` : "") +
+    `<br>Voltas completas: <b>${vigia.voltas || 0}</b> · última: ${quando(vigia.ultimaVolta)}` +
+    (vigia.sem_link ? `<br><small>⚠️ ${vigia.sem_link} processo(s) sem link para a sala na lista</small>` : "") +
+    `<br><small>Lista usada: ${esc((vigia.home || vigiaHome || "").replace("https://portal.licitanet.com.br", ""))}</small>`;
+}
+$("vigOn").onclick = async () => {
+  const t = await abaAtual();
+  const home = ehLicitanet(t) && !/sala-disputa/.test(t.url) && !/login/i.test(t.url) ? t.url.split("#")[0] : "";
+  await chrome.runtime.sendMessage({ligarVigia: true, home});
+  desenharVigia(); desenhar("🛡️ Aba vigia ligada (fixada à esquerda). Deixe a janela do Chrome aberta.");
+};
+$("vigOff").onclick = async () => { await chrome.runtime.sendMessage({desligarVigia: true}); desenharVigia(); };
+desenharVigia();
