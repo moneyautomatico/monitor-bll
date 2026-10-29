@@ -3557,8 +3557,14 @@ def pg_empresas(aviso="", erro=False):
     return pagina("Empresas", abas_admin_topo(corpo, "emp"), "/empresas", aviso, erro)
 
 
-def form_empresa(eid=None, plat_padrao=""):
+def form_empresa(eid=None, plat_padrao="", dados=None, aviso=""):
     cfg = ler_env(EMPRESAS / f"{eid}.env") if eid else ({"PLATAFORMA": plat_padrao} if plat_padrao in ("bll", "bnc", "pcp", "licitanet", "comprasgov") else {})
+    if dados:   # deu erro ao salvar: volta ao formulário com o que a pessoa já tinha digitado (menos senha e token)
+        for campo, chave in (("nome", "EMPRESA_NOME"), ("plataforma", "PLATAFORMA"), ("email", "BLL_EMAIL"), ("cnpj", "EMPRESA_CNPJ"),
+                             ("enviar_para", "ENVIAR_PARA"), ("tg_chat", "EMPRESA_TELEGRAM_CHAT_ID"), ("ntfy", "EMPRESA_NTFY_TOPICO"),
+                             ("perfil", "BLL_PERFIL"), ("funcao", "LICITANET_FUNCAO"), ("dono", "EMPRESA_DONO")):
+            if campo in dados:
+                cfg[chave] = dados[campo]
     g = lambda k, d="": e(cfg.get(k, d))  # noqa: E731
     dono_f = cfg.get("EMPRESA_DONO", "") if eid else login_atual()
     ucd = usuarios.cfg(dono_f) if dono_f else {}
@@ -3569,7 +3575,7 @@ def form_empresa(eid=None, plat_padrao=""):
     sel = lambda v: "selected" if modo == v else ""  # noqa: E731
     acao = ue(f"/empresas/{eid}" if eid else "/empresas/nova")
     us = usuarios.carregar()
-    dono_atual = cfg.get("EMPRESA_DONO", "") if eid else login_atual()
+    dono_atual = cfg.get("EMPRESA_DONO", "") or ("" if eid else login_atual())
     campo_dono = ('<label>Dono da empresa <small>(quem cadastrou; só ele e o administrador veem os dados)</small></label><select class="campo" name="dono">' +
                   "".join(f'<option value="{e(k)}" {"selected" if k == dono_atual else ""}>{e(k)} – {e(v.get("nome", ""))}</option>' for k, v in sorted(us.items())) +
                   "</select>") if eh_admin() else ""
@@ -3617,7 +3623,7 @@ document.querySelectorAll('.so-bll').forEach(x=>x.style.display=bll?'':'none');
 document.querySelectorAll('.so-ln').forEach(x=>x.style.display=ln?'':'none');
 const cg=v==='comprasgov'||v==='licitanet';document.querySelectorAll('.so-cg').forEach(x=>x.style.display=v==='comprasgov'?'':'none');
 document.querySelectorAll('.nao-cg').forEach(x=>{{x.style.display=cg?'none':'';x.querySelectorAll('input').forEach(i=>{{if(cg){{if(i.required)i.dataset.req='1';i.required=false;}}else if(i.dataset.req)i.required=true;}});}});}}trocaPlat();</script>"""
-    return pagina("Empresa", abas_admin_topo(corpo, "emp"), "/empresas")
+    return pagina("Empresa", abas_admin_topo(corpo, "emp"), "/empresas", e(aviso) if aviso else "", bool(aviso))
 
 
 # ------------------------------------------------------------------ Compras.gov.br: conexão assistida (o licitante entra e resolve o captcha)
@@ -9317,7 +9323,7 @@ def salvar_empresa(f, eid=None):
     if novo and not senha and plat not in ("comprasgov", "licitanet"):
         return "Informe a senha da BLL."
     modo = f.get("enviar_para", "geral")
-    if modo in ("proprio", "ambos") and not f.get("tg_chat", "").strip():
+    if modo in ("proprio", "ambos") and not f.get("tg_chat", "").strip() and not usuarios.cfg(dono).get("tg_chat"):
         return "Para Telegram próprio, informe o chat_id da conversa."
     EMPRESAS.mkdir(exist_ok=True)
     os.chmod(EMPRESAS, 0o700)
@@ -10698,7 +10704,7 @@ class Painel(BaseHTTPRequestHandler):
             if p == "/empresas/nova":
                 err = salvar_empresa(f)
                 if err:
-                    return self.enviar(pg_empresas(e(err), True))
+                    return self.enviar(form_empresa(dados=f, aviso=err))
                 if f.get("plataforma") == "licitanet" and f.get("_eid"):   # já leva para o passo a passo da extensão
                     return self.redirecionar(f"/extensao?eid={f['_eid']}")
                 return self.redirecionar("/empresas?ok=cadastrada")
@@ -11562,7 +11568,7 @@ location.href='/propostas/{pid}?ok=feito';</script><a href="/propostas/{pid}/ver
                 svc = f"monitor-bll@{eid}"
                 if acao is None:
                     err = salvar_empresa(f, eid)
-                    return self.enviar(pg_empresas(e(err), True)) if err else self.redirecionar("/empresas?ok=atualizada")
+                    return self.enviar(form_empresa(eid, dados=f, aviso=err)) if err else self.redirecionar("/empresas?ok=atualizada")
                 if acao == "pausar":
                     sh("systemctl", "disable", "--now", svc)
                 elif acao == "retomar":
