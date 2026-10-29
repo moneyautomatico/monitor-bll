@@ -12,13 +12,14 @@ SECOES = [
                 "No chat do pregoeiro, clique em <b>❓ O que significa?</b> embaixo da mensagem para saber o que fazer."],
      "dicas": ["Comece por compras pequenas e perto de você – a primeira vitória ensina mais que qualquer curso.",
                "Nunca dê lance abaixo do seu lance mínimo: ganhar com prejuízo é pior que perder."]},
-    {"id": "licitanet", "icone": "🧩", "titulo": "Conectar a Licitanet (extensão do Chrome)", "tela": "/licitanet",
-     "resumo": "A Licitanet bloqueia o servidor, então o chat e a lista de processos chegam por uma extensão no seu Chrome, que só lê a tela.",
+    {"id": "licitanet", "icone": "🧩", "titulo": "Conectar Licitanet e Compras.gov.br (extensão do Chrome)", "tela": "/licitanet",
+     "resumo": "A Licitanet e o Compras.gov.br barram o acesso vindo do servidor, então o chat chega por uma extensão no seu Chrome, que só lê.",
      "passos": ["Abra <b>🎓 Aprender → 🧩 Conectar a Licitanet</b> (ou Empresas → <b>🧩 Extensão</b> na empresa da Licitanet). Lá está o passo a passo com 7 etapas que se marcam sozinhas.",
                 "Gere o <b>código de conexão</b> da empresa e baixe a extensão (.zip). Extraia numa pasta que você não vá apagar.",
                 "No Chrome, abra <b>chrome://extensions</b>, ligue o <b>Modo do desenvolvedor</b> e clique em <b>Carregar sem compactação</b> escolhendo a pasta <b>expert-licitante-extensao</b>.",
                 "Clique no brasão da extensão, cole o código em <b>Adicionar empresa</b>. Tem várias empresas? Adicione o código de cada uma.",
                 "Entre na Licitanet, abra a <b>lista de processos</b> e, na extensão, clique em <b>▶️ Ligar aba vigia</b>: uma aba fixada passa sozinha por todos os processos em andamento (sala e lotes), só lendo.",
+                "No <b>Compras.gov.br</b>: entre normalmente no seu Chrome (certificado digital, QR code…) e abra o acompanhamento do pregão com as mensagens. A extensão lê as mensagens que o próprio site carrega, sem pedir nada a mais a ele.",
                 "Clique em <b>🧭 Diagnóstico desta aba</b> na extensão para confirmar a leitura."],
      "dicas": ["A extensão não digita e não envia nada na Licitanet. Na aba vigia ela só troca de página e de lote para ler – não use essa aba para trabalhar.",
                "O computador precisa ficar ligado, com o Chrome aberto e logado. Se parar, você recebe aviso no Telegram.",
@@ -231,7 +232,7 @@ SECOES = [
 ]
 
 FAQ = [
-    ("Como conecto a Licitanet?",
+    ("Como conecto a Licitanet ou o Compras.gov.br?",
      "A Licitanet bloqueia o acesso vindo do servidor, então usamos uma extensão no seu Chrome que só lê a lista de processos e o chat e manda para o painel. "
      "Abra 🎓 Aprender → 🧩 Conectar a Licitanet e siga as 7 etapas (elas se marcam sozinhas). Serve para várias empresas no mesmo Chrome. "
      "Ligue a 🛡️ aba vigia na extensão para ela passar sozinha por todos os processos em andamento – não precisa deixar uma aba aberta por licitação."),

@@ -46,10 +46,27 @@ async function post(servidor, codigo, evento) {
   } catch (e) { return {status: 0, j: {erro: "Sem conexão com o painel (" + servidor + ")."}}; }
 }
 
+const PORTAIS = {licitanet: ["https://portal.licitanet.com.br/*"],
+                 comprasgov: ["https://cnetmobile.estaleiro.serpro.gov.br/*", "https://www.comprasnet.gov.br/*"]};
+const RE_PORTAL = /^https:\/\/(portal\.licitanet\.com\.br|cnetmobile\.estaleiro\.serpro\.gov\.br|www\.comprasnet\.gov\.br)\//;
+const plataformaDaUrl = (u) => /licitanet/.test(u || "") ? "licitanet" : "comprasgov";
+
+async function completarPlataformas(contas, servidor) {   // contas salvas antes da 1.3 não sabiam a plataforma
+  let mudou = false;
+  for (const c of contas) {
+    if (c.plataforma) continue;
+    const {status, j} = await post(servidor, c.codigo, {tipo: "ping", url: "", versao: chrome.runtime.getManifest().version});
+    if (status === 200 && j.plataforma) { c.plataforma = j.plataforma; c.empresa = j.empresa || c.empresa; mudou = true; }
+  }
+  if (mudou) await chrome.storage.local.set({contas});
+  return contas;
+}
+
 async function escolherConta(contas, evento, tabId) {
   const s = await sessao();
   const fixa = (s.abaFixa || {})[tabId];
   if (fixa) return contas.find((c) => c.codigo === fixa) || null;
+  contas = contas.filter((c) => !c.plataforma || !evento.plataforma || c.plataforma === evento.plataforma);   // código da plataforma certa
   if (contas.length === 1) return contas[0];
   if (evento.empresa_tela) {
     const m = contas.filter((c) => c.empresa && nomeBate(evento.empresa_tela, c.empresa));
@@ -63,7 +80,7 @@ async function enviar(evento, tabId, codigoForcado) {
   let conta = codigoForcado ? {codigo: codigoForcado, empresa: ""} : null;
   if (!conta) {
     if (!contas.length) { await situacao({erro: "Adicione o código de conexão de uma empresa (painel → Empresas → 🧩 Extensão)."}); return {ok: false}; }
-    conta = await escolherConta(contas, evento, tabId);
+    conta = await escolherConta(contas.some((c) => !c.plataforma) ? await completarPlataformas(contas, servidor) : contas, evento, tabId);
   }
   if (!conta) {   // várias empresas e não deu para saber de qual é esta aba: não envia nada
     const s = await sessao(); const info = s.abaInfo || {};
@@ -82,10 +99,10 @@ async function enviar(evento, tabId, codigoForcado) {
     if (j.empresa && !codigoForcado) {
       const lista = (await config()).contas;
       const k = lista.find((c) => c.codigo === conta.codigo);
-      if (k && k.empresa !== j.empresa) { k.empresa = j.empresa; await chrome.storage.local.set({contas: lista}); }
+      if (k && (k.empresa !== j.empresa || k.plataforma !== j.plataforma)) { k.empresa = j.empresa; k.plataforma = j.plataforma || k.plataforma; await chrome.storage.local.set({contas: lista}); }
     }
     await situacao({erro: "", ultimo_envio: Date.now(), ultimo_tipo: evento.tipo});
-    return {ok: true, empresa: j.empresa};
+    return {ok: true, empresa: j.empresa, plataforma: j.plataforma};
   }
   await situacao({erro: j.erro || ("O painel respondeu " + status), quando: Date.now()});
   return {ok: false, erro: j.erro, status};
@@ -176,7 +193,7 @@ chrome.runtime.onMessage.addListener((m, remetente, responder) => {
 
 chrome.runtime.onMessage.addListener((m, remetente, responder) => {
   if (m && m.evento) {
-    const daLicitanet = remetente.tab && /^https:\/\/portal\.licitanet\.com\.br\//.test(remetente.tab.url || "");
+    const daLicitanet = remetente.tab && RE_PORTAL.test(remetente.tab.url || "");
     const tabId = m.tabId != null ? m.tabId : (daLicitanet ? remetente.tab.id : null);
     enviar(m.evento, tabId, m.codigo).then(responder);
     return true;
@@ -196,12 +213,13 @@ chrome.alarms.create("pulso", {periodInMinutes: 1});
 chrome.alarms.onAlarm.addListener(async (a) => {
   if (a.name !== "pulso") return;
   const {contas, servidor} = await config();
-  const abas = await chrome.tabs.query({url: "https://portal.licitanet.com.br/*"});
+  const abas = await chrome.tabs.query({url: [...PORTAIS.licitanet, ...PORTAIS.comprasgov]});
   const ac = (await sessao()).abaConta || {};
   const ativas = new Set(abas.map((t) => ac[t.id]).filter(Boolean));
   const versao = chrome.runtime.getManifest().version;
   for (const c of contas) {
-    if (ativas.has(c.codigo)) post(servidor, c.codigo, {tipo: "ping", plataforma: "licitanet", versao, url: ""});
-    else post(servidor, c.codigo, {tipo: "estado", estado: "sem_aba", plataforma: "licitanet", versao, url: ""});
+    const plataforma = c.plataforma || "licitanet";
+    if (ativas.has(c.codigo)) post(servidor, c.codigo, {tipo: "ping", plataforma, versao, url: ""});
+    else post(servidor, c.codigo, {tipo: "estado", estado: "sem_aba", plataforma, versao, url: ""});
   }
 });

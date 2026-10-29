@@ -7,17 +7,19 @@ const quando = (ms) => { if (!ms) return "nunca"; const s = Math.round((Date.now
 async function contas() { return (await chrome.storage.local.get("contas")).contas || []; }
 async function abaAtual() { const [t] = await chrome.tabs.query({active: true, currentWindow: true}); return t; }
 const ehLicitanet = (t) => t && /^https:\/\/portal\.licitanet\.com\.br\//.test(t.url || "");
+const ehPortal = (t) => t && /^https:\/\/(portal\.licitanet\.com\.br|cnetmobile\.estaleiro\.serpro\.gov\.br|www\.comprasnet\.gov\.br)\//.test(t.url || "");
+const NOMES = {licitanet: "Licitanet", comprasgov: "Compras.gov.br"};
 
 async function desenhar(extra) {
   const cs = await contas();
-  $("lista").innerHTML = cs.length ? cs.map((c, i) => `<div class="emp"><span>🏢 <b>${esc(c.empresa || "(testando…)")}</b></span>` +
+  $("lista").innerHTML = cs.length ? cs.map((c, i) => `<div class="emp"><span>🏢 <b>${esc(c.empresa || "(testando…)")}</b> <small>${esc(NOMES[c.plataforma] || "")}</small></span>` +
     `<button class="x" data-i="${i}" title="Remover">✕</button></div>`).join("") : "<small>nenhuma ainda</small>";
   document.querySelectorAll("#lista .x").forEach((b) => b.onclick = async () => {
     if (!confirm("Remover esta empresa da extensão?")) return;
     const l = await contas(); l.splice(+b.dataset.i, 1); await chrome.storage.local.set({contas: l}); desenhar();
   });
   const t = await abaAtual();
-  if (!ehLicitanet(t)) { $("aba").innerHTML = "<small>Abra uma aba da Licitanet para ver de qual empresa ela é.</small>"; }
+  if (!ehPortal(t)) { $("aba").innerHTML = "<small>Abra uma aba da Licitanet ou do Compras.gov.br para ver de qual empresa ela é.</small>"; }
   else {
     const s = await chrome.storage.session.get(["abaFixa", "abaInfo"]);
     const fixa = (s.abaFixa || {})[t.id] || "";
@@ -35,9 +37,9 @@ async function desenhar(extra) {
     };
   }
   const {situacao = {}} = await chrome.storage.local.get("situacao");
-  const abas = await chrome.tabs.query({url: "https://portal.licitanet.com.br/*"});
+  const abas = await chrome.tabs.query({url: ["https://portal.licitanet.com.br/*", "https://cnetmobile.estaleiro.serpro.gov.br/*", "https://www.comprasnet.gov.br/*"]});
   $("st").innerHTML = (extra ? esc(extra) + "<br>" : "") + (situacao.erro ? `<span class="erro">⚠️ ${esc(situacao.erro)}</span><br>` : "") +
-    `Abas da Licitanet abertas: <b>${abas.length}</b> · último envio: ${quando(situacao.ultimo_envio)}`;
+    `Abas da Licitanet / Compras.gov.br abertas: <b>${abas.length}</b> · último envio: ${quando(situacao.ultimo_envio)}`;
 }
 
 (async () => { $("servidor").value = (await chrome.storage.local.get("servidor")).servidor || padrao; desenhar(); })();
@@ -47,9 +49,9 @@ $("add").onclick = async () => {
   if (!/^EL-/.test(codigo)) { desenhar("O código começa com EL-. Copie de novo no painel."); return; }
   const l = await contas();
   if (l.some((c) => c.codigo === codigo)) { desenhar("Este código já está na lista."); return; }
-  const r = await chrome.runtime.sendMessage({evento: {tipo: "ping", plataforma: "licitanet", url: "", versao: chrome.runtime.getManifest().version}, codigo});
+  const r = await chrome.runtime.sendMessage({evento: {tipo: "ping", url: "", versao: chrome.runtime.getManifest().version}, codigo});
   if (!r || !r.ok) { desenhar("⚠️ O painel não aceitou o código: " + ((r && r.erro) || "confira o código e o endereço")); return; }
-  l.push({codigo, empresa: r.empresa || ""});
+  l.push({codigo, empresa: r.empresa || "", plataforma: r.plataforma || ""});
   await chrome.storage.local.set({contas: l});
   $("codigo").value = "";
   desenhar(`✅ ${r.empresa} adicionada.`);
@@ -61,10 +63,10 @@ $("salvarSrv").onclick = async () => {
 
 $("diag").onclick = async () => {
   const t = await abaAtual();
-  if (!ehLicitanet(t)) { desenhar("Abra uma aba da Licitanet e clique de novo."); return; }
+  if (!ehPortal(t)) { desenhar("Abra uma aba da Licitanet ou do Compras.gov.br e clique de novo."); return; }
   chrome.tabs.sendMessage(t.id, {diag: true}, async (est) => {
     if (chrome.runtime.lastError || !est) { desenhar("Recarregue a aba da Licitanet (F5) e tente de novo."); return; }
-    const r = await chrome.runtime.sendMessage({evento: {tipo: "diagnostico", plataforma: "licitanet", url: t.url.split("?")[0],
+    const r = await chrome.runtime.sendMessage({evento: {tipo: "diagnostico", plataforma: /licitanet/.test(t.url) ? "licitanet" : "comprasgov", url: t.url.split("?")[0],
       versao: chrome.runtime.getManifest().version, empresa_tela: est.empresa_tela || "", estrutura: est}, tabId: t.id});
     desenhar(r && r.ok ? `🧭 Diagnóstico enviado para ${r.empresa} (processos lidos: ${est.processos_lidos}, mensagens lidas: ${est.chat_lido}).`
       : "⚠️ Não enviei: " + ((r && r.erro) || "escolha a empresa desta aba acima."));

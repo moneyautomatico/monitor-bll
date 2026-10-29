@@ -24,6 +24,7 @@ PASTA = Path(__file__).resolve().parent
 EMPRESAS = PASTA / "empresas"
 FONTE = PASTA / "extensao"           # arquivos da extensão (manifest, scripts, ícones)
 TIPOS = {"ping", "estado", "processos", "mensagens", "diagnostico"}
+PLATAFORMAS = {"licitanet": "Licitanet", "comprasgov": "Compras.gov.br"}
 MAX_MSGS = 300
 VERSAO_MIN = "1.0.0"
 
@@ -88,7 +89,7 @@ def validar_evento(ev):
     """Normaliza o que veio do navegador: só os campos esperados e com limites."""
     if not isinstance(ev, dict) or ev.get("tipo") not in TIPOS:
         return None
-    out = {"tipo": ev["tipo"], "plataforma": _limpar_texto(ev.get("plataforma"), 20) or "licitanet",
+    out = {"tipo": ev["tipo"], "plataforma": _limpar_texto(ev.get("plataforma"), 20),
            "url": _limpar_texto(ev.get("url"), 300), "versao": _limpar_texto(ev.get("versao"), 12),
            "empresa_tela": _limpar_texto(ev.get("empresa_tela"), 200)}
     if ev["tipo"] == "estado":
@@ -96,10 +97,12 @@ def validar_evento(ev):
     elif ev["tipo"] == "processos":
         out["lista"] = [{"processo": _limpar_texto(p.get("processo"), 80), "promotor": _limpar_texto(p.get("promotor"), 200),
                          "situacao": _limpar_texto(p.get("situacao"), 80), "disputa": _limpar_texto(p.get("disputa"), 40),
-                         "sala": _limpar_texto(p.get("sala"), 20)}
+                         "sala": _limpar_texto(p.get("sala"), 30), "url": _limpar_texto(p.get("url"), 300)}
                         for p in (ev.get("lista") or [])[:500] if isinstance(p, dict)]
     elif ev["tipo"] == "mensagens":
-        out["sala"] = _limpar_texto(ev.get("sala"), 20)
+        out["sala"] = _limpar_texto(ev.get("sala"), 30)
+        out["processo"] = _limpar_texto(ev.get("processo"), 80)
+        out["promotor"] = _limpar_texto(ev.get("promotor"), 200)
         out["escopo"] = _limpar_texto(ev.get("escopo"), 120)
         out["cabecalho"] = _limpar_texto(ev.get("cabecalho"), 600)
         out["mensagens"] = [{"id": _limpar_texto(m.get("id"), 40), "cab": _limpar_texto(m.get("cab"), 200),
@@ -219,11 +222,11 @@ def resumo(eid):
     if not st.get("ultima") and not st.get("contato"):
         return "🟡 código gerado – aguardando a extensão"
     if st.get("estado") == "sem_aba":
-        return "🟠 extensão ligada, mas sem aba da Licitanet desta empresa aberta"
+        return "🟠 extensão ligada, mas sem aba da plataforma desta empresa aberta"
     min_ = int((time.time() - st["ultima"]) // 60)
     quando = "agora" if min_ < 1 else f"há {min_} min" if min_ < 120 else f"há {min_ // 60} h"
     if st.get("estado") == "deslogado":
-        return f"🔴 a Licitanet saiu do login no seu Chrome ({quando}) – entre de novo"
+        return f"🔴 a plataforma saiu do login no seu Chrome ({quando}) – entre de novo"
     return ("🟢" if min_ < 15 else "🔴") + f" extensão ativa · último contato {quando}"
 
 

@@ -804,7 +804,7 @@ AREAS = [
     ("/contratos", "💼 Pós-venda", [("/contratos", "💼 Contratos"), ("/atas", "📑 Atas de registro de preço"), ("/relatorio", "📈 Relatório do mês")]),
     ("/iniciante", "🎓 Aprender", [("/iniciante", "🎓 Central do iniciante"), ("/pronto", "✅ Estou pronto para licitar?"),
                                   ("/trilha", "🧭 Minha primeira licitação"), ("/simulador", "🎮 Simulador de disputa"),
-                                  ("/modelos", "📝 Modelos prontos"), ("/evolucao", "📈 Minha evolução"), ("/licitanet", "🧩 Conectar a Licitanet")]),
+                                  ("/modelos", "📝 Modelos prontos"), ("/evolucao", "📈 Minha evolução"), ("/licitanet", "🧩 Conectar Licitanet / Compras.gov.br")]),
     ("/empresas", "⋯ Mais", [("/empresas", "🏢 Empresas"), ("/preferencias", "⚙️ Minhas configurações"), ("/meu-consumo", "💳 Custos de IA"),
                             ("/avisos", "🔔 Avisos"), ("/bem-vindo", "🚀 Primeiros passos"), ("/lixeira", "🗑 Lixeira"), ("/ajuda", "❓ Ajuda"), ("/conta", "👤 Minha conta")]),
 ]
@@ -3545,10 +3545,9 @@ def pg_empresas(aviso="", erro=False):
 <td><span class="tag {cls}">{e(txt)}</span></td><td class="ocultar">{e(x['cfg'].get('ENVIAR_PARA', 'geral'))}</td>
 <td><div class="acoes" style="margin:0"><a class="btn sec" href="{ue('/empresas/' + x['id'])}">Editar</a>{pausar}
 {botao(ue(f"/empresas/{x['id']}/testar"), "Testar alerta", "sec")}<a class="btn sec" href="{ue('/empresas/' + x['id'] + '/log')}">Log</a>
-{f'<a class="btn" href="/comprasgov?eid={e(x["id"])}">🔌 Conectar</a>' if x["cfg"].get("PLATAFORMA", "").lower() == "comprasgov" else ""}
-{f'<a class="btn" href="/extensao?eid={e(x["id"])}">🧩 Extensão</a>' if x["cfg"].get("PLATAFORMA", "").lower() == "licitanet" else ""}</div>
-{f'<div class="sub">{e(extensao.resumo(x["id"]))}</div>' if x["cfg"].get("PLATAFORMA", "").lower() == "licitanet" else ""}
-{f'<div class="sub">{e(comprasgov.resumo_estado(x["id"]))}</div>' if x["cfg"].get("PLATAFORMA", "").lower() == "comprasgov" else ""}</td></tr>"""
+{f'<a class="btn" href="/extensao?eid={e(x["id"])}">🧩 Extensão</a>' if x["cfg"].get("PLATAFORMA", "").lower() in ("licitanet", "comprasgov") else ""}</div>
+{f'<div class="sub">{e(extensao.resumo(x["id"]))}</div>' if x["cfg"].get("PLATAFORMA", "").lower() in ("licitanet", "comprasgov") else ""}
+</td></tr>"""
     corpo = f"""<h2>Empresas</h2><p class="sub">{"Todas as empresas do sistema, de todos os usuários." if eh_admin() else
  "As empresas que você cadastrou. Elas e os dados delas (mensagens, processos, agenda, documentos…) só aparecem para você e para o administrador."}</p>
 <div class="acoes" style="margin-bottom:12px">{'' if usuario_atual() and usuario_atual()["papel"] == "leitura" else f'<a class="btn" href="{ue("/empresas/nova")}">+ Cadastrar empresa</a>'}</div>
@@ -3594,8 +3593,8 @@ def form_empresa(eid=None, plat_padrao="", dados=None, aviso=""):
 <option value="comprasgov" {"selected" if plat == "comprasgov" else ""}>Compras.gov.br (governo federal)</option></select>
 <div class="so-lx msg">🧩 Na Licitanet não cadastramos usuário e senha: a Licitanet bloqueia o servidor, então a ligação é feita por uma
 <b>extensão no seu Chrome</b>, que só lê a lista de processos e o chat. Depois de salvar, você vai direto para o <b>passo a passo</b> de instalação.</div>
-<div class="so-cg msg">🔌 No Compras.gov.br não cadastramos usuário e senha: depois de salvar, clique em <b>Conectar</b> na lista de empresas
-e entre você mesmo com a conta gov.br (o captcha é com você). O monitor só lê com a sessão aberta.</div>
+<div class="so-cg msg">🧩 No Compras.gov.br não cadastramos usuário e senha: o gov.br barra o login vindo do servidor, então a ligação é feita pela
+<b>extensão no seu Chrome</b> – você entra normalmente (certificado digital, QR code…) e ela só lê as mensagens. Depois de salvar, você vai direto para o <b>passo a passo</b>.</div>
 <div class="nao-cg"><label>Usuário / e-mail de login</label><input class="campo" name="email" value="{g('BLL_EMAIL')}" required>
 <label>Senha <small>{"(deixe em branco para manter)" if eid else ""}<span class="so-bll"> BLL/BNC: 6 números</span></small></label>
 <input class="campo" type="password" name="senha" {"" if eid else "required"} autocomplete="new-password"></div>
@@ -3764,6 +3763,8 @@ atualizar();setInterval(atualizar,5000);
 def pg_extensao(eid, aviso="", erro=False, codigo=""):
     cfg = ler_env(EMPRESAS / f"{eid}.env")
     nome = cfg.get("EMPRESA_NOME", eid)
+    cg = cfg.get("PLATAFORMA", "").lower() == "comprasgov"
+    pn = "Compras.gov.br" if cg else "Licitanet"
     info = extensao.info_codigo(eid)
     msg = f'<div class="msg {"erro" if erro else ""}">{e(aviso)}</div>' if aviso else ""
     caixa_cod = (f'<div class="msg" style="border:2px solid #34c27a;margin-top:8px"><b>🔑 Seu código de conexão</b> (aparece só agora – copie):'
@@ -3807,11 +3808,20 @@ def pg_extensao(eid, aviso="", erro=False, codigo=""):
         p(4, "Adicione a empresa na extensão",
           '<p>Clique no <b>brasão do Expert Licitante</b> na barra do Chrome, cole o código em <b>Adicionar empresa</b> e clique em <b>➕ Adicionar empresa</b>. '
           'Deve aparecer <b>🏢 ' + e(nome) + '</b> na lista de empresas conectadas.</p>'
-          '<p class="pp-esp">Tem mais de uma empresa na Licitanet? A mesma extensão serve para todas: adicione o código de cada uma. '
-          'Em cada aba, ela reconhece a empresa logada pelo nome no topo da Licitanet e manda os dados só para ela.</p><p class="pp-st"></p>'),
-        p(5, "Entre na Licitanet e abra a lista de processos",
+          '<p class="pp-esp">Tem mais de uma empresa (ou também usa outra plataforma)? A mesma extensão serve para todas: adicione o código de cada uma. '
+          'Em cada aba, ela reconhece a plataforma e a empresa logada e manda os dados só para ela.</p><p class="pp-st"></p>'),
+        (p(5, "Entre no Compras.gov.br",
+           '<p>Entre no Compras.gov.br normalmente no seu Chrome (certificado digital, QR code ou CPF – como você já faz) e abra a <b>área do fornecedor</b>.</p>'
+           '<div class="acoes"><a class="btn sec" href="https://www.gov.br/compras/pt-br" target="_blank" rel="noopener">Abrir o Compras.gov.br ↗</a></div><p class="pp-st"></p>')
+         if cg else
+         p(5, "Entre na Licitanet e abra a lista de processos",
           '<p>Entre na Licitanet normalmente e deixe aberta a tela com a <b>lista de processos</b> (Início / Processos).</p>'
-          '<div class="acoes"><a class="btn sec" href="https://portal.licitanet.com.br/" target="_blank" rel="noopener">Abrir a Licitanet ↗</a></div><p class="pp-st"></p>'),
+          '<div class="acoes"><a class="btn sec" href="https://portal.licitanet.com.br/" target="_blank" rel="noopener">Abrir a Licitanet ↗</a></div><p class="pp-st"></p>')),
+        p(6, "Abra o acompanhamento do pregão (mensagens)",
+          '<p>Abra o <b>acompanhamento</b> de um pregão em andamento e a parte de <b>mensagens / chat</b>, e deixe a aba aberta. A extensão lê as mensagens '
+          'que o próprio site carrega na tela – sem pedir nada a mais ao Compras.gov.br.</p>'
+          '<p class="pp-esp">A 🛡️ aba vigia (que passa sozinha por todos os pregões) chega para o Compras.gov.br depois do diagnóstico – ele mostra como as telas são.</p>'
+          '<p class="pp-st"></p>') if cg else
         p(6, "Ligue a 🛡️ aba vigia (recomendado)",
           '<p>Com a <b>lista de processos</b> aberta, clique no brasão da extensão → <b>▶️ Ligar aba vigia</b>. Ela cria uma aba fixada (à esquerda) que '
           '<b>passa sozinha por todos os processos em andamento</b> – abre a sala, lê o chat de <b>cada lote</b> e da mensagem geral, vai para o próximo e recomeça '
@@ -3821,19 +3831,19 @@ def pg_extensao(eid, aviso="", erro=False, codigo=""):
         p(7, "Faça o diagnóstico",
           '<p>Com a sala aberta, clique no brasão da extensão → <b>🧭 Diagnóstico desta aba</b>. Faça também na lista de processos.</p><p class="pp-st"></p>'),
     ])
-    corpo = f"""{EXT_CSS}<h2>🧩 Conectar a Licitanet – {e(nome)}</h2>
-<p class="sub">A Licitanet bloqueia o servidor, mas abre normalmente no <b>seu</b> computador. Por isso a ligação é feita por uma extensão no seu Chrome,
-que <b>só lê</b> a lista de processos e o chat e manda para o painel – os alertas chegam no Telegram e no celular. Ela não clica, não digita e não envia nada na Licitanet.</p>
+    corpo = f"""{EXT_CSS}<h2>🧩 Conectar {pn} – {e(nome)}</h2>
+<p class="sub">{"O gov.br barra o login vindo do servidor (captcha)" if cg else "A Licitanet bloqueia o servidor"}, mas abre normalmente no <b>seu</b> computador. Por isso a ligação é feita por uma extensão no seu Chrome,
+que <b>só lê</b> {"as mensagens do pregoeiro" if cg else "a lista de processos e o chat"} e manda para o painel – os alertas chegam no Telegram e no celular. Ela não digita e não envia nada na plataforma.</p>
 {msg}<div style="display:flex;gap:12px;align-items:center;margin-top:10px"><div class="pp-barra" style="flex:1"><i id="pp-bar" style="width:0"></i></div><b id="pp-cont">0 de 7</b></div>
 <div class="pp">{passos}</div>
 <div class="msg" id="pp-fim" style="display:none">🎉 <b>Tudo pronto!</b> A partir de agora as mensagens novas do pregoeiro chegam no Telegram e no celular.
-Deixe o computador ligado, com o Chrome aberto e logado na Licitanet, e a sala de disputa aberta nos dias de disputa.</div>
+Deixe o computador ligado, com o Chrome aberto e logado na {pn}{"" if cg else " (com a 🛡️ aba vigia ligada)"} nos dias de disputa.</div>
 <details class="sub"><summary><b>🧭 Últimos diagnósticos</b> (para o suporte)</summary><ul>{"".join(diags) or "<li>nenhum ainda</li>"}</ul></details>
 <p class="sub"><b>Bom saber:</b> na sala de disputa a extensão lê o chat do lote selecionado na tela e as notificações de mensagens. Se ela ficar mais de
-15 minutos sem mandar dados no horário de monitoramento, ou se a Licitanet sair do login, você recebe um aviso no Telegram.</p>
+15 minutos sem mandar dados no horário de monitoramento, ou se a {pn} sair do login, você recebe um aviso no Telegram.</p>
 <div class="acoes">{revogar}<a class="btn sec" href="/empresas">Voltar para Empresas</a></div>
 {EXT_JS.replace("__EID__", e(eid))}"""
-    return pagina("Conectar a Licitanet", corpo, "/empresas")
+    return pagina(f"Conectar {pn}", corpo, "/empresas")
 
 
 def estado_extensao(eid):
@@ -3850,25 +3860,26 @@ def estado_extensao(eid):
 
 def pg_licitanet():
     """Atalho (Aprender / Ajuda): leva ao passo a passo da extensão da empresa Licitanet do usuário."""
-    lic = [x for x in empresas() if x["cfg"].get("PLATAFORMA", "").lower() == "licitanet" and pode_editar_empresa(x["id"])]
+    lic = [x for x in empresas() if x["cfg"].get("PLATAFORMA", "").lower() in ("licitanet", "comprasgov") and pode_editar_empresa(x["id"])]
     if len(lic) == 1:
         return None, f"/extensao?eid={lic[0]['id']}"
     if lic:
-        itens = "".join(f'<a class="btn sec" style="display:block;margin:8px 0;text-align:left" href="/extensao?eid={e(x["id"])}">🏢 {e(x["nome"])}'
+        itens = "".join(f'<a class="btn sec" style="display:block;margin:8px 0;text-align:left" href="/extensao?eid={e(x["id"])}">🏢 {e(x["nome"])} <span class="tag parado">{e(x["plat"])}</span>'
                         f'<div class="sub" style="font-weight:400">{e(extensao.resumo(x["id"]))}</div></a>' for x in lic)
-        corpo = (f'<h2>🧩 Conectar a Licitanet</h2><p class="sub">Escolha a empresa. A mesma extensão do Chrome serve para todas: '
+        corpo = (f'<h2>🧩 Conectar Licitanet / Compras.gov.br</h2><p class="sub">Escolha a empresa. A mesma extensão do Chrome serve para todas: '
                  f'gere o código de cada uma e adicione na extensão.</p><div style="max-width:560px">{itens}</div>')
     else:
-        corpo = ('<h2>🧩 Conectar a Licitanet</h2><p class="sub">A Licitanet bloqueia o acesso vindo do servidor, então a ligação é feita por uma '
+        corpo = ('<h2>🧩 Conectar Licitanet / Compras.gov.br</h2><p class="sub">A Licitanet bloqueia o acesso vindo do servidor, então a ligação é feita por uma '
                  '<b>extensão no seu Chrome</b>, que só lê a lista de processos e o chat e manda para o painel. Primeiro cadastre a empresa:</p>'
-                 '<div class="acoes"><a class="btn" href="/empresas/nova?plataforma=licitanet">➕ Cadastrar empresa da Licitanet</a></div>'
+                 '<div class="acoes"><a class="btn" href="/empresas/nova?plataforma=licitanet">➕ Empresa da Licitanet</a>'
+                 '<a class="btn sec" href="/empresas/nova?plataforma=comprasgov">➕ Empresa do Compras.gov.br</a></div>'
                  '<p class="sub">Depois de salvar, você vai direto para o passo a passo de instalação (7 etapas que se marcam sozinhas).</p>')
-    return pagina("Conectar a Licitanet", corpo, "/licitanet"), ""
+    return pagina("Conectar plataformas", corpo, "/licitanet"), ""
 
 
 def eid_extensao(eid):
     return (bool(re.fullmatch(r"[a-z0-9-]{1,40}", eid or "")) and (EMPRESAS / f"{eid}.env").exists()
-            and ler_env(EMPRESAS / f"{eid}.env").get("PLATAFORMA", "").lower() == "licitanet" and pode_editar_empresa(eid))
+            and ler_env(EMPRESAS / f"{eid}.env").get("PLATAFORMA", "").lower() in ("licitanet", "comprasgov") and pode_editar_empresa(eid))
 
 
 _EXT_LIMITE = {}
@@ -9339,6 +9350,8 @@ def salvar_empresa(f, eid=None):
          "EMPRESA_DONO": dono}
     if plat == "licitanet":   # a Licitanet bloqueia o servidor: os dados chegam pela extensão do Chrome do licitante
         v["LICITANET_MODO"] = "extensao"
+    if plat == "comprasgov":  # o gov.br barra o login vindo do servidor (captcha): também pela extensão
+        v["COMPRASGOV_MODO"] = "extensao"
     f["_eid"] = eid
     if senha:
         v["BLL_SENHA"] = senha
@@ -9540,11 +9553,15 @@ class Painel(BaseHTTPRequestHandler):
             ev = None
         if not ev:
             return resp(400, {"ok": False, "erro": "dados inválidos"})
-        nome_emp = ler_env(EMPRESAS / f"{eid}.env").get("EMPRESA_NOME", "")
+        cfg_emp = ler_env(EMPRESAS / f"{eid}.env")
+        nome_emp, plat_emp = cfg_emp.get("EMPRESA_NOME", ""), cfg_emp.get("PLATAFORMA", "").lower()
+        if ev.get("plataforma") and plat_emp and ev["plataforma"] != plat_emp:
+            return resp(409, {"ok": False, "empresa": nome_emp, "plataforma": plat_emp,
+                              "erro": f"Este código é de {nome_emp} na {extensao.PLATAFORMAS.get(plat_emp, plat_emp)}, não nesta plataforma."})
         if ev.get("empresa_tela") and not extensao.nome_bate(ev["empresa_tela"], nome_emp):   # nunca mistura empresas
             return resp(409, {"ok": False, "empresa": nome_emp, "erro": f"Esta aba está logada em outra empresa ({ev['empresa_tela'][:60]}), não em {nome_emp}."})
         extensao.registrar(eid, ev)
-        return resp(200, {"ok": True, "empresa": ler_env(EMPRESAS / f"{eid}.env").get("EMPRESA_NOME", "")})
+        return resp(200, {"ok": True, "empresa": nome_emp, "plataforma": plat_emp})
 
     def comprasgov_post(self, p, f):
         eid = f.get("eid", "")
@@ -10611,11 +10628,12 @@ class Painel(BaseHTTPRequestHandler):
                 arq_x = EMPRESAS / f"{eid_x}.env"
                 if p == "/extensao/desligar":
                     extensao.revogar(eid_x)
-                    gravar_env(arq_x, {}, remover=("LICITANET_MODO",))
+                    gravar_env(arq_x, {}, remover=("LICITANET_MODO", "COMPRASGOV_MODO"))
                     sh("systemctl", "restart", f"monitor-bll@{eid_x}")
                     return self.enviar(pg_extensao(eid_x, "Extensão desligada: o código antigo não vale mais."))
                 cod_x = extensao.gerar_codigo(eid_x, login_atual())
-                gravar_env(arq_x, {"LICITANET_MODO": "extensao"})
+                plat_x = ler_env(arq_x).get("PLATAFORMA", "").lower()
+                gravar_env(arq_x, {"COMPRASGOV_MODO" if plat_x == "comprasgov" else "LICITANET_MODO": "extensao"})
                 sh("systemctl", "enable", f"monitor-bll@{eid_x}")
                 sh("systemctl", "restart", f"monitor-bll@{eid_x}")
                 return self.enviar(pg_extensao(eid_x, "Código gerado. O monitor desta empresa passou a receber os dados pela extensão.", codigo=cod_x))
@@ -10708,7 +10726,7 @@ class Painel(BaseHTTPRequestHandler):
                 err = salvar_empresa(f)
                 if err:
                     return self.enviar(form_empresa(dados=f, aviso=err))
-                if f.get("plataforma") == "licitanet" and f.get("_eid"):   # já leva para o passo a passo da extensão
+                if f.get("plataforma") in ("licitanet", "comprasgov") and f.get("_eid"):   # já leva para o passo a passo da extensão
                     return self.redirecionar(f"/extensao?eid={f['_eid']}")
                 return self.redirecionar("/empresas?ok=cadastrada")
             if p == "/config":

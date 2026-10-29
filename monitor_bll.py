@@ -2396,6 +2396,7 @@ def ext_processar_eventos(db, eventos, agora):
     st = extensao.situacao(CFG.get("EMPRESA_ID", ""))
     salas = st.get("salas", {})
     valida = lambda x: bool(x) and not any(ch.isdigit() for ch in x)  # noqa: E731
+    plat = CFG.get("PLATAFORMA", "licitanet").lower()
     novas = []
     for ev in eventos:
         if ev.get("tipo") == "processos":
@@ -2406,14 +2407,15 @@ def ext_processar_eventos(db, eventos, agora):
                                     (p["processo"], p["promotor"])).fetchone()
                 if antiga and antiga[0] != p["situacao"] and valida(antiga[0]) and valida(p["situacao"]):
                     novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": "Mudança de situação",
-                                  "horario": agora, "autor": "Licitanet", "texto": f"{antiga[0]} → {p['situacao']}", "id": None})
-                url = f"{LN_PORTAL}/sala-disputa/{p['sala']}" if p.get("sala") else (antiga[1] if antiga else "")
+                                  "horario": agora, "autor": plataforma_nome(), "texto": f"{antiga[0]} → {p['situacao']}", "id": None})
+                url = ((f"{LN_PORTAL}/sala-disputa/{p['sala']}" if plat == "licitanet" else p.get("url", "")) if p.get("sala")
+                       else (antiga[1] if antiga else ""))
                 db.execute("INSERT OR REPLACE INTO processos VALUES(?,?,?,?,?,?,?)",
                            (p["processo"], p["promotor"], p["situacao"], p.get("disputa", ""), "", url, agora))
         elif ev.get("tipo") == "mensagens":
             sala = ev.get("sala", "")
             ref = salas.get(sala) or {}
-            processo, promotor = ref.get("processo", ""), ref.get("promotor", "")
+            processo, promotor = ev.get("processo") or ref.get("processo", ""), ev.get("promotor") or ref.get("promotor", "")
             if not processo:   # sala sem link na lista: tenta o número do processo no cabeçalho da página
                 m = re.search(r"\b(\d{1,6}/\d{4})\b", ev.get("cabecalho", ""))
                 processo = m.group(1) if m else f"Sala {sala}"
@@ -2421,12 +2423,15 @@ def ext_processar_eventos(db, eventos, agora):
             if linha and not ref:
                 processo, promotor = linha
             base = f"ext_base:{processo}|{promotor}"   # por processo: se o nome da sala mudar, a 1ª leitura de novo só registra
-            primeira = estado(db, base) is None and not db.execute(
-                "SELECT 1 FROM mensagens WHERE processo=? AND promotor=? LIMIT 1", (processo, promotor)).fetchone()
+            marca = estado(db, base)
+            if marca is None:
+                primeira = not db.execute("SELECT 1 FROM mensagens WHERE processo=? AND promotor=? LIMIT 1", (processo, promotor)).fetchone()
+            else:   # o histórico de um processo pode chegar em partes (lotes/itens): 90 s depois da 1ª leitura ainda é histórico
+                primeira = marca.startswith("t:") and time.time() - float(marca[2:]) < 90
             escopo = (ev.get("escopo") or "Chat").title()
             for m in ev.get("mensagens", []):
                 chave = m.get("id") or hash_msg(m.get("cab", ""), m.get("msg", ""))
-                mid = hash_msg("licitanet", processo, promotor, str(chave))
+                mid = hash_msg(plat, processo, promotor, str(chave))
                 if db.execute("SELECT 1 FROM mensagens WHERE id=?", (mid,)).fetchone():
                     continue
                 autor, horario = m.get("cab", ""), ""
@@ -2439,8 +2444,9 @@ def ext_processar_eventos(db, eventos, agora):
                     novas.append({"processo": processo, "promotor": promotor, "escopo": escopo, "horario": horario,
                                   "autor": autor or "—", "texto": m["msg"], "id": mid})
             if primeira:
-                estado(db, base, agora)
-                log(f"Extensão: sala {sala} ({processo}) registrada – {len(ev.get('mensagens', []))} mensagem(ns) de histórico.")
+                if marca is None:
+                    estado(db, base, f"t:{time.time()}")
+                log(f"Extensão: sala {sala} ({processo}) – {len(ev.get('mensagens', []))} mensagem(ns) de histórico registradas.")
     db.commit()
     return novas
 
@@ -2454,7 +2460,7 @@ def rodar_extensao(db, uma_vez=False):
     import extensao
     eid = CFG.get("EMPRESA_ID", "")
     avisou_parada = avisou_login = False
-    log("Licitanet: modo extensão do Chrome (o servidor não abre a Licitanet).")
+    log(f"{plataforma_nome()}: modo extensão do Chrome (os dados chegam do Chrome do licitante).")
     while True:
         try:
             agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
@@ -2475,15 +2481,15 @@ def rodar_extensao(db, uma_vez=False):
                               if st.get("estado") == "sem_aba" and time.time() - float(st.get("contato") or 0) < 300 else
                               "a extensão do Chrome não manda dados")
                     telegram(f"🧩 <b>{e_html(CFG.get('EMPRESA_NOME', ''))}</b>: {motivo} há {int(parada)} min. "
-                             "Confira se o computador está ligado, com o Chrome aberto e logado na Licitanet (lista de processos ou sala de disputa aberta).")
+                             f"Confira se o computador está ligado, com o Chrome aberto e logado na {plataforma_nome()}.")
                     avisou_parada = True
                 gerar_painel(db, f"🧩 Extensão sem contato há {int(parada)} min")
             elif st.get("estado") == "deslogado":
                 if not avisou_login:
-                    telegram(f"🔐 <b>{e_html(CFG.get('EMPRESA_NOME', ''))}</b>: a Licitanet saiu do login no seu Chrome. "
+                    telegram(f"🔐 <b>{e_html(CFG.get('EMPRESA_NOME', ''))}</b>: a {plataforma_nome()} saiu do login no seu Chrome. "
                              "Entre de novo para a extensão continuar lendo.")
                     avisou_login = True
-                gerar_painel(db, "🔐 Licitanet deslogada no Chrome – entre de novo")
+                gerar_painel(db, f"🔐 {plataforma_nome()} deslogada no Chrome – entre de novo")
             else:
                 avisou_parada = False
                 if st.get("estado") != "deslogado":
@@ -2553,7 +2559,8 @@ class VagaNavegador:
 
 def rodar(uma_vez=False, visivel=False, diag=False):
     db = abrir_banco()
-    if CFG.get("PLATAFORMA", "bll").lower() == "licitanet" and CFG.get("LICITANET_MODO", "") == "extensao":
+    if ((CFG.get("PLATAFORMA", "bll").lower() == "licitanet" and CFG.get("LICITANET_MODO", "") == "extensao")
+            or (CFG.get("PLATAFORMA", "bll").lower() == "comprasgov" and CFG.get("COMPRASGOV_MODO", "") == "extensao")):
         return rodar_extensao(db, uma_vez)
     intervalo = max(1.0, float(CFG["INTERVALO_MINUTOS"].replace(",", ".")))  # mínimo 1 minuto
     avisou_logout = False
