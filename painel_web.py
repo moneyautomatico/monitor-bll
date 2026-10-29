@@ -3586,6 +3586,8 @@ def form_empresa(eid=None):
 <option value="pcp" {"selected" if plat == "pcp" else ""}>Portal de Compras Públicas</option>
 <option value="bnc" {"selected" if plat == "bnc" else ""}>BNC Compras</option>
 <option value="comprasgov" {"selected" if plat == "comprasgov" else ""}>Compras.gov.br (governo federal)</option></select>
+<div class="so-lx msg">🧩 Na Licitanet não cadastramos usuário e senha: a Licitanet bloqueia o servidor, então a ligação é feita por uma
+<b>extensão no seu Chrome</b>, que só lê a lista de processos e o chat. Depois de salvar, você vai direto para o <b>passo a passo</b> de instalação.</div>
 <div class="so-cg msg">🔌 No Compras.gov.br não cadastramos usuário e senha: depois de salvar, clique em <b>Conectar</b> na lista de empresas
 e entre você mesmo com a conta gov.br (o captcha é com você). O monitor só lê com a sessão aberta.</div>
 <div class="nao-cg"><label>Usuário / e-mail de login</label><input class="campo" name="email" value="{g('BLL_EMAIL')}" required>
@@ -3609,10 +3611,11 @@ e entre você mesmo com a conta gov.br (o captcha é com você). O monitor só l
 <label>Tópico ntfy próprio <small>(opcional, alarme no celular)</small></label>
 <input class="campo" name="ntfy" value="{g('EMPRESA_NTFY_TOPICO')}">
 <div class="acoes"><button>Salvar</button><a class="btn sec" href="{ue('/empresas')}">Cancelar</a></div></form>{remover}</div>
-<script>function trocaPlat(){{const v=document.getElementById('plat').value,ln=v==='licitanet',bll=(v==='bll'||v==='bnc');
+<script>function trocaPlat(){{const v=document.getElementById('plat').value,ln=false,bll=(v==='bll'||v==='bnc');
+document.querySelectorAll('.so-lx').forEach(x=>x.style.display=v==='licitanet'?'':'none');
 document.querySelectorAll('.so-bll').forEach(x=>x.style.display=bll?'':'none');
 document.querySelectorAll('.so-ln').forEach(x=>x.style.display=ln?'':'none');
-const cg=v==='comprasgov';document.querySelectorAll('.so-cg').forEach(x=>x.style.display=cg?'':'none');
+const cg=v==='comprasgov'||v==='licitanet';document.querySelectorAll('.so-cg').forEach(x=>x.style.display=v==='comprasgov'?'':'none');
 document.querySelectorAll('.nao-cg').forEach(x=>{{x.style.display=cg?'none':'';x.querySelectorAll('input').forEach(i=>{{if(cg){{if(i.required)i.dataset.req='1';i.required=false;}}else if(i.dataset.req)i.required=true;}});}});}}trocaPlat();</script>"""
     return pagina("Empresa", abas_admin_topo(corpo, "emp"), "/empresas")
 
@@ -9289,9 +9292,7 @@ def salvar_empresa(f, eid=None):
         plat = "bll"
     if plat in ("bll", "bnc") and senha and not re.fullmatch(r"\d{6}", senha):
         return "A senha da BLL/BNC deve ter 6 números."
-    if plat == "licitanet" and not re.sub(r"\D", "", f.get("cnpj", "")):
-        return "Informe o CNPJ da empresa na Licitanet."
-    if novo and not senha and plat != "comprasgov":
+    if novo and not senha and plat not in ("comprasgov", "licitanet"):
         return "Informe a senha da BLL."
     modo = f.get("enviar_para", "geral")
     if modo in ("proprio", "ambos") and not f.get("tg_chat", "").strip():
@@ -9305,6 +9306,9 @@ def salvar_empresa(f, eid=None):
          "EMPRESA_TELEGRAM_CHAT_ID": f.get("tg_chat", "").strip(), "EMPRESA_NTFY_TOPICO": f.get("ntfy", "").strip(),
          "PLATAFORMA": plat, "EMPRESA_CNPJ": f.get("cnpj", "").strip(), "LICITANET_FUNCAO": f.get("funcao", "").strip(),
          "EMPRESA_DONO": dono}
+    if plat == "licitanet":   # a Licitanet bloqueia o servidor: os dados chegam pela extensão do Chrome do licitante
+        v["LICITANET_MODO"] = "extensao"
+    f["_eid"] = eid
     if senha:
         v["BLL_SENHA"] = senha
     if f.get("tg_token", "").strip():
@@ -10667,6 +10671,8 @@ class Painel(BaseHTTPRequestHandler):
                 err = salvar_empresa(f)
                 if err:
                     return self.enviar(pg_empresas(e(err), True))
+                if f.get("plataforma") == "licitanet" and f.get("_eid"):   # já leva para o passo a passo da extensão
+                    return self.redirecionar(f"/extensao?eid={f['_eid']}")
                 return self.redirecionar("/empresas?ok=cadastrada")
             if p == "/config":
                 if "INTERVALO_MINUTOS" not in f or "URGENTE_PALAVRAS" not in f:   # formulário incompleto: não apaga nada
