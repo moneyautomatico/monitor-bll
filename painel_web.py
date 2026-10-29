@@ -63,6 +63,7 @@ import trava_teste
 import iniciante
 import robo
 import comprasgov
+import extensao
 
 PASTA = Path(__file__).resolve().parent
 EMPRESAS = PASTA / "empresas"
@@ -3542,7 +3543,9 @@ def pg_empresas(aviso="", erro=False):
 <td><span class="tag {cls}">{e(txt)}</span></td><td class="ocultar">{e(x['cfg'].get('ENVIAR_PARA', 'geral'))}</td>
 <td><div class="acoes" style="margin:0"><a class="btn sec" href="{ue('/empresas/' + x['id'])}">Editar</a>{pausar}
 {botao(ue(f"/empresas/{x['id']}/testar"), "Testar alerta", "sec")}<a class="btn sec" href="{ue('/empresas/' + x['id'] + '/log')}">Log</a>
-{f'<a class="btn" href="/comprasgov?eid={e(x["id"])}">🔌 Conectar</a>' if x["cfg"].get("PLATAFORMA", "").lower() == "comprasgov" else ""}</div>
+{f'<a class="btn" href="/comprasgov?eid={e(x["id"])}">🔌 Conectar</a>' if x["cfg"].get("PLATAFORMA", "").lower() == "comprasgov" else ""}
+{f'<a class="btn" href="/extensao?eid={e(x["id"])}">🧩 Extensão</a>' if x["cfg"].get("PLATAFORMA", "").lower() == "licitanet" else ""}</div>
+{f'<div class="sub">{e(extensao.resumo(x["id"]))}</div>' if x["cfg"].get("PLATAFORMA", "").lower() == "licitanet" else ""}
 {f'<div class="sub">{e(comprasgov.resumo_estado(x["id"]))}</div>' if x["cfg"].get("PLATAFORMA", "").lower() == "comprasgov" else ""}</td></tr>"""
     corpo = f"""<h2>Empresas</h2><p class="sub">{"Todas as empresas do sistema, de todos os usuários." if eh_admin() else
  "As empresas que você cadastrou. Elas e os dados delas (mensagens, processos, agenda, documentos…) só aparecem para você e para o administrador."}</p>
@@ -3710,6 +3713,73 @@ def eid_comprasgov(eid):
     """Empresa existe, é do Compras.gov.br e o usuário pode mexer nela."""
     return (bool(re.fullmatch(r"[a-z0-9-]{1,40}", eid or "")) and (EMPRESAS / f"{eid}.env").exists()
             and ler_env(EMPRESAS / f"{eid}.env").get("PLATAFORMA", "").lower() == "comprasgov" and pode_editar_empresa(eid))
+
+
+# ------------------------------------------------------------------ extensão do Chrome (Licitanet bloqueia o servidor)
+def pg_extensao(eid, aviso="", erro=False, codigo=""):
+    cfg = ler_env(EMPRESAS / f"{eid}.env")
+    nome = cfg.get("EMPRESA_NOME", eid)
+    info = extensao.info_codigo(eid)
+    st = extensao.situacao(eid)
+    msg = f'<div class="msg {"erro" if erro else ""}">{e(aviso)}</div>' if aviso else ""
+    novo = (f'<div class="msg" style="border:2px solid #34c27a"><b>🔑 Código de conexão (aparece só agora – copie e cole na extensão):</b>'
+            f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><input class="campo" id="cod" value="{e(codigo)}" readonly style="flex:1 1 280px;font-family:monospace">'
+            f'<button type="button" class="sec" onclick="navigator.clipboard.writeText(document.getElementById(\'cod\').value);this.textContent=\'✅ Copiado\'">📋 Copiar</button></div>'
+            '<p class="sub" style="margin:8px 0 0">Não mande este código por mensagem: quem tiver ele consegue enviar dados para esta empresa no painel. '
+            'Se vazar, gere outro (o antigo para de valer).</p></div>') if codigo else ""
+    diags = []
+    a_d = EMPRESAS / eid / "extensao_diag.jsonl"
+    for ln in (a_d.read_text(encoding="utf-8").splitlines()[-5:] if a_d.exists() else []):
+        try:
+            d = json.loads(ln)
+            x = d.get("estrutura") or {}
+            diags.append(f'<li>{e(datetime.fromtimestamp(d.get("recebido", 0)).strftime("%d/%m %H:%M"))} · <code>{e(x.get("caminho", ""))}</code> · '
+                         f'processos lidos: <b>{e(x.get("processos_lidos", "?"))}</b> · mensagens lidas: <b>{e(x.get("chat_lido", "?"))}</b> · '
+                         f'lotes: {e(x.get("lotes", "?"))}{" · ⚠️ tela de login" if x.get("login") else ""}</li>')
+        except Exception:  # noqa: BLE001
+            continue
+    gerar = (f'<form method="post" action="/extensao/codigo" style="display:inline"><input type="hidden" name="csrf" value="{CSRF}">'
+             f'<input type="hidden" name="eid" value="{e(eid)}"><button{" class=sec" if info else ""}>🔑 {"Gerar outro código" if info else "Gerar código de conexão"}</button></form>')
+    revogar = (f'<form method="post" action="/extensao/desligar" style="display:inline" onsubmit="return confirm(\'Desligar a extensão desta empresa? O código atual para de valer.\')">'
+               f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="eid" value="{e(eid)}"><button class="sec">Desligar</button></form>') if info else ""
+    corpo = f"""<h2>🧩 Extensão do Chrome – {e(nome)}</h2>
+<p class="sub">A Licitanet bloqueia o servidor (responde <i>403 Forbidden</i> para ele), mas abre normalmente no <b>seu</b> computador.
+A extensão fica no seu Chrome e <b>só lê</b> o que já está na tela – a lista de processos e o chat da sala de disputa – e manda para o painel,
+que dispara os alertas no Telegram e no celular. Ela não clica, não digita e não envia nada na Licitanet.</p>
+{msg}{novo}
+<div class="cg-passos"><b>Situação:</b> {e(extensao.resumo(eid))}{(" · código criado em " + e(info.get("criado", ""))) if info else ""}
+{(" · versão " + e(st.get("versao", ""))) if st.get("versao") else ""}<div class="acoes" style="margin:8px 0 0">{gerar}{revogar}</div></div>
+<h3>Como instalar (uma vez)</h3>
+<ol class="sub" style="line-height:1.8;font-size:14px;color:var(--txt)">
+<li><a class="btn sec" href="/extensao.zip">⬇️ Baixar a extensão (.zip)</a> e extraia o arquivo numa pasta que você não vá apagar (ex.: Documentos).</li>
+<li>No Chrome, abra <code>chrome://extensions</code> e ligue o <b>Modo do desenvolvedor</b> (canto superior direito).</li>
+<li>Clique em <b>Carregar sem compactação</b> e escolha a pasta <b>expert-licitante-extensao</b>.</li>
+<li>Clique no ícone 🧩 do Chrome, fixe o <b>Expert Licitante – Monitor</b>, abra-o, cole o <b>código de conexão</b> e clique em <b>Salvar e testar</b>.</li>
+<li>Entre na Licitanet e deixe abertas a <b>lista de processos</b> e a <b>sala de disputa</b> dos processos que quer vigiar.</li>
+<li>Em cada tela, clique no ícone da extensão → <b>🧭 Diagnóstico desta aba</b>. O resultado aparece abaixo.</li></ol>
+<p class="sub">Importante: o computador precisa ficar ligado, com o Chrome aberto e logado na Licitanet, no horário em que você quer ser avisado.
+Na sala de disputa, a extensão lê o chat do lote que estiver selecionado na tela e as notificações de mensagens. Se a extensão parar de mandar
+dados por mais de 15 minutos no horário de monitoramento, você recebe um aviso no Telegram.</p>
+<h3>🧭 Últimos diagnósticos</h3><ul class="sub">{"".join(diags) or "<li>nenhum ainda</li>"}</ul>
+<p><a class="btn sec" href="/empresas">Voltar</a></p>"""
+    return pagina("Extensão do Chrome", corpo, "/empresas")
+
+
+def eid_extensao(eid):
+    return (bool(re.fullmatch(r"[a-z0-9-]{1,40}", eid or "")) and (EMPRESAS / f"{eid}.env").exists()
+            and ler_env(EMPRESAS / f"{eid}.env").get("PLATAFORMA", "").lower() == "licitanet" and pode_editar_empresa(eid))
+
+
+_EXT_LIMITE = {}
+
+
+def ext_limite_ok(eid):
+    """No máximo 240 envios por minuto por empresa (a extensão manda bem menos)."""
+    agora = time.time()
+    fila = [t for t in _EXT_LIMITE.get(eid, []) if agora - t < 60]
+    fila.append(agora)
+    _EXT_LIMITE[eid] = fila
+    return len(fila) <= 240
 
 
 # ------------------------------------------------------------------ declarações
@@ -9340,6 +9410,37 @@ class Painel(BaseHTTPRequestHandler):
                 return self.negar("Você não tem acesso a esta empresa.")
         return True
 
+    def api_extensao(self):
+        """Recebe o que a extensão leu no Chrome do licitante. Autenticação: código de conexão da empresa (Bearer)."""
+        def resp(cod, d):
+            dados = json.dumps(d, ensure_ascii=False).encode("utf-8")
+            self.send_response(cod)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(dados)))
+            self.cabecalhos_seguranca()
+            self.end_headers()
+            self.wfile.write(dados)
+        tam = int(self.headers.get("Content-Length", "0") or 0)
+        if tam > 600_000:
+            return resp(413, {"ok": False, "erro": "dados grandes demais"})
+        corpo = self.rfile.read(tam)
+        cod = (self.headers.get("Authorization", "") or "").removeprefix("Bearer ").strip()
+        eid = extensao.empresa_do_codigo(cod)
+        if not eid or not (EMPRESAS / f"{eid}.env").exists():
+            time.sleep(1)
+            return resp(401, {"ok": False, "erro": "Código de conexão inválido. Gere um novo no painel (Empresas → 🧩 Extensão)."})
+        if not ext_limite_ok(eid):
+            return resp(429, {"ok": False, "erro": "envios demais em pouco tempo"})
+        try:
+            ev = extensao.validar_evento(json.loads(corpo.decode("utf-8")))
+        except Exception:  # noqa: BLE001
+            ev = None
+        if not ev:
+            return resp(400, {"ok": False, "erro": "dados inválidos"})
+        extensao.registrar(eid, ev)
+        return resp(200, {"ok": True, "empresa": ler_env(EMPRESAS / f"{eid}.env").get("EMPRESA_NOME", "")})
+
     def comprasgov_post(self, p, f):
         eid = f.get("eid", "")
         if not eid_comprasgov(eid):
@@ -9674,6 +9775,15 @@ class Painel(BaseHTTPRequestHandler):
                 return self.enviar(pg_empresas(AVISOS.get(q.get("ok", ""), "")))
             if p == "/empresas/nova":
                 return self.enviar(form_empresa())
+            if p == "/extensao":
+                eid_x = q.get("eid", "")
+                if not eid_extensao(eid_x) or not self.permitido(p, {"eid": eid_x}):
+                    return self.redirecionar("/empresas")
+                return self.enviar(pg_extensao(eid_x))
+            if p == "/extensao.zip":
+                host = self.headers.get("Host", "")
+                servidor = f"https://{host}" if re.fullmatch(r"[a-z0-9.-]+(:\d+)?", host or "") and "." in host else "https://expertlicitante.com.br"
+                return self.baixar(extensao.pacote_zip(servidor), "expert-licitante-extensao.zip", "application/zip")
             if p in ("/comprasgov", "/comprasgov/tela"):
                 eid_cg = q.get("eid", "")
                 if not eid_comprasgov(eid_cg) or not self.permitido(p, {"eid": eid_cg}):
@@ -9984,6 +10094,8 @@ class Painel(BaseHTTPRequestHandler):
             return self.login()
         if urllib.parse.urlparse(self.path).path.rstrip("/") == "/teste-gratis":
             return self.cadastro_teste()
+        if urllib.parse.urlparse(self.path).path.rstrip("/") == "/api/extensao":
+            return self.api_extensao()
         if not self.autorizado():
             return
         tam = int(self.headers.get("Content-Length", "0") or 0)
@@ -10371,6 +10483,21 @@ class Painel(BaseHTTPRequestHandler):
         try:
             if p.startswith("/comprasgov/"):
                 return self.comprasgov_post(p, f)
+            if p in ("/extensao/codigo", "/extensao/desligar"):
+                eid_x = f.get("eid", "")
+                if not eid_extensao(eid_x):
+                    return self.redirecionar("/empresas")
+                arq_x = EMPRESAS / f"{eid_x}.env"
+                if p == "/extensao/desligar":
+                    extensao.revogar(eid_x)
+                    gravar_env(arq_x, {}, remover=("LICITANET_MODO",))
+                    sh("systemctl", "restart", f"monitor-bll@{eid_x}")
+                    return self.enviar(pg_extensao(eid_x, "Extensão desligada: o código antigo não vale mais."))
+                cod_x = extensao.gerar_codigo(eid_x, login_atual())
+                gravar_env(arq_x, {"LICITANET_MODO": "extensao"})
+                sh("systemctl", "enable", f"monitor-bll@{eid_x}")
+                sh("systemctl", "restart", f"monitor-bll@{eid_x}")
+                return self.enviar(pg_extensao(eid_x, "Código gerado. O monitor desta empresa passou a receber os dados pela extensão.", codigo=cod_x))
             if p.startswith("/preferencias/"):
                 return self.preferencias(p, f)
             if p in ("/conta/senha", "/admin/senha"):

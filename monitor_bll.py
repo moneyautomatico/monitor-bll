@@ -2389,6 +2389,110 @@ def processar_comprasgov(db, page, primeira_vez, diag=False):
     return "ok"
 
 
+# ----------------------------------------------------------------- Licitanet pela extensão do Chrome do licitante
+def ext_processar_eventos(db, eventos, agora):
+    """Transforma o que a extensão leu (lista de processos e chat da sala) em processos/mensagens + alertas."""
+    import extensao
+    st = extensao.situacao(CFG.get("EMPRESA_ID", ""))
+    salas = st.get("salas", {})
+    valida = lambda x: bool(x) and not any(ch.isdigit() for ch in x)  # noqa: E731
+    novas = []
+    for ev in eventos:
+        if ev.get("tipo") == "processos":
+            for p in ev.get("lista", []):
+                if not p.get("processo"):
+                    continue
+                antiga = db.execute("SELECT situacao, url FROM processos WHERE processo=? AND promotor=?",
+                                    (p["processo"], p["promotor"])).fetchone()
+                if antiga and antiga[0] != p["situacao"] and valida(antiga[0]) and valida(p["situacao"]):
+                    novas.append({"processo": p["processo"], "promotor": p["promotor"], "escopo": "Mudança de situação",
+                                  "horario": agora, "autor": "Licitanet", "texto": f"{antiga[0]} → {p['situacao']}", "id": None})
+                url = f"{LN_PORTAL}/sala-disputa/{p['sala']}" if p.get("sala") else (antiga[1] if antiga else "")
+                db.execute("INSERT OR REPLACE INTO processos VALUES(?,?,?,?,?,?,?)",
+                           (p["processo"], p["promotor"], p["situacao"], p.get("disputa", ""), "", url, agora))
+        elif ev.get("tipo") == "mensagens":
+            sala = ev.get("sala", "")
+            ref = salas.get(sala) or {}
+            processo, promotor = ref.get("processo", ""), ref.get("promotor", "")
+            if not processo:   # sala sem link na lista: tenta o número do processo no cabeçalho da página
+                m = re.search(r"\b(\d{1,6}/\d{4})\b", ev.get("cabecalho", ""))
+                processo = m.group(1) if m else f"Sala {sala}"
+            linha = db.execute("SELECT processo, promotor FROM processos WHERE url LIKE ?", (f"%/sala-disputa/{sala}",)).fetchone() if sala else None
+            if linha and not ref:
+                processo, promotor = linha
+            base = f"ext_base:{processo}|{promotor}"   # por processo: se o nome da sala mudar, a 1ª leitura de novo só registra
+            primeira = estado(db, base) is None and not db.execute(
+                "SELECT 1 FROM mensagens WHERE processo=? AND promotor=? LIMIT 1", (processo, promotor)).fetchone()
+            escopo = (ev.get("escopo") or "Chat").title()
+            for m in ev.get("mensagens", []):
+                chave = m.get("id") or hash_msg(m.get("cab", ""), m.get("msg", ""))
+                mid = hash_msg("licitanet", processo, promotor, str(chave))
+                if db.execute("SELECT 1 FROM mensagens WHERE id=?", (mid,)).fetchone():
+                    continue
+                autor, horario = m.get("cab", ""), ""
+                mm = re.match(r"(.*?)\s*-\s*(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}(?::\d{2})?)\s*$", m.get("cab", ""))
+                if mm:
+                    autor, horario = mm.group(1).strip(), mm.group(2)
+                db.execute("INSERT INTO mensagens VALUES(?,?,?,?,?,?,?,?,?)",
+                           (mid, processo, promotor, escopo, horario, autor or "—", m["msg"], agora, 1 if primeira else 0))
+                if not primeira:   # a 1ª leitura de uma sala só registra o histórico (sem enxurrada de alertas)
+                    novas.append({"processo": processo, "promotor": promotor, "escopo": escopo, "horario": horario,
+                                  "autor": autor or "—", "texto": m["msg"], "id": mid})
+            if primeira:
+                estado(db, base, agora)
+                log(f"Extensão: sala {sala} ({processo}) registrada – {len(ev.get('mensagens', []))} mensagem(ns) de histórico.")
+    db.commit()
+    return novas
+
+
+def e_html(t):
+    return html.escape(t or "")
+
+
+def rodar_extensao(db, uma_vez=False):
+    """Licitanet bloqueia o servidor: os dados chegam pela extensão do Chrome do licitante (sem navegador aqui)."""
+    import extensao
+    eid = CFG.get("EMPRESA_ID", "")
+    avisou_parada = avisou_login = False
+    log("Licitanet: modo extensão do Chrome (o servidor não abre a Licitanet).")
+    while True:
+        try:
+            agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            eventos = extensao.consumir(eid)
+            novas = ext_processar_eventos(db, eventos, agora) if eventos else []
+            if novas:
+                ignorar = {s.strip().upper() for s in CFG["SITUACOES_IGNORADAS"].split(",") if s.strip()}
+                n_ativos = db.execute("SELECT COUNT(*) FROM processos").fetchone()[0]
+                n_ativos -= sum(1 for (s_,) in db.execute("SELECT situacao FROM processos") if (s_ or "").upper() in ignorar)
+                if estado(db, "inicializado") is None:
+                    estado(db, "inicializado", agora)
+                notificar(db, novas, False, n_ativos, agora)
+            st = extensao.situacao(eid)
+            parada = (time.time() - float(st.get("ultima") or 0)) / 60
+            if dentro_do_horario() and st.get("ultima") and parada > 15:
+                if not avisou_parada:
+                    telegram(f"🧩 <b>{e_html(CFG.get('EMPRESA_NOME', ''))}</b>: a extensão do Chrome não manda dados há "
+                             f"{int(parada)} min. Confira se o computador está ligado, com o Chrome aberto e logado na Licitanet.")
+                    avisou_parada = True
+                gerar_painel(db, f"🧩 Extensão sem contato há {int(parada)} min")
+            elif st.get("estado") == "deslogado":
+                if not avisou_login:
+                    telegram(f"🔐 <b>{e_html(CFG.get('EMPRESA_NOME', ''))}</b>: a Licitanet saiu do login no seu Chrome. "
+                             "Entre de novo para a extensão continuar lendo.")
+                    avisou_login = True
+                gerar_painel(db, "🔐 Licitanet deslogada no Chrome – entre de novo")
+            else:
+                avisou_parada = False
+                if st.get("estado") != "deslogado":
+                    avisou_login = False
+                gerar_painel(db, "🧩 Monitor ativo pela extensão do Chrome" if st.get("ultima") else "🧩 Aguardando a extensão do Chrome")
+        except Exception as ex:  # noqa: BLE001
+            log(f"Extensão: erro {ex!r}")
+        if uma_vez:
+            break
+        time.sleep(10)
+
+
 # ----------------------------------------------------------------- execução
 def contexto(pw, visivel):
     visivel = visivel or CFG.get("NAVEGADOR_VISIVEL") == "1"  # no servidor roda numa tela virtual (xvfb)
@@ -2446,6 +2550,8 @@ class VagaNavegador:
 
 def rodar(uma_vez=False, visivel=False, diag=False):
     db = abrir_banco()
+    if CFG.get("PLATAFORMA", "bll").lower() == "licitanet" and CFG.get("LICITANET_MODO", "") == "extensao":
+        return rodar_extensao(db, uma_vez)
     intervalo = max(1.0, float(CFG["INTERVALO_MINUTOS"].replace(",", ".")))  # mínimo 1 minuto
     avisou_logout = False
     falhas_login = 0
