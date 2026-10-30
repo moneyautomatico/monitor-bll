@@ -3795,7 +3795,7 @@ def pg_extensao(eid, aviso="", erro=False, codigo=""):
         p(2, "Baixe a extensão",
           '<p>Baixe o arquivo e <b>extraia</b> (botão direito → <i>Extrair tudo</i>) numa pasta que você não vá apagar, por exemplo <b>Documentos</b>. '
           'Vai aparecer a pasta <b>expert-licitante-extensao</b>.</p>'
-          '<p class="pp-esp">Já tem a extensão instalada? Confira a versão em <b>chrome://extensions</b>: se for a <b>1.4.0</b> ou mais nova, pule para o passo 4. '
+          '<p class="pp-esp">Já tem a extensão instalada? Confira a versão em <b>chrome://extensions</b>: se for a <b>1.4.2</b> ou mais nova, pule para o passo 4. '
           'Se for mais antiga, baixe de novo, substitua os arquivos da pasta e clique no ⟳ da extensão.</p>'
           '<div class="acoes"><a class="btn" href="/extensao.zip" onclick="setTimeout(marcarBaixou,800)">⬇️ Baixar a extensão (.zip)</a>'
           '<button type="button" class="sec" onclick="marcarBaixou()">Já baixei e extraí</button></div>'),
@@ -3819,7 +3819,7 @@ def pg_extensao(eid, aviso="", erro=False, codigo=""):
           '<p>Entre na Licitanet normalmente e deixe aberta a tela com a <b>lista de processos</b> (Início / Processos).</p>'
           '<div class="acoes"><a class="btn sec" href="https://portal.licitanet.com.br/" target="_blank" rel="noopener">Abrir a Licitanet ↗</a></div><p class="pp-st"></p>')),
         p(6, "Ligue a 🛡️ vigia (recomendado)",
-          '<p>Abra <b>Compras → Licitação e Dispensa (novo) → Minhas participações</b> (para a extensão aprender o caminho) e clique no brasão da extensão → '
+          '<p>Com o login feito no Compras.gov.br (empresa certa), clique no brasão da extensão → '
           '<b>▶️ Ligar vigia</b>. Fica <b>uma aba fixada só para o Compras.gov.br</b>: ela abre cada pregão em andamento, o painel <b>Mensagens</b>, lê, volta '
           'para a lista e segue – sem abrir outras abas.</p>'
           '<p class="pp-esp">Não use a aba vigia para trabalhar (ela muda de página sozinha). Se a sessão do gov.br cair, entre de novo nessa aba.</p>'

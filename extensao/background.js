@@ -112,6 +112,9 @@ async function enviar(evento, tabId, codigoForcado) {
 // cada uma passa sozinha pelos processos em andamento da sua plataforma, só lendo. Nenhuma outra aba é aberta.
 const PORTAL = "https://portal.licitanet.com.br";
 const HOME_PADRAO = PORTAL + "/home-avulso";
+// Compras.gov.br → Compras → Licitação e Dispensa (novo) → "Minhas participações"
+const HOME_CG = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras?compra=";
+const limparHomeCG = (u) => (u || "").split("#")[0].replace(/([?&]compra=)[^&]*/, "$1");
 const IGNORAR = /HOMOLOG|CANCEL|REVOG|ANULAD|FRACASS|DESERT/i;
 const EM_DISPUTA = /DISPUTA|LANCE|SESS[AÃ]O|ABERT/i;
 const PAUSA_VOLTA = 60000;
@@ -132,7 +135,7 @@ async function marcarBadge() {
 }
 async function homes() {
   const l = await chrome.storage.local.get(["vigiaHome", "vigiaHomeCG"]);
-  return {licitanet: l.vigiaHome || HOME_PADRAO, comprasgov: l.vigiaHomeCG || ""};
+  return {licitanet: l.vigiaHome || HOME_PADRAO, comprasgov: l.vigiaHomeCG || HOME_CG};
 }
 async function plataformasComEmpresa() {
   const {contas} = await config();
@@ -140,7 +143,7 @@ async function plataformasComEmpresa() {
 }
 
 async function ligarVigia(p, home) {
-  if (home) await chrome.storage.local.set(p === "licitanet" ? {vigiaHome: home} : {vigiaHomeCG: home});
+  if (home) await chrome.storage.local.set(p === "licitanet" ? {vigiaHome: home} : {vigiaHomeCG: limparHomeCG(home)});
   const vs = await vigias();
   if (vs[p] && vs[p].tabId) { try { await chrome.tabs.get(vs[p].tabId); return vs[p]; } catch (e) { /* aba fechada */ } }
   const h = await homes();
@@ -204,7 +207,7 @@ chrome.tabs.onUpdated.addListener((id, info) => {
 
 async function tratarVigia(m, tabId) {
   if (m.cgHome) {   // lista "Minhas participações" do Compras.gov.br (de qualquer aba): a vigia aprende o endereço
-    await chrome.storage.local.set({vigiaHomeCG: m.cgHome});
+    await chrome.storage.local.set({vigiaHomeCG: limparHomeCG(m.cgHome)});
     if (!m.cgProximo) return {ok: true};
   }
   const a = await vigiaDaAba(tabId);

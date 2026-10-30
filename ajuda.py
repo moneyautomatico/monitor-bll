@@ -18,7 +18,7 @@ SECOES = [
                 "Gere o <b>código de conexão</b> da empresa e baixe a extensão (.zip). Extraia numa pasta que você não vá apagar.",
                 "No Chrome, abra <b>chrome://extensions</b>, ligue o <b>Modo do desenvolvedor</b> e clique em <b>Carregar sem compactação</b> escolhendo a pasta <b>expert-licitante-extensao</b>.",
                 "Clique no brasão da extensão, cole o código em <b>Adicionar empresa</b>. Tem várias empresas? Adicione o código de cada uma.",
-                "Abra a <b>lista de processos</b> da Licitanet e/ou <b>Minhas participações</b> do Compras.gov.br e clique em <b>▶️ Ligar vigia</b> na extensão: fica <b>uma aba fixada por plataforma</b>, que passa sozinha por todos os processos em andamento, só lendo – sem abrir outras abas.",
+                "Com o login feito na Licitanet e/ou no Compras.gov.br, clique em <b>▶️ Ligar vigia</b> na extensão (ela já sabe abrir a lista de processos e a <b>Minhas participações</b>): fica <b>uma aba fixada por plataforma</b>, que passa sozinha por todos os processos em andamento, só lendo – sem abrir outras abas.",
                 "No <b>Compras.gov.br</b>: entre normalmente no seu Chrome (certificado digital, QR code…) e abra o acompanhamento do pregão com as mensagens. A extensão lê as mensagens que o próprio site carrega, sem pedir nada a mais a ele.",
                 "Clique em <b>🧭 Diagnóstico desta aba</b> na extensão para confirmar a leitura."],
      "dicas": ["A extensão não digita e não envia nada na Licitanet. Na aba vigia ela só troca de página e de lote para ler – não use essa aba para trabalhar.",

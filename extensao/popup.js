@@ -76,10 +76,9 @@ $("diag").onclick = async () => {
 
 async function desenharVigia() {
   const {vigias = {}} = await chrome.storage.session.get("vigias");
-  const {vigiaHomeCG} = await chrome.storage.local.get("vigiaHomeCG");
   const cs = await contas();
   const ps = ["licitanet", "comprasgov"].filter((x) => cs.some((c) => (c.plataforma || "licitanet") === x));
-  const dicaCG = ps.includes("comprasgov") && !vigiaHomeCG ? "<br><small>⚠️ Compras.gov.br: abra uma vez <b>Compras → Licitação e Dispensa (novo) → Minhas participações</b> para a vigia aprender o caminho.</small>" : "";
+  const dicaCG = ps.includes("comprasgov") ? "<br><small>Compras.gov.br: deixe o login feito no Chrome (a vigia abre sozinha a lista Minhas participações).</small>" : "";
   const ligadas = Object.keys(vigias);
   $("vigOn").style.display = ps.some((x) => !vigias[x]) ? "" : "none";
   $("vigOff").style.display = ligadas.length ? "" : "none";
@@ -99,7 +98,7 @@ $("vigOn").onclick = async () => {
   let home = "";
   if (ehLicitanet(t) && !/sala-disputa|login/i.test(t.url)) home = t.url.split("#")[0];   // Licitanet: a lista aberta
   else if (ehPortal(t)) {   // Compras.gov.br: se esta aba é a lista "Minhas participações", ensina o endereço agora
-    try { const r = await chrome.tabs.sendMessage(t.id, {ehListaCG: true}); if (r && r.lista) { await chrome.storage.local.set({vigiaHomeCG: t.url}); } } catch (e) { /* aba sem o script */ }
+    try { const r = await chrome.tabs.sendMessage(t.id, {ehListaCG: true}); if (r && r.lista) { await chrome.storage.local.set({vigiaHomeCG: t.url.split("#")[0].replace(/([?&]compra=)[^&]*/, "$1")}); } } catch (e) { /* aba sem o script */ }
   }
   const r = await chrome.runtime.sendMessage({ligarVigia: true, home});
   const nomes = (x) => x.map((k) => NOMES[k]).join(" e ");
@@ -108,7 +107,7 @@ $("vigOn").onclick = async () => {
   let txt;
   if (!r || !r.empresas || !r.empresas.length) txt = "⚠️ Nada a ligar: adicione primeiro o código de uma empresa (acima).";
   else txt = (ok.length ? `🛡️ Vigia ligada: ${nomes(ok)} (uma aba fixada à esquerda para cada).` : "") +
-    (falhou.includes("comprasgov") ? " ⚠️ Compras.gov.br não ligou: abra a lista Minhas participações (Compras → Licitação e Dispensa (novo)), espere carregar e clique em Ligar vigia de novo nessa aba." : "");
+    (falhou.includes("comprasgov") ? " ⚠️ Compras.gov.br não ligou: entre no Compras.gov.br com o certificado (empresa certa) e clique em Ligar vigia de novo." : "");
   desenharVigia(); desenhar(txt.trim());
 };
 $("vigOff").onclick = async () => { await chrome.runtime.sendMessage({desligarVigia: true}); desenharVigia(); };
