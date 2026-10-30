@@ -3795,7 +3795,7 @@ def pg_extensao(eid, aviso="", erro=False, codigo=""):
         p(2, "Baixe a extensão",
           '<p>Baixe o arquivo e <b>extraia</b> (botão direito → <i>Extrair tudo</i>) numa pasta que você não vá apagar, por exemplo <b>Documentos</b>. '
           'Vai aparecer a pasta <b>expert-licitante-extensao</b>.</p>'
-          '<p class="pp-esp">Já tem a extensão instalada? Confira a versão em <b>chrome://extensions</b>: se for a <b>1.4.3</b> ou mais nova, pule para o passo 4. '
+          '<p class="pp-esp">Já tem a extensão instalada? Confira a versão em <b>chrome://extensions</b>: se for a <b>1.4.4</b> ou mais nova, pule para o passo 4. '
           'Se for mais antiga, baixe de novo, substitua os arquivos da pasta e clique no ⟳ da extensão.</p>'
           '<div class="acoes"><a class="btn" href="/extensao.zip" onclick="setTimeout(marcarBaixou,800)">⬇️ Baixar a extensão (.zip)</a>'
           '<button type="button" class="sec" onclick="marcarBaixou()">Já baixei e extraí</button></div>'),

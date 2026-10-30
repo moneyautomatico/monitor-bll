@@ -165,6 +165,15 @@
       b.getAttribute("data-original-title")].join(" "))) ||
       bs.find((b) => b.querySelector("[class*=envelope],[class*=mail],[data-icon*=envelope]") || /^(mail|email|envelope)$/i.test((b.innerText || "").trim()));
   }
+  function urlDoCartao(el) {
+    let c = el;
+    for (let i = 0; i < 8 && c.parentElement && !/\b\d{6}\s*-/.test(c.innerText || ""); i++) c = c.parentElement;
+    const t = (c.innerText || "").replace(/\s+/g, " ");
+    const n = t.match(/PREG[ÃA]O\s+ELETR[ÔO]NICO\s+N\D{0,3}(\d{1,5})\s*\/\s*(\d{4})/i);
+    const u = t.match(/\b(\d{6})\s*-/);
+    if (!n || !u) return "";
+    return location.origin + "/comprasnet-web/seguro/fornecedor/acompanhamento-compra?compra=" + u[1] + "05" + n[1].padStart(5, "0") + n[2];
+  }
   function botaoAcompanhar(raiz) {
     if (!raiz || !raiz.querySelectorAll) return null;
     return [...raiz.querySelectorAll("button, a, [role=button]")].find((b) => b.getClientRects().length &&
@@ -213,6 +222,9 @@
       await dormir(entreMs(2500, 5000));
       const alvo = cartoes[r.abrir];
       if (!alvo) { await msg({cgLido: true}); continue; }
+      // endereço direto do pregão (o mesmo que o botão + abre): UASG + 05 + número(5) + ano
+      const direto = urlDoCartao(alvo);
+      if (direto) { await msg({vigiaClique: true}); location.href = direto; return; }
       // botão "Participar/acompanhar compra" (o + azul do cartão) só abre a tela de acompanhamento – é o caminho certo
       let card = alvo;
       for (let i = 0; i < 8 && card.parentElement && !botaoAcompanhar(card); i++) card = card.parentElement;

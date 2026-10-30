@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Expert Licitante – Monitor",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Lê (sem enviar nada) o chat do pregoeiro na Licitanet e no Compras.gov.br, no seu Chrome, e manda os alertas para o painel Expert Licitante. Uma ou várias empresas.",
   "icons": {
     "16": "icones/16.png",
