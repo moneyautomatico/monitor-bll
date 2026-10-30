@@ -75,6 +75,57 @@
     return out;
   }
 
+  function enviarLista(compra, msgs, origem) {
+    const inf = infoCompra(compra);
+    const porItem = {};
+    msgs.forEach((m) => { (porItem[m.item || ""] = porItem[m.item || ""] || []).push(m); });
+    Object.entries(porItem).forEach(([item, lista]) => {
+      const escopo = item ? "Item " + item : "Chat";
+      const chave = (m) => (m.id || m.cab + "|" + m.msg) + "|" + escopo;
+      const novas = lista.filter((m) => !enviados.has(chave(m)));
+      if (!novas.length) return;
+      novas.forEach((m) => enviados.add(chave(m)));   // evita mandar duas vezes enquanto o painel responde
+      envia({tipo: "mensagens", sala: compra || "sem-compra", processo: inf.processo, promotor: inf.promotor, escopo, cabecalho: document.title,
+             mensagens: novas.map(({item: _i, ...m}) => m), origem})
+        .then((r) => { if (!r.ok) novas.forEach((m) => enviados.delete(chave(m))); });
+    });
+  }
+
+  // leitura pela TELA: os cartões do painel "Mensagens" (Mensagem do Pregoeiro · Item 28 · texto · 08/10/2026 às 10:42)
+  let pelaApi = 0;
+  const RE_CAB = /^Mensagem d[oae]s?\s+(.+)$/i, RE_DATA = /(\d{2}\/\d{2}\/\d{4})\s+às\s+(\d{2}:\d{2})(?::(\d{2}))?/;
+  function lerPainelMensagens() {
+    const cand = [...document.querySelectorAll("div, li, article, mat-card, p-card")].filter((el) => {
+      if (el.children.length < 2 || !el.getClientRects().length) return false;
+      const t = (el.innerText || "").trim();
+      return t.length < 4000 && RE_CAB.test(t.split("\n")[0].trim()) && RE_DATA.test(t);
+    });
+    const cartoes = cand.filter((c) => !cand.some((o) => o !== c && c.contains(o)));   // só o cartão de dentro
+    return cartoes.map((el) => {
+      const linhas = el.innerText.split("\n").map(limpa).filter(Boolean);
+      let autor = (linhas[0].match(RE_CAB) || [])[1] || "", item = "";
+      const mi = autor.match(/^(.*?)\s+Item\s+(\d+)$/i);
+      if (mi) { autor = mi[1]; item = mi[2]; }
+      let ini = 1;
+      if (!item && /^Item\s+\d+$/i.test(linhas[1] || "")) { item = linhas[1].replace(/\D/g, ""); ini = 2; }
+      const dl = linhas.findIndex((l, i) => i >= ini && RE_DATA.test(l) && l.length < 40);
+      const d = ((dl >= 0 ? linhas[dl] : el.innerText).match(RE_DATA)) || [];
+      const corpo = linhas.slice(ini, dl >= 0 ? dl : undefined).join("\n");
+      return {id: "", msg: corpo, item, cab: [autor, d[1] ? `${d[1]} ${d[2]}:${d[3] || "00"}` : ""].filter(Boolean).join(" - ")};
+    }).filter((m) => m.msg);
+  }
+  function cicloTela() {
+    if (pelaApi) return;   // as respostas do site já trouxeram as mensagens: não lê a tela de novo (evita duplicar)
+    const msgs = lerPainelMensagens();
+    if (!msgs.length) return;
+    detectadasTela = msgs.length;
+    enviarLista(compraDe(location.href), msgs, "tela");
+  }
+  let detectadasTela = 0, espera = null;
+  new MutationObserver(() => { clearTimeout(espera); espera = setTimeout(cicloTela, 1500); })
+    .observe(document.documentElement, {childList: true, subtree: true, characterData: true});
+  setInterval(cicloTela, 20000);
+
   window.addEventListener("message", (ev) => {
     if (ev.source !== window || !ev.data || !ev.data.__expert) return;
     const {url, data: d} = ev.data;
@@ -83,18 +134,8 @@
     const msgs = acharMensagens(d);
     if (!msgs.length) return;
     detectadas += msgs.length;
-    const compra = compraDe(url) || compraDe(location.href);
-    const inf = infoCompra(compra);
-    const porItem = {};
-    msgs.forEach((m) => { (porItem[m.item || ""] = porItem[m.item || ""] || []).push(m); });
-    Object.entries(porItem).forEach(([item, lista]) => {
-      const escopo = item ? "Item " + item : "Chat";
-      const novas = lista.filter((m) => !enviados.has((m.id || m.cab + "|" + m.msg) + "|" + escopo));
-      if (!novas.length) return;
-      envia({tipo: "mensagens", sala: compra || "sem-compra", processo: inf.processo, promotor: inf.promotor, escopo, cabecalho: document.title,
-             mensagens: novas.map(({item: _i, ...m}) => m)})
-        .then((r) => { if (r.ok) novas.forEach((m) => enviados.add((m.id || m.cab + "|" + m.msg) + "|" + escopo)); });
-    });
+    pelaApi++;
+    enviarLista(compraDe(url) || compraDe(location.href), msgs, "site");
   });
 
   // diagnóstico: estrutura da tela e das respostas do site (endereços e NOMES de campos, sem valores)
@@ -102,7 +143,8 @@
     const t = (s) => limpa(s).slice(0, 80);
     return {
       caminho: location.pathname, titulo: document.title, compra: compraDe(location.href), mensagens_detectadas: detectadas,
-      chat_lido: detectadas, processos_lidos: 0,
+      mensagens_na_tela: lerPainelMensagens().length, chat_lido: detectadas || lerPainelMensagens().length, processos_lidos: 0,
+      leitura: pelaApi ? "respostas do site" : (detectadasTela ? "tela (painel Mensagens)" : "nenhuma ainda"),
       respostas: [...endpoints.entries()].map(([k, e]) => ({endereco: k, vezes: e.n, campos: e.campos})).slice(-25),
       titulos: [...document.querySelectorAll("h1,h2,h3,h4,h5,legend,.card-title,.p-panel-title")].slice(0, 25).map((h) => t(h.innerText)).filter(Boolean),
       botoes: [...document.querySelectorAll("button,[role=tab],.p-tabview-nav a")].filter((b) => b.getClientRects().length).slice(0, 40).map((b) => t(b.innerText)).filter(Boolean)
