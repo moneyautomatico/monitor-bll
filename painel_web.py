@@ -3817,13 +3817,14 @@ def pg_extensao(eid, aviso="", erro=False, codigo=""):
          p(5, "Entre na Licitanet e abra a lista de processos",
           '<p>Entre na Licitanet normalmente e deixe aberta a tela com a <b>lista de processos</b> (Início / Processos).</p>'
           '<div class="acoes"><a class="btn sec" href="https://portal.licitanet.com.br/" target="_blank" rel="noopener">Abrir a Licitanet ↗</a></div><p class="pp-st"></p>')),
-        p(6, "Abra o acompanhamento do pregão (mensagens)",
-          '<p>Abra o <b>acompanhamento</b> de um pregão em andamento e a parte de <b>mensagens / chat</b>, e deixe a aba aberta. A extensão lê as mensagens '
-          'que o próprio site carrega na tela – sem pedir nada a mais ao Compras.gov.br.</p>'
-          '<p class="pp-esp">A 🛡️ aba vigia (que passa sozinha por todos os pregões) chega para o Compras.gov.br depois do diagnóstico – ele mostra como as telas são.</p>'
+        p(6, "Ligue a 🛡️ vigia (recomendado)",
+          '<p>Abra <b>Compras → Licitação e Dispensa (novo) → Minhas participações</b> (para a extensão aprender o caminho) e clique no brasão da extensão → '
+          '<b>▶️ Ligar vigia</b>. Fica <b>uma aba fixada só para o Compras.gov.br</b>: ela abre cada pregão em andamento, o painel <b>Mensagens</b>, lê, volta '
+          'para a lista e segue – sem abrir outras abas.</p>'
+          '<p class="pp-esp">Não use a aba vigia para trabalhar (ela muda de página sozinha). Se a sessão do gov.br cair, entre de novo nessa aba.</p>'
           '<p class="pp-st"></p>') if cg else
         p(6, "Ligue a 🛡️ aba vigia (recomendado)",
-          '<p>Com a <b>lista de processos</b> aberta, clique no brasão da extensão → <b>▶️ Ligar aba vigia</b>. Ela cria uma aba fixada (à esquerda) que '
+          '<p>Com a <b>lista de processos</b> aberta, clique no brasão da extensão → <b>▶️ Ligar vigia</b>. Fica <b>uma aba fixada só para a Licitanet</b> que '
           '<b>passa sozinha por todos os processos em andamento</b> – abre a sala, lê o chat de <b>cada lote</b> e da mensagem geral, vai para o próximo e recomeça '
           'a volta. Os que estão em disputa entram duas vezes por volta.</p>'
           '<p class="pp-esp">Não use a aba vigia para trabalhar (ela muda de página sozinha). Prefere sem vigia? Deixe aberta a sala de disputa de cada processo que quiser acompanhar.</p>'

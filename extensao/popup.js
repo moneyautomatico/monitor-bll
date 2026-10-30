@@ -40,6 +40,7 @@ async function desenhar(extra) {
   const abas = await chrome.tabs.query({url: ["https://portal.licitanet.com.br/*", "https://cnetmobile.estaleiro.serpro.gov.br/*", "https://www.comprasnet.gov.br/*"]});
   $("st").innerHTML = (extra ? esc(extra) + "<br>" : "") + (situacao.erro ? `<span class="erro">⚠️ ${esc(situacao.erro)}</span><br>` : "") +
     `Abas da Licitanet / Compras.gov.br abertas: <b>${abas.length}</b> · último envio: ${quando(situacao.ultimo_envio)}`;
+  if (typeof desenharVigia === "function") desenharVigia();
 }
 
 (async () => { $("servidor").value = (await chrome.storage.local.get("servidor")).servidor || padrao; desenhar(); })();
@@ -74,25 +75,31 @@ $("diag").onclick = async () => {
 };
 
 async function desenharVigia() {
-  const {vigia} = await chrome.storage.session.get("vigia");
-  const {vigiaHome} = await chrome.storage.local.get("vigiaHome");
-  if (!vigia) {
-    $("vig").innerHTML = "Desligada. Ela usa <b>uma aba fixada</b> que passa sozinha por todos os processos em andamento (sala e lotes), só lendo. " +
-      "<small>Dica: abra a <b>lista de processos</b> da Licitanet e clique em Ligar aqui nela.</small>";
-    $("vigOn").style.display = ""; $("vigOff").style.display = "none"; return;
-  }
-  $("vigOn").style.display = "none"; $("vigOff").style.display = "";
-  $("vig").innerHTML = `<span class="ok">✅ Ligada</span> · processos na volta: <b>${vigia.n || 0}</b>` +
-    (vigia.fila && vigia.fila.length ? ` · lendo ${Math.min((vigia.pos || 0) + 1, vigia.fila.length)} de ${vigia.fila.length}` : "") +
-    `<br>Voltas completas: <b>${vigia.voltas || 0}</b> · última: ${quando(vigia.ultimaVolta)}` +
-    (vigia.sem_link ? `<br><small>⚠️ ${vigia.sem_link} processo(s) sem link para a sala na lista</small>` : "") +
-    `<br><small>Lista usada: ${esc((vigia.home || vigiaHome || "").replace("https://portal.licitanet.com.br", ""))}</small>`;
+  const {vigias = {}} = await chrome.storage.session.get("vigias");
+  const {vigiaHomeCG} = await chrome.storage.local.get("vigiaHomeCG");
+  const cs = await contas();
+  const ps = ["licitanet", "comprasgov"].filter((x) => cs.some((c) => (c.plataforma || "licitanet") === x));
+  const dicaCG = ps.includes("comprasgov") && !vigiaHomeCG ? "<br><small>⚠️ Compras.gov.br: abra uma vez <b>Compras → Licitação e Dispensa (novo) → Minhas participações</b> para a vigia aprender o caminho.</small>" : "";
+  const ligadas = Object.keys(vigias);
+  $("vigOn").style.display = ps.some((x) => !vigias[x]) ? "" : "none";
+  $("vigOff").style.display = ligadas.length ? "" : "none";
+  if (!ps.length) { $("vig").innerHTML = "<small>Adicione uma empresa acima para usar a vigia.</small>"; return; }
+  $("vig").innerHTML = "<small>Uma aba fixada por plataforma, que passa sozinha pelos processos em andamento, só lendo – sem abrir outras abas.</small>" +
+    ps.map((x) => {
+      const v = vigias[x];
+      if (!v) return `<br>⏸ <b>${NOMES[x]}</b>: desligada`;
+      const tot = x === "comprasgov" ? (v.cgTotal || 0) : (v.fila || []).length;
+      const pos = x === "comprasgov" ? (v.cgPos || 0) : (v.pos || 0);
+      return `<br><span class="ok">✅ <b>${NOMES[x]}</b></span>: ${v.n || 0} processo(s) · lendo ${tot ? Math.min(pos + 1, tot) : 0} de ${tot} · voltas ${v.voltas || 0} (última ${quando(v.ultimaVolta)})` +
+        (v.sem_link ? ` · <small>⚠️ ${v.sem_link} sem link</small>` : "");
+    }).join("") + dicaCG;
 }
 $("vigOn").onclick = async () => {
   const t = await abaAtual();
-  const home = ehLicitanet(t) && !/sala-disputa/.test(t.url) && !/login/i.test(t.url) ? t.url.split("#")[0] : "";
-  await chrome.runtime.sendMessage({ligarVigia: true, home});
-  desenharVigia(); desenhar("🛡️ Aba vigia ligada (fixada à esquerda). Deixe a janela do Chrome aberta.");
+  const home = ehLicitanet(t) && !/sala-disputa/.test(t.url) && !/login/i.test(t.url) ? t.url.split("#")[0] : "";   // Licitanet: a lista aberta
+  const r = await chrome.runtime.sendMessage({ligarVigia: true, home});
+  if (r && r.ligadas && r.ligadas.comprasgov === false) { desenharVigia(); desenhar("Licitanet ligada. Para o Compras.gov.br, abra antes a lista Minhas participações."); return; }
+  desenharVigia(); desenhar("🛡️ Vigia ligada: uma aba fixada (à esquerda) para cada plataforma. Deixe a janela do Chrome aberta.");
 };
 $("vigOff").onclick = async () => { await chrome.runtime.sendMessage({desligarVigia: true}); desenharVigia(); };
 desenharVigia();

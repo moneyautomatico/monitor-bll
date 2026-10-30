@@ -138,6 +138,91 @@
     enviarLista(compraDe(url) || compraDe(location.href), msgs, "site");
   });
 
+  // ----------------------------------------------------------------- aba vigia (Compras.gov.br): lista "Minhas participações" →
+  // abre cada pregão → painel Mensagens → lê → volta. Só lê: abre telas e o painel, não digita nem envia nada.
+  const dormir = (ms) => msg({dormir: ms});
+  async function esperar(cond, max) { for (let i = 0; i < max; i++) { if (cond()) return true; await dormir(1000); } return !!cond(); }
+  function faixa(txt) {
+    let d = document.getElementById("expert-vigia");
+    if (!d) {
+      d = document.createElement("div"); d.id = "expert-vigia";
+      d.style.cssText = "position:fixed;z-index:2147483647;left:50%;top:8px;transform:translateX(-50%);background:#0b2a1d;color:#f4efe3;" +
+        "font:600 13px system-ui,sans-serif;padding:8px 14px;border-radius:10px;border:1px solid #c9a24a;box-shadow:0 6px 20px rgba(0,0,0,.35);pointer-events:none";
+      (document.body || document.documentElement).appendChild(d);
+    }
+    d.textContent = "🛡️ Aba vigia do Expert Licitante – " + txt + " (não use esta aba)";
+  }
+  const RE_CARTAO = /^(PREG[ÃA]O|DISPENSA|CONCORR[ÊE]NCIA|LICITA[ÇC][ÃA]O)\s+ELETR[ÔO]NIC[AO]?\s+N/i;
+  function cartoesLista() {
+    const c = [...document.querySelectorAll("div, li, article, a, span, p, h1, h2, h3, h4, h5")].filter((el) =>
+      el.getClientRects().length && RE_CARTAO.test(((el.innerText || "").trim().split("\n")[0] || "").trim()) && (el.innerText || "").length < 1500);
+    return c.filter((x) => !c.some((o) => o !== x && x.contains(o)));   // o elemento mais de dentro (o título)
+  }
+  const ehLista = () => /Minhas participa[çc][õo]es/i.test(document.body ? document.body.innerText : "") && cartoesLista().length > 0;
+  function botaoMensagens() {
+    const bs = [...document.querySelectorAll("button, a, [role=button]")].filter((b) => b.getClientRects().length);
+    return bs.find((b) => /mensage/i.test([b.title, b.getAttribute("aria-label"), b.getAttribute("mattooltip"), b.getAttribute("ptooltip"),
+      b.getAttribute("data-original-title")].join(" "))) ||
+      bs.find((b) => b.querySelector("[class*=envelope],[class*=mail],[data-icon*=envelope]") || /^(mail|email|envelope)$/i.test((b.innerText || "").trim()));
+  }
+  const ehPregao = () => !!botaoMensagens() && /Acompanhamento/i.test(document.body ? document.body.innerText : "");
+  function fecharPainel() {
+    const x = [...document.querySelectorAll("button, [role=button], a")].find((b) => b.getClientRects().length &&
+      (/fechar|close/i.test([b.title, b.getAttribute("aria-label")].join(" ")) || /^(×|✕|x|close)$/i.test((b.innerText || "").trim())));
+    if (x) x.click(); else document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+  }
+  async function lerPregaoAberto() {
+    faixa("abrindo as mensagens do pregão");
+    const b = botaoMensagens();
+    if (b) b.click();
+    await esperar(() => lerPainelMensagens().length > 0 || /Mensagens da Sess[ãa]o P[úu]blica/i.test(document.body.innerText), 20);
+    await dormir(2500);   // deixa as mensagens carregarem (as respostas do site já são lidas sozinhas)
+    cicloTela();
+    await dormir(1500);
+    fecharPainel();
+    await msg({cgLido: true});
+  }
+  async function rodarVigiaCG() {
+    if (window.top !== window) return;   // só a página principal (não os quadros internos)
+    const t = await msg({vigiaTarefa: true, plataforma: "comprasgov"});
+    if (!t.vigia) {   // aba normal: se for a lista de participações, ensina o endereço para a vigia
+      if (await esperar(ehLista, 20)) msg({cgHome: location.href});
+      return;
+    }
+    if (t.ir) { faixa("indo para a plataforma da vez"); await dormir(t.espera || 1500); location.href = t.ir; return; }
+    for (let voltas = 0; voltas < 200; voltas++) {
+      faixa("procurando a lista de participações");
+      await esperar(() => ehLista() || ehPregao(), 30);
+      if (ehPregao() && !ehLista()) {   // abriu direto um pregão (recarregou a página): lê e volta
+        await lerPregaoAberto();
+        history.back();
+        continue;
+      }
+      if (!ehLista()) { const r = await msg({cgProximo: true, total: 0}); faixa(r.texto || "seguindo"); await dormir(r.espera || 5000); if (r.ir) location.href = r.ir; return; }
+      msg({cgHome: location.href});
+      const cartoes = cartoesLista();
+      const r = await msg({cgProximo: true, total: cartoes.length});
+      if (r.ir) { faixa(r.texto || "seguindo"); await dormir(r.espera || 5000); location.href = r.ir; return; }
+      faixa(r.texto || "abrindo o pregão");
+      await dormir(entreMs(2500, 5000));
+      const alvo = cartoes[r.abrir];
+      if (!alvo) { await msg({cgLido: true}); continue; }
+      await msg({vigiaClique: true});   // se o site abrir aba nova, a extensão traz para esta aba
+      alvo.click();
+      const abriu = await esperar(ehPregao, 25);
+      if (!abriu) {   // o título não abriu: tenta o último botão do cartão (setinha)
+        const card = alvo.closest("mat-card, .card, li, article") || alvo.parentElement;
+        const bts = card ? [...card.querySelectorAll("button, a")].filter((x) => x.getClientRects().length) : [];
+        if (bts.length) { await msg({vigiaClique: true}); bts[bts.length - 1].click(); await esperar(ehPregao, 20); }
+      }
+      if (ehPregao()) await lerPregaoAberto(); else { faixa("não consegui abrir este pregão – pulando"); await msg({cgLido: true}); }
+      history.back();
+      await dormir(2500);
+    }
+  }
+  const entreMs = (a, b) => a + Math.round(Math.random() * (b - a));
+  setTimeout(() => { rodarVigiaCG(); }, 3000);
+
   // diagnóstico: estrutura da tela e das respostas do site (endereços e NOMES de campos, sem valores)
   function estrutura() {
     const t = (s) => limpa(s).slice(0, 80);
@@ -145,6 +230,7 @@
       caminho: location.pathname, titulo: document.title, compra: compraDe(location.href), mensagens_detectadas: detectadas,
       mensagens_na_tela: lerPainelMensagens().length, chat_lido: detectadas || lerPainelMensagens().length, processos_lidos: 0,
       leitura: pelaApi ? "respostas do site" : (detectadasTela ? "tela (painel Mensagens)" : "nenhuma ainda"),
+      lista_participacoes: cartoesLista().length, eh_lista: ehLista(), botao_mensagens: !!botaoMensagens(), eh_pregao: ehPregao(),
       respostas: [...endpoints.entries()].map(([k, e]) => ({endereco: k, vezes: e.n, campos: e.campos})).slice(-25),
       titulos: [...document.querySelectorAll("h1,h2,h3,h4,h5,legend,.card-title,.p-panel-title")].slice(0, 25).map((h) => t(h.innerText)).filter(Boolean),
       botoes: [...document.querySelectorAll("button,[role=tab],.p-tabview-nav a")].filter((b) => b.getClientRects().length).slice(0, 40).map((b) => t(b.innerText)).filter(Boolean)

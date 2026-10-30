@@ -148,6 +148,7 @@
       n++;
       const b = [...p._tr.querySelectorAll("button, a, i, span")].filter((x) => x.getClientRects().length > 0).pop();
       if (!b) continue;
+      await msg({vigiaClique: true});
       b.click();
       await dormir(700);
       const a = [...document.querySelectorAll("a[href]")].find((x) => x.getClientRects().length > 0 && /sala de disputa/i.test(x.innerText || "") && /sala-disputa\/\d+/.test(x.href));
@@ -159,9 +160,10 @@
   }
 
   async function rodarVigia() {
-    const t = await msg({vigiaTarefa: true});
+    const t = await msg({vigiaTarefa: true, plataforma: "licitanet"});
     if (!t.vigia) return;
     modoVigia = true;
+    if (t.ir) { faixaVigia("indo para a plataforma da vez"); await dormir(t.espera || 1500); location.href = t.ir; return; }
     if (naTelaDeLogin()) {
       faixaVigia("a Licitanet pediu login: entre na sua conta nesta aba");
       await envia({tipo: "estado", estado: "deslogado"});
