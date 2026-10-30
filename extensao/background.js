@@ -47,8 +47,8 @@ async function post(servidor, codigo, evento) {
 }
 
 const PORTAIS = {licitanet: ["https://portal.licitanet.com.br/*"],
-                 comprasgov: ["https://cnetmobile.estaleiro.serpro.gov.br/*", "https://www.comprasnet.gov.br/*"]};
-const RE_PORTAL = /^https:\/\/(portal\.licitanet\.com\.br|cnetmobile\.estaleiro\.serpro\.gov\.br|www\.comprasnet\.gov\.br)\//;
+                 comprasgov: ["https://cnetmobile.estaleiro.serpro.gov.br/*", "https://*.serpro.gov.br/*", "https://www.comprasnet.gov.br/*", "https://*.comprasnet.gov.br/*", "https://*.compras.gov.br/*", "https://www.gov.br/compras/*"]};
+const RE_PORTAL = /^https:\/\/(portal\.licitanet\.com\.br|([\w-]+\.)*(serpro\.gov\.br|comprasnet\.gov\.br|compras\.gov\.br)|www\.gov\.br\/compras)\//;
 const plataformaDaUrl = (u) => /licitanet/.test(u || "") ? "licitanet" : "comprasgov";
 
 async function completarPlataformas(contas, servidor) {   // contas salvas antes da 1.3 não sabiam a plataforma
@@ -162,7 +162,7 @@ async function ligarTodas(home) {
   const ps = await plataformasComEmpresa();
   const r = {};
   for (const p of ps) r[p] = !!(await ligarVigia(p, home && ((p === "licitanet") === /licitanet/.test(home)) ? home : ""));
-  return r;
+  return {ligadas: r, empresas: ps};
 }
 async function desligarVigias() {
   const vs = await vigias();
@@ -178,7 +178,7 @@ chrome.runtime.onStartup.addListener(async () => {
 // uma aba vigia nunca abre outras abas: se o site abrir uma aba nova logo depois de a vigia clicar (o Chrome nem sempre marca a
 // vigia como "origem"), o endereço vem para a própria aba vigia e a aba nova é fechada. Abas abertas por você não são tocadas.
 const filhas = {};
-const daPlataforma = (url, p) => (PORTAIS[p] || []).some((pad) => url.startsWith(pad.replace("*", "")));
+const daPlataforma = (url, p) => p === "licitanet" ? /^https:\/\/portal\.licitanet\.com\.br\//.test(url) : (RE_PORTAL.test(url) && !/licitanet/.test(url));
 async function vigiaQueClicou(t) {
   const vs = await vigias();
   const agora = Date.now();
@@ -289,7 +289,7 @@ chrome.runtime.onMessage.addListener((m, remetente, responder) => {
     tratarVigia(m, remetente.tab ? remetente.tab.id : null).then(responder);
     return true;
   }
-  if (m && m.ligarVigia) { ligarTodas(m.home).then((r) => responder({ok: true, ligadas: r})); return true; }
+  if (m && m.ligarVigia) { ligarTodas(m.home).then((r) => responder(Object.assign({ok: true}, r))); return true; }
   if (m && m.desligarVigia) { desligarVigias().then(() => responder({ok: true})); return true; }
   return false;
 });

@@ -7,7 +7,7 @@ const quando = (ms) => { if (!ms) return "nunca"; const s = Math.round((Date.now
 async function contas() { return (await chrome.storage.local.get("contas")).contas || []; }
 async function abaAtual() { const [t] = await chrome.tabs.query({active: true, currentWindow: true}); return t; }
 const ehLicitanet = (t) => t && /^https:\/\/portal\.licitanet\.com\.br\//.test(t.url || "");
-const ehPortal = (t) => t && /^https:\/\/(portal\.licitanet\.com\.br|cnetmobile\.estaleiro\.serpro\.gov\.br|www\.comprasnet\.gov\.br)\//.test(t.url || "");
+const ehPortal = (t) => t && /^https:\/\/(portal\.licitanet\.com\.br|([\w-]+\.)*(serpro\.gov\.br|comprasnet\.gov\.br|compras\.gov\.br)|www\.gov\.br\/compras)\//.test(t.url || "");
 const NOMES = {licitanet: "Licitanet", comprasgov: "Compras.gov.br"};
 
 async function desenhar(extra) {
@@ -37,7 +37,7 @@ async function desenhar(extra) {
     };
   }
   const {situacao = {}} = await chrome.storage.local.get("situacao");
-  const abas = await chrome.tabs.query({url: ["https://portal.licitanet.com.br/*", "https://cnetmobile.estaleiro.serpro.gov.br/*", "https://www.comprasnet.gov.br/*"]});
+  const abas = await chrome.tabs.query({url: ["https://portal.licitanet.com.br/*", "https://cnetmobile.estaleiro.serpro.gov.br/*", "https://*.serpro.gov.br/*", "https://www.comprasnet.gov.br/*", "https://*.comprasnet.gov.br/*", "https://*.compras.gov.br/*", "https://www.gov.br/compras/*"]});
   $("st").innerHTML = (extra ? esc(extra) + "<br>" : "") + (situacao.erro ? `<span class="erro">⚠️ ${esc(situacao.erro)}</span><br>` : "") +
     `Abas da Licitanet / Compras.gov.br abertas: <b>${abas.length}</b> · último envio: ${quando(situacao.ultimo_envio)}`;
   if (typeof desenharVigia === "function") desenharVigia();
@@ -96,10 +96,20 @@ async function desenharVigia() {
 }
 $("vigOn").onclick = async () => {
   const t = await abaAtual();
-  const home = ehLicitanet(t) && !/sala-disputa/.test(t.url) && !/login/i.test(t.url) ? t.url.split("#")[0] : "";   // Licitanet: a lista aberta
+  let home = "";
+  if (ehLicitanet(t) && !/sala-disputa|login/i.test(t.url)) home = t.url.split("#")[0];   // Licitanet: a lista aberta
+  else if (ehPortal(t)) {   // Compras.gov.br: se esta aba é a lista "Minhas participações", ensina o endereço agora
+    try { const r = await chrome.tabs.sendMessage(t.id, {ehListaCG: true}); if (r && r.lista) { await chrome.storage.local.set({vigiaHomeCG: t.url}); } } catch (e) { /* aba sem o script */ }
+  }
   const r = await chrome.runtime.sendMessage({ligarVigia: true, home});
-  if (r && r.ligadas && r.ligadas.comprasgov === false) { desenharVigia(); desenhar("Licitanet ligada. Para o Compras.gov.br, abra antes a lista Minhas participações."); return; }
-  desenharVigia(); desenhar("🛡️ Vigia ligada: uma aba fixada (à esquerda) para cada plataforma. Deixe a janela do Chrome aberta.");
+  const nomes = (x) => x.map((k) => NOMES[k]).join(" e ");
+  const ok = Object.keys((r && r.ligadas) || {}).filter((k) => r.ligadas[k]);
+  const falhou = Object.keys((r && r.ligadas) || {}).filter((k) => !r.ligadas[k]);
+  let txt;
+  if (!r || !r.empresas || !r.empresas.length) txt = "⚠️ Nada a ligar: adicione primeiro o código de uma empresa (acima).";
+  else txt = (ok.length ? `🛡️ Vigia ligada: ${nomes(ok)} (uma aba fixada à esquerda para cada).` : "") +
+    (falhou.includes("comprasgov") ? " ⚠️ Compras.gov.br não ligou: abra a lista Minhas participações (Compras → Licitação e Dispensa (novo)), espere carregar e clique em Ligar vigia de novo nessa aba." : "");
+  desenharVigia(); desenhar(txt.trim());
 };
 $("vigOff").onclick = async () => { await chrome.runtime.sendMessage({desligarVigia: true}); desenharVigia(); };
 desenharVigia();

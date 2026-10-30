@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Expert Licitante – Monitor",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Lê (sem enviar nada) o chat do pregoeiro na Licitanet e no Compras.gov.br, no seu Chrome, e manda os alertas para o painel Expert Licitante. Uma ou várias empresas.",
   "icons": {
     "16": "icones/16.png",
@@ -24,8 +24,12 @@
   ],
   "host_permissions": [
     "https://portal.licitanet.com.br/*",
-    "https://www.comprasnet.gov.br/*",
     "https://cnetmobile.estaleiro.serpro.gov.br/*",
+    "https://*.serpro.gov.br/*",
+    "https://www.comprasnet.gov.br/*",
+    "https://*.comprasnet.gov.br/*",
+    "https://*.compras.gov.br/*",
+    "https://www.gov.br/compras/*",
     "https://expertlicitante.com.br/*"
   ],
   "content_scripts": [
@@ -41,7 +45,11 @@
     {
       "matches": [
         "https://cnetmobile.estaleiro.serpro.gov.br/*",
-        "https://www.comprasnet.gov.br/*"
+        "https://*.serpro.gov.br/*",
+        "https://www.comprasnet.gov.br/*",
+        "https://*.comprasnet.gov.br/*",
+        "https://*.compras.gov.br/*",
+        "https://www.gov.br/compras/*"
       ],
       "js": [
         "cg_main.js"
@@ -53,7 +61,11 @@
     {
       "matches": [
         "https://cnetmobile.estaleiro.serpro.gov.br/*",
-        "https://www.comprasnet.gov.br/*"
+        "https://*.serpro.gov.br/*",
+        "https://www.comprasnet.gov.br/*",
+        "https://*.comprasnet.gov.br/*",
+        "https://*.compras.gov.br/*",
+        "https://www.gov.br/compras/*"
       ],
       "js": [
         "content_comprasgov.js"

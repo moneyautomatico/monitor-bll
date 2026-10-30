@@ -238,6 +238,7 @@
   }
   chrome.runtime.onMessage.addListener((m, r, responder) => {
     if (m && m.qualEmpresa) { empCache.t = 0; responder({empresa: empresaTela()}); return false; }
+    if (m && m.ehListaCG) { responder({lista: ehLista()}); return false; }
     if (m && m.diag) { const x = estrutura(); x.empresa_tela = empresaTela(); responder(x); return false; }
     return false;
   });
