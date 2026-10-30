@@ -201,6 +201,76 @@ def _id(*p):
     return hashlib.sha1("|".join(str(x) for x in p).encode()).hexdigest()[:12]
 
 
+NOME_PLAT = {"bll": "BLL", "bnc": "BNC", "licitanet": "Licitanet", "comprasgov": "Compras.gov.br", "pcp": "Portal de Compras"}
+
+
+def _plat_do_env(eid):
+    try:
+        for ln in (EMPRESAS / f"{eid}.env").read_text(encoding="utf-8").splitlines():
+            if ln.strip().startswith("PLATAFORMA="):
+                v = ln.split("=", 1)[1].strip().strip('"').strip("'").lower()
+                return NOME_PLAT.get(v, v.upper() or "BLL")
+        return "BLL"
+    except OSError:
+        return ""
+
+
+_CACHE_PROCS = {}
+
+
+def _procs_da_empresa(eid):
+    """Números dos processos que o monitor da empresa conhece (cache de 2 min)."""
+    c = _CACHE_PROCS.get(eid)
+    if c and time.time() - c[0] < 120:
+        return c[1]
+    procs = set()
+    db = EMPRESAS / eid / "bll_monitor.db"
+    if db.exists():
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=3)
+            procs = {_num_proc(r[0]) for r in con.execute("SELECT processo FROM processos").fetchall() if r[0]}
+            con.close()
+        except sqlite3.Error:
+            pass
+    _CACHE_PROCS[eid] = (time.time(), procs - {""})
+    return _CACHE_PROCS[eid][1]
+
+
+def _num_proc(t):
+    m = re.search(r"(\d{1,6})\s*/\s*(\d{4})", t or "")
+    return f"{int(m.group(1))}/{m.group(2)}" if m else ""
+
+
+def _eids_pelo_processo(it):
+    """Prazo sem empresa ligada (criado à mão ou pela licitação): acha pelas empresas de mesmo nome que monitoram o processo."""
+    num = _num_proc(it.get("processo") or it.get("titulo"))
+    nomes = {x.strip().upper() for x in (it.get("empresa") or "").split(",") if x.strip()}
+    if not num or not nomes:
+        return []
+    out = []
+    for arq in sorted(EMPRESAS.glob("*.env")):
+        try:
+            nome = next((ln.split("=", 1)[1].strip().strip('"').strip("'") for ln in arq.read_text(encoding="utf-8").splitlines()
+                         if ln.strip().startswith("EMPRESA_NOME=")), "")
+        except OSError:
+            continue
+        nu = nome.upper()
+        if any(n == nu or n in nu or nu in n for n in nomes) and num in _procs_da_empresa(arq.stem):
+            out.append(arq.stem)
+    return out
+
+
+def plataforma(it):
+    """De qual plataforma veio o prazo (pelas empresas cadastradas ligadas a ele). Vazio se não dá para saber."""
+    eids = list(it.get("eids") or []) or ([it["eid"]] if it.get("eid") else []) or _eids_pelo_processo(it)
+    nomes = []
+    for eid in eids:
+        n = _plat_do_env(eid)
+        if n and n not in nomes:
+            nomes.append(n)
+    return " / ".join(nomes)
+
+
 def adicionar(titulo, quando, empresa="", processo="", promotor="", obs="", origem="manual", eid="", extra=None):
     with TRAVA:
         d = prazos()
@@ -667,7 +737,9 @@ def avisar_prazos(enviar, cfg, novos=()):
         if mk != "novo" and "novo" in pendentes:
             topo = "📅 <b>Novo prazo</b> – " + topo.split("<b>")[1].replace("</b>", "").lower()
             topo = topo.replace("prazo em", "<b>termina em").replace(" h", " h</b>", 1) if "em menos" in topo else topo
-        txt = (f"{topo}\n<b>{h.escape(it['titulo'])}</b>\n{h.escape(it.get('empresa', ''))} · {h.escape(it.get('promotor', ''))}\n"
+        plat_ = plataforma(it)
+        txt = (f"{topo}\n<b>{h.escape(it['titulo'])}</b>\n" + (f"🌐 {h.escape(plat_)} · " if plat_ else "") +
+               f"{h.escape(it.get('empresa', ''))} · {h.escape(it.get('promotor', ''))}\n"
                f"Até: <b>{_fmt(q)}</b> ({falta_txt(q, agora)})"
                + ("\n<i>Data estimada – confira na ata/chat.</i>" if it.get("estimado") else "")
                + (f"\n\n{h.escape(it.get('obs', '')[:400])}" if "novo" in pendentes else ""))

@@ -1191,13 +1191,15 @@ def pendencias(emps=None):
             continue
         st = agenda.situacao_prazo(it, agora)
         q = datetime.fromisoformat(it["quando"])
+        plat_ = agenda.plataforma(it)
+        emp_ = (f"🌐 {plat_} · " if plat_ else "") + it.get("empresa", "")
         if st == "atrasado" and agora - q < timedelta(days=3):
-            out.append((0, "⏰", f"Prazo vencido: {it.get('titulo', '')}", f"{it.get('empresa', '')} · era {_dt_hora(q)}", "/agenda", "Ver na agenda"))
+            out.append((0, "⏰", f"Prazo vencido: {it.get('titulo', '')}", f"{emp_} · era {_dt_hora(q)}", "/agenda", "Ver na agenda"))
         elif st == "hoje":
             out.append((0 if q - agora < timedelta(hours=3) else 1, "⏰", f"Prazo hoje às {q:%H:%M}: {it.get('titulo', '')}" if (q.hour, q.minute) != (23, 59)
-                        else f"Prazo hoje: {it.get('titulo', '')}", it.get("empresa", ""), "/agenda", "Ver na agenda"))
+                        else f"Prazo hoje: {it.get('titulo', '')}", emp_, "/agenda", "Ver na agenda"))
         elif q.date().isoformat() == amanha_s:
-            out.append((2, "📅", f"Prazo amanhã: {it.get('titulo', '')}", it.get("empresa", ""), "/agenda", "Ver na agenda"))
+            out.append((2, "📅", f"Prazo amanhã: {it.get('titulo', '')}", emp_, "/agenda", "Ver na agenda"))
     # certidões
     for c in agenda.certidoes()["itens"].values():
         if not pode_empresa(c.get("empresa")):
@@ -6889,12 +6891,13 @@ def pg_agenda(q, aviso=""):
         tags = ('<span class="tag aviso">estimado</span>' if it.get("estimado") else "") + \
                ('<span class="tag parado">detectado no chat</span>' if it.get("origem") == "auto" else "")
         orgao = " · " + e(it.get("promotor", "")) if it.get("promotor") else ""
+        plat_ag = (f'<span class="tag">🌐 {e(agenda.plataforma(it))}</span> ' if agenda.plataforma(it) else "")
         chat = f' · <a href="{e(lc)}">abrir o chat do processo</a>' if lc else ""
         obs = (f'<details class="sub" style="margin-top:4px"><summary>trecho / observação</summary><div class="txt">{e(it.get("obs", ""))}</div></details>'
                if it.get("obs") else "")
         return (f'<div class="ag" style="border-left-color:{COR_PRAZO[st]}"><div class="ag-q"><b>{e(quando)}</b> <span class="sub">({semana})</span>'
                 f'<span class="tag" style="background:{COR_PRAZO[st]};color:#fff">{falta}</span>{tags}</div>'
-                f'<div class="nome">{e(it.get("titulo", ""))}</div><div class="sub">{e(it.get("empresa", ""))}{orgao}{chat}</div>{obs}'
+                f'<div class="nome">{e(it.get("titulo", ""))}</div><div class="sub">{plat_ag}{e(it.get("empresa", ""))}{orgao}{chat}</div>{obs}'
                 f'<div class="acoes" style="margin-top:6px">{acoes}</div></div>')
 
     blocos = ""
