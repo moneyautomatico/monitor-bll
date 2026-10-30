@@ -40,9 +40,14 @@
     return typeof v;
   }
   const compraDe = (u) => ((u || "").match(/[?&]compra=(\d{10,20})/) || (u || "").match(/\/(\d{17})(?:[/?#]|$)/) || [])[1] || "";
-  function infoCompra(id) {   // UASG(6) + modalidade(2) + número(5) + ano(4)
-    if (!/^\d{17}$/.test(id)) return {processo: id ? "Compra " + id : "", promotor: ""};
-    return {processo: `${id.slice(8, 13)}/${id.slice(13)}`, promotor: "UASG " + id.slice(0, 6)};
+  function infoCompra(id) {   // UASG(6) + modalidade(2) + número(5) + ano(4); a tela, quando mostra, vale mais
+    const txt = document.body ? document.body.innerText : "";
+    const num = (txt.match(/N[º°o]\s*(\d{1,6}\/\d{4})/) || [])[1];
+    const org = (txt.match(/UASG\s*(\d{6})\s*-\s*([^\n]{3,120})/) || []);
+    if (!/^\d{17}$/.test(id)) return {processo: num || (id ? "Compra " + id : ""), promotor: org[2] ? limpa(org[2]) : ""};
+    const uasg = id.slice(0, 6), proprio = `${parseInt(id.slice(8, 13), 10)}/${id.slice(13)}`;
+    return {processo: num && num.replace(/^0+/, "") === proprio ? num.replace(/^0+/, "") : proprio,
+            promotor: org[1] === uasg && org[2] ? `${limpa(org[2])} (UASG ${uasg})` : "UASG " + uasg};
   }
   const CT = ["texto", "mensagem", "conteudo", "descricao", "msg", "txtmensagem", "textomensagem", "descricaomensagem"];
   const CD = ["datahora", "data", "datahoraenvio", "dataenvio", "dtmensagem", "datahoramensagem", "datainclusao", "datamensagem"];

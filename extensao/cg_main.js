@@ -15,6 +15,26 @@
     } catch (e) { /* ignora */ }
     return r;
   };
+  // conexão ao vivo (WebSocket): mensagens novas podem chegar por ela, sem recarregar a página
+  const extrai = (txt) => {
+    if (typeof txt !== "string") return null;
+    try { return JSON.parse(txt); } catch (e) { /* não é JSON puro */ }
+    if (txt.startsWith("a[")) { try { return JSON.parse(txt.slice(1)).map((x) => extrai(x)).filter(Boolean); } catch (e) { /* SockJS */ } }
+    const i = txt.search(/[\[{]/), j = Math.max(txt.lastIndexOf("}"), txt.lastIndexOf("]"));   // STOMP: cabeçalhos + corpo JSON
+    if (i >= 0 && j > i) { try { return JSON.parse(txt.slice(i, j + 1)); } catch (e) { /* ignora */ } }
+    return null;
+  };
+  const WS = window.WebSocket;
+  if (WS) {
+    const Novo = function (url, prot) {
+      const ws = prot === undefined ? new WS(url) : new WS(url, prot);
+      if (doGov(url)) ws.addEventListener("message", (ev) => { const d = extrai(ev.data); if (d) passa(url, d); });
+      return ws;
+    };
+    Novo.prototype = WS.prototype;
+    ["CONNECTING", "OPEN", "CLOSING", "CLOSED"].forEach((k) => { Novo[k] = WS[k]; });
+    window.WebSocket = Novo;
+  }
   const abrir = XMLHttpRequest.prototype.open, enviar = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function (m, u) { this.__expertUrl = u; return abrir.apply(this, arguments); };
   XMLHttpRequest.prototype.send = function () {
