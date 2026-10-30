@@ -165,6 +165,12 @@
       b.getAttribute("data-original-title")].join(" "))) ||
       bs.find((b) => b.querySelector("[class*=envelope],[class*=mail],[data-icon*=envelope]") || /^(mail|email|envelope)$/i.test((b.innerText || "").trim()));
   }
+  function botaoAcompanhar(raiz) {
+    if (!raiz || !raiz.querySelectorAll) return null;
+    return [...raiz.querySelectorAll("button, a, [role=button]")].find((b) => b.getClientRects().length &&
+      /acompanhar/i.test([b.title, b.getAttribute("aria-label"), b.getAttribute("mattooltip"), b.getAttribute("ptooltip"),
+        b.getAttribute("data-original-title"), b.getAttribute("data-tooltip")].join(" "))) || null;
+  }
   const ehPregao = () => !!botaoMensagens() && /Acompanhamento/i.test(document.body ? document.body.innerText : "");
   function fecharPainel() {
     const x = [...document.querySelectorAll("button, [role=button], a")].find((b) => b.getClientRects().length &&
@@ -207,8 +213,12 @@
       await dormir(entreMs(2500, 5000));
       const alvo = cartoes[r.abrir];
       if (!alvo) { await msg({cgLido: true}); continue; }
+      // botão "Participar/acompanhar compra" (o + azul do cartão) só abre a tela de acompanhamento – é o caminho certo
+      let card = alvo;
+      for (let i = 0; i < 8 && card.parentElement && !botaoAcompanhar(card); i++) card = card.parentElement;
+      const bAc = botaoAcompanhar(card);
       await msg({vigiaClique: true});   // se o site abrir aba nova, a extensão traz para esta aba
-      alvo.click();
+      (bAc || alvo).click();
       const abriu = await esperar(ehPregao, 25);
       if (!abriu) {   // o título não abriu: tenta o último botão do cartão (setinha)
         const card = alvo.closest("mat-card, .card, li, article") || alvo.parentElement;
