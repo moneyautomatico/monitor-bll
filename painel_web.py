@@ -7111,10 +7111,9 @@ def pg_certidoes(q, aviso=""):
                       f'<label class="sub">validade <input class="campo" type="date" name="validade" value="{e(c.get("validade", ""))}"></label>'
                       f'<input type="file" name="arquivo" accept=".pdf"><button>Salvar</button></form></details>')
             obs = f'<div class="sub">{e(c.get("obs", ""))}</div>' if c.get("obs") else ""
-            num_txt = "" if c.get("tipo") == "outra" else f'{e(c.get("numero", "") or "—")}'   # "Outra": o número é o nome (já no título)
             sem_nome = ' <small class="sub">– abra “editar” e dê um nome</small>' if agenda.nome_cert(c) == "Outro documento" else ""
             linhas += (f'<tr><td><b>{e(agenda.nome_cert(c))}</b>{sem_nome}{obs}{editar}</td>'
-                       f'<td class="ocultar">{num_txt}<div class="sub">emitida {_dt_br(c.get("emissao"))}</div></td>'
+                       f'<td class="ocultar" title="{e(c.get("numero", ""))}">{_dt_br(c.get("emissao")) if c.get("emissao") else "—"}</td>'
                        f'<td><b>{_dt_br(c.get("validade"))}</b></td><td><span class="tag" style="background:{cor};color:#fff">{rot}</span>'
                        f'<div class="sub">{prazo}</div></td><td>{arq}{emitir}</td>'
                        f'<td>{botao(f"/certidoes/{cid}/excluir", "🗑", "sec", "Apagar esta certidão?")}</td></tr>')
@@ -7129,7 +7128,7 @@ def pg_certidoes(q, aviso=""):
         blocos += (f'<div class="form" style="max-width:none;margin-bottom:16px">'
                    f'<div class="linha" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><h3 style="margin:0">{e(nome)} {atencao}</h3>'
                    f'<a class="btn sec" href="/certidoes/pacote?emp={e(urllib.parse.quote(nome))}">⬇ Pacote de habilitação (ZIP com as válidas)</a></div>'
-                   f'{aviso_falta}<table><tr><th>Certidão</th><th class="ocultar">Número</th><th>Validade</th><th>Situação</th><th>Arquivo</th><th></th></tr>'
+                   f'{aviso_falta}<table><tr><th>Certidão</th><th class="ocultar">Emissão</th><th>Validade</th><th>Situação</th><th>Arquivo</th><th></th></tr>'
                    f'{linhas or vazio}</table></div>')
     opc_emp = "".join(f'<option value="{e(n)}" {"selected" if n == emp_f else ""}>{e(n)}</option>' for n in emps)
     sel_emp = ('<select class="campo" style="max-width:260px" onchange="location.href=\'/certidoes?emp=\'+encodeURIComponent(this.value)">'
