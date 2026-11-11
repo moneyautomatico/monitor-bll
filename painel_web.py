@@ -1207,7 +1207,7 @@ def pendencias(emps=None):
         st, dias = agenda.status_cert(c)
         if dias is None or dias > 15:
             continue
-        nome_c = agenda.NOME_CERT.get(c.get("tipo"), "Certidão")
+        nome_c = agenda.nome_cert(c)
         if st == "vencida":
             if dias >= -30:
                 out.append((0, "📑", f"Certidão vencida: {nome_c}", c.get("empresa", ""), "/certidoes", "Renovar"))
@@ -4996,7 +4996,7 @@ def certidoes_empresa(nome):
             continue
         st, dias = agenda.status_cert(c)
         validade = f" – validade {c['validade'][8:10]}/{c['validade'][5:7]}/{c['validade'][:4]}" if c.get("validade") else ""
-        out.append((cid, agenda.NOME_CERT.get(c.get("tipo"), c.get("tipo") or "Certidão") + validade, st, dias, bool(agenda.arquivo_cert(cid))))
+        out.append((cid, agenda.nome_cert(c) + validade, st, dias, bool(agenda.arquivo_cert(cid))))
     return sorted(out, key=lambda x: x[1])
 
 
@@ -6193,7 +6193,7 @@ def dados_relatorio(mes, emp_f=""):
         if not pode_empresa(c.get("empresa")) or (emp_f and c.get("empresa") != emp_f):
             continue
         if (c.get("validade") or "")[:7] in (mes, prox) and c["validade"] >= date.today().isoformat():
-            certs.append((c["validade"], agenda.NOME_CERT.get(c.get("tipo"), "Certidão"), c.get("empresa", "")))
+            certs.append((c["validade"], agenda.nome_cert(c), c.get("empresa", "")))
     ganhas = sum(1 for x in lic if x["resultado"] == "ganhou")
     perdidas = sum(1 for x in lic if x["resultado"] == "perdeu")
     return {"mes": mes, "emp": emp_f, "lic": sorted(lic, key=lambda x: x["data"]), "ganhas": ganhas, "perdidas": perdidas,
@@ -7102,13 +7102,15 @@ def pg_certidoes(q, aviso=""):
                       f'<form method="post" action="/certidoes/salvar" enctype="multipart/form-data" class="linha" style="gap:6px;flex-wrap:wrap;margin-top:6px">'
                       f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="cid" value="{cid}"><input type="hidden" name="empresa" value="{e(nome)}">'
                       f'<input type="hidden" name="tipo" value="{e(c.get("tipo", ""))}">'
-                      f'<input class="campo" name="numero" value="{e(c.get("numero", ""))}" placeholder="nº" style="max-width:160px">'
+                      f'<input class="campo" name="numero" value="{e(c.get("numero", ""))}" placeholder="{"nome do documento" if c.get("tipo") == "outra" else "nº"}" '
+                      f'style="max-width:{"320px" if c.get("tipo") == "outra" else "160px"}" title="{"Nome do documento" if c.get("tipo") == "outra" else "Número"}">'
                       f'<label class="sub">emissão <input class="campo" type="date" name="emissao" value="{e(c.get("emissao", ""))}"></label>'
                       f'<label class="sub">validade <input class="campo" type="date" name="validade" value="{e(c.get("validade", ""))}"></label>'
                       f'<input type="file" name="arquivo" accept=".pdf"><button>Salvar</button></form></details>')
             obs = f'<div class="sub">{e(c.get("obs", ""))}</div>' if c.get("obs") else ""
-            linhas += (f'<tr><td><b>{e(agenda.NOME_CERT.get(c.get("tipo"), c.get("tipo", "")))}</b>{obs}{editar}</td>'
-                       f'<td class="ocultar">{e(c.get("numero", "") or "—")}<div class="sub">emitida {_dt_br(c.get("emissao"))}</div></td>'
+            num_txt = "" if c.get("tipo") == "outra" else f'{e(c.get("numero", "") or "—")}'   # "Outra": o número é o nome (já no título)
+            linhas += (f'<tr><td><b>{e(agenda.nome_cert(c))}</b>{obs}{editar}</td>'
+                       f'<td class="ocultar">{num_txt}<div class="sub">emitida {_dt_br(c.get("emissao"))}</div></td>'
                        f'<td><b>{_dt_br(c.get("validade"))}</b></td><td><span class="tag" style="background:{cor};color:#fff">{rot}</span>'
                        f'<div class="sub">{prazo}</div></td><td>{arq}{emitir}</td>'
                        f'<td>{botao(f"/certidoes/{cid}/excluir", "🗑", "sec", "Apagar esta certidão?")}</td></tr>')
@@ -7146,8 +7148,8 @@ As certidões são emitidas por você nos sites oficiais (eles têm captcha).</p
 <div class="linha" style="gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label>Empresa</label><select class="campo" name="empresa">{opc_emp}</select></div>
 <div style="flex:1;min-width:220px"><label>PDF da certidão <small>(lê as datas sozinho)</small></label><input type="file" name="arquivo" accept=".pdf"></div></div>
 <div class="linha" style="gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><label>Tipo <small>(vazio = descobrir pelo PDF)</small></label>
-<select class="campo" name="tipo"><option value="">— descobrir pelo PDF —</option>{opc_tipo}</select></div>
-<div><label>Número</label><input class="campo" name="numero"></div>
+<select class="campo" name="tipo" onchange="const o=this.value==='outra';document.getElementById('rot-num').textContent=o?'Nome do documento':'Número';document.getElementById('c-num').placeholder=o?'ex.: Certidão negativa de licitantes inidôneos':''"><option value="">— descobrir pelo PDF —</option>{opc_tipo}</select></div>
+<div><label id="rot-num">Número</label><input class="campo" name="numero" id="c-num"></div>
 <div><label>Emissão</label><input class="campo" type="date" name="emissao"></div>
 <div><label>Validade <small>(vazio = ler do PDF)</small></label><input class="campo" type="date" name="validade"></div></div>
 <label>Observação</label><input class="campo" name="obs" placeholder="ex.: certidão municipal de Feira de Santana">

@@ -102,7 +102,7 @@ def montar(agora=None, permitidos=None, login=""):
             continue
         st, dias = agenda.status_cert(c)
         if dias is not None and dias <= 7:
-            nome = agenda.NOME_CERT.get(c.get("tipo"), "Certidão")
+            nome = agenda.nome_cert(c)
             cert.append((dias, f"{'❌ vencida' if dias < 0 else ('vence hoje' if dias == 0 else f'vence em {dias} dia(s)')} – "
                                f"{e(nome)} <i>({e(c.get('empresa', ''))})</i>"))
     if cert:

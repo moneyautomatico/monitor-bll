@@ -158,7 +158,7 @@ def montar_dados(pergunta, permitidos=None, ve_analise=None):
         if not ok(c.get("empresa")):
             continue
         st, dias = agenda.status_cert(c)
-        ct.append(f"{c.get('empresa')} | {agenda.NOME_CERT.get(c.get('tipo'), c.get('tipo'))} | validade {c.get('validade') or '—'} | "
+        ct.append(f"{c.get('empresa')} | {agenda.nome_cert(c)} | validade {c.get('validade') or '—'} | "
                   f"{ {'ok': 'válida', 'vence': 'vence em breve', 'vencida': 'VENCIDA', 'sem': 'sem validade'}[st] }"
                   f"{f' ({dias} dias)' if dias is not None else ''}")
     blocos.append("CERTIDÕES CADASTRADAS:\n" + ("\n".join(ct) or "nenhuma cadastrada"))

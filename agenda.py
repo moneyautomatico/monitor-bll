@@ -515,6 +515,13 @@ TIPOS_CERT = [
     ("outra", "Outra", ""),
 ]
 NOME_CERT = {k: n for k, n, _ in TIPOS_CERT}
+
+
+def nome_cert(c):
+    """Nome para mostrar: no tipo "Outra", o nome do documento digitado (fica no campo número)."""
+    if c.get("tipo") == "outra" and (c.get("numero") or "").strip():
+        return c["numero"].strip()
+    return NOME_CERT.get(c.get("tipo"), c.get("tipo") or "Certidão")
 AVISAR_DIAS = (15, 7, 3, 1, 0)
 
 
@@ -656,7 +663,7 @@ def pacote_zip(empresa):
                 continue
             p = arquivo_cert(cid)
             if p:
-                nome = re.sub(r"[^\w.-]+", "_", f"{NOME_CERT.get(c.get('tipo'), 'certidao')}_{c.get('validade', '')}")
+                nome = re.sub(r"[^\w.-]+", "_", f"{nome_cert(c)[:60]}_{c.get('validade', '')}")
                 z.write(p, f"{nome}{p.suffix or '.pdf'}")
                 n += 1
     return buf.getvalue(), n
@@ -769,7 +776,7 @@ def avisar_certidoes(enviar):
             continue
         c["avisos"].append(str(marco))
         mudou = True
-        nome = NOME_CERT.get(c.get("tipo"), c.get("tipo", "Certidão"))
+        nome = nome_cert(c)
         if marco == "vencida":
             msg = f"❗ <b>Certidão VENCIDA</b>: {h.escape(nome)}\n{h.escape(c.get('empresa', ''))} – venceu em {date.fromisoformat(c['validade']):%d/%m/%Y}"
         else:
