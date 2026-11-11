@@ -7102,14 +7102,18 @@ def pg_certidoes(q, aviso=""):
                       f'<form method="post" action="/certidoes/salvar" enctype="multipart/form-data" class="linha" style="gap:6px;flex-wrap:wrap;margin-top:6px">'
                       f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="cid" value="{cid}"><input type="hidden" name="empresa" value="{e(nome)}">'
                       f'<input type="hidden" name="tipo" value="{e(c.get("tipo", ""))}">'
-                      f'<input class="campo" name="numero" value="{e(c.get("numero", ""))}" placeholder="{"nome do documento" if c.get("tipo") == "outra" else "nº"}" '
-                      f'style="max-width:{"320px" if c.get("tipo") == "outra" else "160px"}" title="{"Nome do documento" if c.get("tipo") == "outra" else "Número"}">'
+                      + (f'<input class="campo" name="nome" value="{e(agenda.nome_cert(c) if agenda.nome_cert(c) != "Outro documento" else "")}" '
+                         'placeholder="nome do documento" style="max-width:320px" title="Nome do documento" required>'
+                         if c.get("tipo") == "outra" else "") +
+                      f'<input class="campo" name="numero" value="{e("" if c.get("tipo") == "outra" and agenda.numero_parece_nome(c.get("numero")) and not c.get("nome") else c.get("numero", ""))}" '
+                      'placeholder="nº (opcional)" style="max-width:160px" title="Número">'
                       f'<label class="sub">emissão <input class="campo" type="date" name="emissao" value="{e(c.get("emissao", ""))}"></label>'
                       f'<label class="sub">validade <input class="campo" type="date" name="validade" value="{e(c.get("validade", ""))}"></label>'
                       f'<input type="file" name="arquivo" accept=".pdf"><button>Salvar</button></form></details>')
             obs = f'<div class="sub">{e(c.get("obs", ""))}</div>' if c.get("obs") else ""
             num_txt = "" if c.get("tipo") == "outra" else f'{e(c.get("numero", "") or "—")}'   # "Outra": o número é o nome (já no título)
-            linhas += (f'<tr><td><b>{e(agenda.nome_cert(c))}</b>{obs}{editar}</td>'
+            sem_nome = ' <small class="sub">– abra “editar” e dê um nome</small>' if agenda.nome_cert(c) == "Outro documento" else ""
+            linhas += (f'<tr><td><b>{e(agenda.nome_cert(c))}</b>{sem_nome}{obs}{editar}</td>'
                        f'<td class="ocultar">{num_txt}<div class="sub">emitida {_dt_br(c.get("emissao"))}</div></td>'
                        f'<td><b>{_dt_br(c.get("validade"))}</b></td><td><span class="tag" style="background:{cor};color:#fff">{rot}</span>'
                        f'<div class="sub">{prazo}</div></td><td>{arq}{emitir}</td>'
@@ -7148,8 +7152,9 @@ As certidões são emitidas por você nos sites oficiais (eles têm captcha).</p
 <div class="linha" style="gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label>Empresa</label><select class="campo" name="empresa">{opc_emp}</select></div>
 <div style="flex:1;min-width:220px"><label>PDF da certidão <small>(lê as datas sozinho)</small></label><input type="file" name="arquivo" accept=".pdf"></div></div>
 <div class="linha" style="gap:8px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><label>Tipo <small>(vazio = descobrir pelo PDF)</small></label>
-<select class="campo" name="tipo" onchange="const o=this.value==='outra';document.getElementById('rot-num').textContent=o?'Nome do documento':'Número';document.getElementById('c-num').placeholder=o?'ex.: Certidão negativa de licitantes inidôneos':''"><option value="">— descobrir pelo PDF —</option>{opc_tipo}</select></div>
-<div><label id="rot-num">Número</label><input class="campo" name="numero" id="c-num"></div>
+<select class="campo" name="tipo" onchange="const o=this.value==='outra';document.getElementById('c-nome-box').style.display=o?'':'none';document.getElementById('c-nome').disabled=!o;"><option value="">— descobrir pelo PDF —</option>{opc_tipo}</select></div>
+<div id="c-nome-box" style="display:none"><label>Nome do documento</label><input class="campo" name="nome" id="c-nome" disabled placeholder="ex.: Certidão negativa de licitantes inidôneos"></div>
+<div><label id="rot-num">Número <small>(opcional)</small></label><input class="campo" name="numero" id="c-num"></div>
 <div><label>Emissão</label><input class="campo" type="date" name="emissao"></div>
 <div><label>Validade <small>(vazio = ler do PDF)</small></label><input class="campo" type="date" name="validade"></div></div>
 <label>Observação</label><input class="campo" name="obs" placeholder="ex.: certidão municipal de Feira de Santana">
@@ -10473,9 +10478,11 @@ class Painel(BaseHTTPRequestHandler):
             lido = agenda.ler_pdf_certidao(arq[1]) if arq else {}
             cid = campos.get("cid", "") if re.fullmatch(r"[0-9a-f]{12}", campos.get("cid", "")) else ""
             dados_c = {"empresa": campos["empresa"], "tipo": campos.get("tipo") or lido.get("tipo") or "outra",
-                       "numero": campos.get("numero") or lido.get("numero", ""),
+                       "numero": campos.get("numero") if "nome" in campos else (campos.get("numero") or lido.get("numero", "")),
                        "emissao": campos.get("emissao") or lido.get("emissao", ""),
                        "validade": campos.get("validade") or lido.get("validade", "")}
+            if "nome" in campos:   # tipo "Outra": nome do documento em campo próprio
+                dados_c["nome"] = campos.get("nome", "").strip()
             if campos.get("obs") or not cid:
                 dados_c["obs"] = campos.get("obs", "")
             if not dados_c["validade"] and arq:

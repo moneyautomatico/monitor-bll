@@ -517,10 +517,20 @@ TIPOS_CERT = [
 NOME_CERT = {k: n for k, n, _ in TIPOS_CERT}
 
 
+def numero_parece_nome(t):
+    """No tipo "Outra", muita gente digitou o NOME do documento no campo número (tem espaço e letras)."""
+    t = (t or "").strip()
+    return " " in t and sum(ch.isalpha() for ch in t) >= 6
+
+
 def nome_cert(c):
-    """Nome para mostrar: no tipo "Outra", o nome do documento digitado (fica no campo número)."""
-    if c.get("tipo") == "outra" and (c.get("numero") or "").strip():
-        return c["numero"].strip()
+    """Nome para mostrar. No tipo "Outra": o nome do documento (campo próprio, ou o que foi digitado no número)."""
+    if c.get("tipo") == "outra":
+        if (c.get("nome") or "").strip():
+            return c["nome"].strip()
+        if numero_parece_nome(c.get("numero")):
+            return c["numero"].strip()
+        return "Outro documento"
     return NOME_CERT.get(c.get("tipo"), c.get("tipo") or "Certidão")
 AVISAR_DIAS = (15, 7, 3, 1, 0)
 
