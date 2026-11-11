@@ -172,11 +172,28 @@ def arquivo(chave):
     return DIR / f"{re.sub(r'[^a-z0-9-]', '', chave)}.json"
 
 
+LIMITE_ANALISE = 8 * 60   # segundos: passou disso, a análise desiste com mensagem clara (antes podia ficar "Analisando" para sempre)
+
+
 def ler(chave):
     try:
-        return json.loads(arquivo(chave).read_text(encoding="utf-8"))
+        d = json.loads(arquivo(chave).read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         return None
+    if isinstance(d, dict) and d.get("status") == "analisando":
+        try:
+            ini = datetime.strptime(d.get("inicio", ""), "%d/%m/%Y %H:%M")
+        except ValueError:
+            ini = None
+        with TRAVA:
+            viva = chave in EM_ANDAMENTO
+        velha = ini is not None and (datetime.now() - ini).total_seconds() > LIMITE_ANALISE + 180
+        if not viva or velha:   # o painel reiniciou no meio (a análise morreu) ou travou baixando o edital
+            d.update(status="erro", fim=datetime.now().strftime("%d/%m/%Y %H:%M"),
+                     erro=("A análise foi interrompida (o painel foi reiniciado enquanto ela rodava)." if not viva else
+                           "A análise passou do tempo máximo (o PNCP ou a IA travaram).") + " Clique em “Tentar de novo”.")
+            gravar(chave, d)
+    return d
 
 
 def gravar(chave, dados):
@@ -391,6 +408,7 @@ def iniciar(chave, cfg, origem):
 
 
 def _rodar(chave, cfg, origem):
+    t0 = time.time()
     base = ler(chave) or {}
     try:
         api = cfg.get("GEMINI_API_KEY", "")
@@ -411,7 +429,8 @@ def _rodar(chave, cfg, origem):
         import custos_ia
         custos_ia.contexto("analise", "", origem.get("titulo", ""), origem.get("usuario", ""))
         md, modelo, usados = gemini(api, cfg.get("GEMINI_MODELO", "").strip(), partes,
-                                    montar_pedido(contexto, origem.get("extra", ""), origem.get("usuario", "")))
+                                    montar_pedido(contexto, origem.get("extra", ""), origem.get("usuario", "")),
+                                    prazo=max(60, LIMITE_ANALISE - (time.time() - t0)))
         base.update(custo=custos_ia.ultimo())
         base.update(status="pronto", md=md, extra=origem.get("extra", ""), modelo=modelo, arquivos=usados or nomes,
                     fim=datetime.now().strftime("%d/%m/%Y %H:%M"))
