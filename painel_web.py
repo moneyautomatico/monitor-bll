@@ -726,7 +726,7 @@ pre{background:#0f1411;color:#d5e3da;padding:12px;border-radius:8px;overflow:aut
 .cv-vazio{padding:40px;text-align:center;color:var(--sub)}
 .cv-cab{display:flex;gap:12px;align-items:flex-start;background:#173f2c;color:#fff;padding:14px 18px;border-radius:12px 12px 0 0;font-size:13.5px}.cv-cab .sub{color:#cfe3d7}
 .mc-emp{flex-basis:100%;width:100%;margin-top:4px;padding:8px 10px;border:1px solid var(--borda);border-radius:8px;background:var(--card);color:inherit;font-size:14px}
-.cv-classif{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;background:var(--nova);border-bottom:1px solid var(--borda)}
+.cv-classif{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;background:var(--nova);border-bottom:1px solid var(--borda);max-height:98px;overflow:hidden;flex-shrink:0}.cv-classif.aberto{max-height:38vh;overflow-y:auto}.cl-mais{border-radius:999px;padding:4px 12px;font-size:13px;font-weight:700;cursor:pointer;border:1px solid var(--borda);background:var(--card);color:var(--txt)}
 .cl-tit{font-weight:800;margin-right:4px}.cl-chip{border-radius:999px;padding:4px 12px;font-size:14px;border:1px solid var(--borda);background:var(--card);cursor:default}
 .cl-chip.c-1{background:#2e7d32;color:#fff;border-color:#2e7d32}.cl-chip.c-23{background:#f9a825;color:#1b1b1b;border-color:#f9a825}
 .cl-chip.c-n{background:var(--card)}.cl-chip.c-x{background:#c62828;color:#fff;border-color:#c62828}.cl-chip.c-0{opacity:.6}
@@ -744,7 +744,7 @@ select.fm.tem-novas{border:2px solid #e53935;animation:pulsar 1.6s ease-in-out i
 .tag-nova{background:#e53935;color:#fff;font-size:10px;font-weight:800;padding:1px 6px;border-radius:4px}
 .cm.nova{box-shadow:inset 3px 0 0 #e53935}
 select.fm.ativo{border-color:var(--verde);box-shadow:0 0 0 3px var(--verde2);color:var(--txt);font-weight:600}
-.cv-lista{overflow-y:auto;flex:1;min-height:0;padding:6px 18px 18px}
+.cv-lista{overflow-y:auto;flex:1;min-height:260px;padding:6px 18px 18px}
 .cm{padding:10px 0;border-bottom:1px solid var(--borda)}.cm.urg{border-left:4px solid var(--erro);padding-left:10px}
 .cm-cab{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12.5px;letter-spacing:.2px}.cm-hora{margin-left:auto}
 .cm-txt{white-space:pre-wrap;font-size:14px;margin-top:4px}
@@ -3074,6 +3074,8 @@ def barra_classif(g):
     linhas = classif(g["eid"], g["processo"], g["promotor"])
     if not linhas:
         return ""
+    # os lotes em que a empresa está classificada (ou desclassificada) vêm primeiro; os sem posição, no fim
+    linhas = sorted(linhas, key=lambda r: (not r[8], not (r[9] or ""), r[8] or 0))
     chips = ""
     for r in linhas:
         lote, fase, primeiro, melhor, pos, lance = nlote(r[2]), r[4] or "", r[5] or "", r[6] or "", r[8], r[9] or ""
@@ -3091,7 +3093,10 @@ def barra_classif(g):
         chips += f'<span class="cl-chip {cls}" title="{e(dica)}"><b>L{e(lote)}</b> {e(txt)}</span>'
     url = "/classificacao?" + urllib.parse.urlencode({"empresa": g["eid"], "processo": g["processo"], "promotor": g["promotor"]})
     atual = max((r[10] or "" for r in linhas), default="")
-    return (f'<div class="cv-classif"><span class="cl-tit">📊 Nossa classificação</span>{chips}'
+    mais = (f'<button type="button" class="cl-mais" onclick="const c=this.closest(\'.cv-classif\');c.classList.toggle(\'aberto\');'
+            f'this.textContent=c.classList.contains(\'aberto\')?\'▴ recolher\':\'▾ ver todos ({len(linhas)})\'">▾ ver todos ({len(linhas)})</button>'
+            if len(linhas) > 8 else "")
+    return (f'<div class="cv-classif"><span class="cl-tit">📊 Nossa classificação</span>{mais}{chips}'
             f'<a class="btn cl-ver" href="{e(url)}">Ver classificação completa</a>'
             f'<span class="sub cl-quando">lida em {e(atual)}</span></div>')
 
