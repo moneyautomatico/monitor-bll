@@ -3011,6 +3011,8 @@ def html_conversa(g, cfg_chat, mapa=None):
         info.append((m, c, sub, nova))
     tot = {c: sum(v.values()) for c, v in cats.items()}
     tot_n = {c: sum(v.values()) for c, v in novas.items()}
+    # abre no primeiro menu que TEM mensagens (lotes → diligências → eventos); antes abria sempre nos lotes, mesmo vazios
+    abre = next((c for c in ("lote", "dilig", "evento") if tot[c]), "lote")
 
     def menu(cat, rotulo, todos, padrao=False, so_todos=False):
         # o número entre parênteses é o de NÃO LIDAS: zera quando você clica em "Marcar como lido"
@@ -3043,7 +3045,7 @@ def html_conversa(g, cfg_chat, mapa=None):
     for m, c, sub, nova in msgs:
         urg = urgencia.classificar(m["texto"], m["escopo"], m["autor"], chat_urgente=cfg_chat)
         tag_urg = f' <span class="tag erro">🚨 {e(urg)}</span>' if urg else ""
-        oculto = "" if c == "lote" else ' style="display:none"'
+        oculto = "" if c == abre else ' style="display:none"'
         tag_nova = '<span class="tag-nova">NOVA</span>' if nova else ""
         itens += (f'<div class="cm{" urg" if urg else ""}{" nova" if nova else ""}" data-cat="{c}" data-sub="{e(sub)}"{oculto}>'
                   f'<div class="cm-cab"><b>{e(titulo_msg(m))}</b>{tag_nova}{tag_urg}<span class="sub cm-hora">{e(m["horario"] or m["visto"])}</span></div>'
@@ -3058,11 +3060,13 @@ def html_conversa(g, cfg_chat, mapa=None):
             f'title="Rascunho de recurso, contrarrazões, resposta a diligência… com IA">⚖️ Peça (IA)</a>'
             f'<button type="button" class="btn cv-doc" style="margin-left:6px" onclick="arquivarAtual()" title="Arquivar/desarquivar este processo na lista">📦</button></div>' + barra_classif(g) +
             f'<div class="cv-filtro">'
-            + menu("lote", "Lotes (mensagens)", "Todos os lotes", padrao=True)
-            + menu("dilig", "Diligências", "Todas as diligências")
-            + menu("evento", "Processo (eventos)", "Todos os eventos", so_todos=True)
+            + menu("lote", "Lotes (mensagens)", "Todos os lotes", padrao=abre == "lote")
+            + menu("dilig", "Diligências", "Todas as diligências", padrao=abre == "dilig")
+            + menu("evento", "Processo (eventos)", "Todos os eventos", padrao=abre == "evento", so_todos=True)
             + '</div>' + faixa + barra_msgs() +
-            f'<div class="cv-lista">{itens or "<div class=sub>Sem mensagens.</div>"}</div>')
+            f'<div class="cv-lista">{itens or "<div class=sub>Sem mensagens.</div>"}'
+            '<div id="cv-vazio" class="sub" style="display:none;padding:14px 4px">Nada neste filtro. '
+            'Escolha outro menu acima – <b>Lotes</b>, <b>Diligências</b> ou <b>Processo (eventos)</b>.</div></div>')
 
 
 def barra_classif(g):
@@ -3243,6 +3247,8 @@ function aplicarBusca(i){{const t=(i&&i.value||'').trim(); const f=filtroAtual()
   if(re)re.lastIndex=0; const tem=vis&&re&&re.test(m.dataset.t);
   const tx=m.querySelector('.cm-txt'); if(tx&&(tem||tx.dataset.g))grifar(tx, tem?t:'');
   m.classList.toggle('achou', !!tem);}});
+ const vz=document.getElementById('cv-vazio'); if(vz){{const cms=[...document.querySelectorAll('#conversa .cm')];
+  vz.style.display=cms.length&&!cms.some(m=>m.style.display!=='none')?'':'none';}}
  achados=[...document.querySelectorAll('#conversa mark.achado')].filter(x=>x.offsetParent!==null);
  atual=-1; if(achados.length)irPara(1); else posicao();}}
 function posicao(){{const el=document.getElementById('pesq-pos'); if(el)el.textContent=(achados.length?(atual+1):0)+'/'+achados.length;}}
