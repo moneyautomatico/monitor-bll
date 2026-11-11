@@ -4140,6 +4140,38 @@ def ctx_proposta(p):
     return ctx
 
 
+def html_modelo_proposta(pid, p):
+    """Caixa para a empresa enviar o próprio modelo de proposta (Word)."""
+    emp = p.get("empresa", "")
+    mod = documentos.modelo(emp)
+    usa = documentos.campos_do_modelo(mod) if mod else []
+    if mod:
+        como = ("o sistema preenche os campos " + ", ".join("{{" + c + "}}" for c in usa) if usa else
+                "a proposta entra no lugar do texto do modelo – o cabeçalho, a logo, o rodapé, as margens e a fonte do seu modelo ficam")
+        estado = (f'<div class="msg">✅ <b>Modelo próprio ativo para {e(emp)}</b>: “Baixar Word” e “Baixar PDF” saem no seu modelo '
+                  f'({e(como)}). A visualização na tela continua no formato do sistema.</div>')
+    else:
+        estado = '<p class="sub">Sem modelo próprio: a proposta sai no formato do sistema, com a sua logo como papel timbrado.</p>'
+    remover = (f'<form method="post" action="/propostas/{pid}/modelo" enctype="multipart/form-data" style="display:inline">'
+               f'<input type="hidden" name="csrf" value="{CSRF}"><input type="hidden" name="remover" value="1">'
+               '<button class="sec" onclick="return confirm(\'Voltar a usar o formato do sistema?\')">Remover meu modelo</button></form>') if mod else ""
+    return (f'<details class="op-perfil" style="margin:12px 0;border:1px solid var(--borda);border-radius:10px;background:var(--card)" {"" if mod else "open"}>'
+            f'<summary style="display:block;cursor:pointer;padding:10px 14px">📎 <b>Seu modelo de proposta (Word)</b> – '
+            f'{"ativo" if mod else "use o modelo que a empresa já usa"}</summary><div style="padding:0 14px 12px">{estado}'
+            f'<form method="post" action="/propostas/{pid}/modelo" enctype="multipart/form-data" class="linha" style="gap:8px;flex-wrap:wrap;align-items:center">'
+            f'<input type="hidden" name="csrf" value="{CSRF}"><input type="file" name="arquivo" accept=".docx" required>'
+            f'<button class="sec">{"Trocar o modelo" if mod else "Enviar meu modelo"}</button></form>{remover}'
+            '<details style="margin-top:8px"><summary class="sub" style="cursor:pointer">Como preparar o modelo (opcional)</summary><div class="sub" style="line-height:1.6">'
+            'Pode enviar o seu modelo do jeito que está: o sistema mantém <b>cabeçalho, logo, rodapé, margens e fonte</b> e coloca a proposta '
+            '(órgão, itens lidos pela IA, preços, condições e assinatura) no corpo.<br>'
+            'Se quiser controlar onde cada coisa entra, escreva no seu Word:<br>'
+            '• <b>{{PROPOSTA}}</b> sozinho numa linha – a proposta inteira entra ali (o resto do seu texto fica);<br>'
+            '• <b>{{TABELA_ITENS}}</b> sozinho numa linha – só a tabela de itens e preços;<br>'
+            '• no meio do texto: <b>{{ORGAO}} {{PROCESSO}} {{MODALIDADE}} {{OBJETO}} {{VALOR_TOTAL}} {{VALOR_EXTENSO}} {{VALIDADE}} '
+            '{{ENTREGA}} {{PAGAMENTO}} {{GARANTIA}} {{RAZAO}} {{CNPJ}} {{CIDADE}} {{DATA}}</b>.<br>'
+            'Vale para todas as propostas desta empresa. Confira sempre o arquivo antes de enviar.</div></details></div></details>')
+
+
 def pg_propostas(q, aviso=""):
     emps = nomes_empresas()
     if not emps:
@@ -4353,6 +4385,7 @@ details.dica ul{{padding-left:14px;margin:4px 0}}
 <button class="sec" name="depois" value="pdf" {"disabled" if falta else ""}>💾 Salvar e baixar PDF</button></div>
 <div class="acoes"><button type="button" class="sec" onclick="irEtapa(2)">← Custos</button><button type="button" onclick="irEtapa(4)">Próximo: conferência →</button></div></div></form>
 <form method="post" action="/propostas/{pid}/precos" id="fprecos"><input type="hidden" name="csrf" value="{CSRF}"></form>
+<div class="etapa" data-e="3">{html_modelo_proposta(pid, p)}</div>
 <div class="acoes" style="margin-top:14px">{botao(f"/propostas/{pid}/excluir", "🗑 Excluir proposta", "perigo", "Excluir esta proposta?")}</div>
 <p class="sub">Confira tudo com o edital antes de enviar. Valor em vermelho = acima do valor de referência do órgão.</p>
 <script>
@@ -4895,11 +4928,32 @@ def ler_itens_ia(pid, cfg, partes, usuario):
     propostas.gravar(pid, p)
 
 
+def campos_modelo_proposta(p, ctx, total):
+    c = {**propostas.PADRAO_COND, **(p.get("cond") or {})}
+    return {"ORGAO": p.get("orgao", ""), "PROCESSO": p.get("processo", ""), "MODALIDADE": p.get("modalidade") or "Pregão Eletrônico",
+            "OBJETO": p.get("objeto", ""), "VALOR_TOTAL": propostas.brl(total), "VALOR_EXTENSO": propostas.extenso(total),
+            "VALIDADE": f"{c['validade']} dias" if propostas.num(c["validade"]) else c["validade"], "ENTREGA": c["entrega"],
+            "PAGAMENTO": c["pagamento"], "GARANTIA": c["garantia"], "RAZAO": ctx.get("razao", ""),
+            "CNPJ": documentos.fmt_cnpj(ctx.get("cnpj")), "CIDADE": p.get("cidade_data") or ctx.get("cidade", ""),
+            "DATA": p.get("data") or documentos.data_extenso()}
+
+
+def docx_proposta(p, ctx):
+    """Word da proposta: no modelo da empresa (se ela enviou um) ou no padrão do sistema. Devolve (bytes, usou_modelo)."""
+    docs, total = propostas.montar(p, ctx)
+    mod = documentos.modelo(p.get("empresa", ""))
+    if mod:
+        try:
+            return documentos.docx_no_modelo(mod, docs, ctx, campos_modelo_proposta(p, ctx, total)), True
+        except Exception as ex:  # noqa: BLE001
+            print("Modelo de proposta:", repr(ex)[:200], flush=True)
+    return documentos.docx(docs, ctx, logo_img(ctx)), False
+
+
 def baixar_proposta(handler, pid):
     p = propostas.ler(pid)
     ctx = ctx_proposta(p)
-    docs, _ = propostas.montar(p, ctx)
-    dados = documentos.docx(docs, ctx, logo_img(ctx))
+    dados, _ = docx_proposta(p, ctx)
     nome_arq = re.sub(r"[^\w.-]+", "_", f"Proposta_{p.get('processo') or 'processo'}_{ctx.get('razao', '')[:30]}").strip("_") + ".docx"
     handler.send_response(200)
     handler.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -10152,8 +10206,12 @@ class Painel(BaseHTTPRequestHandler):
                 if documentos.faltando(ctx):
                     return self.redirecionar(f"/propostas/{m.group(1)}")
                 try:
-                    dados = pdf_docs(propostas.montar(prop, ctx)[0], ctx)
-                    dados, _ = pacote.montar([("Proposta comercial", dados)])
+                    if documentos.modelo(prop.get("empresa", "")):
+                        dados_w, usou = docx_proposta(prop, ctx)
+                        dados = documentos.pdf_do_docx(dados_w) if usou else pdf_docs(propostas.montar(prop, ctx)[0], ctx)
+                    else:
+                        dados = pdf_docs(propostas.montar(prop, ctx)[0], ctx)
+                        dados, _ = pacote.montar([("Proposta comercial", dados)])
                 except Exception as ex:  # noqa: BLE001
                     return self.enviar(pg_proposta(m.group(1), f"Não consegui gerar o PDF no servidor: {e(str(ex)[:200])}", True))
                 nome_arq = re.sub(r"[^\w.-]+", "_", f"Proposta_{prop.get('processo') or 'processo'}_{ctx.get('razao', '')[:30]}").strip("_") + ".pdf"
@@ -10547,6 +10605,30 @@ class Painel(BaseHTTPRequestHandler):
             propostas.gravar(pid, prop)
             threading.Thread(target=conferir_ia, args=(pid, cfg_ia(), partes, login_atual()), daemon=True).start()
             return self.redirecionar(f"/propostas/{pid}#conferencia")
+        m_pmod = re.fullmatch(r"/propostas/([0-9a-f]{12})/modelo", self.path.rstrip("/"))
+        if m_pmod:
+            if tam > 12 * 1024 * 1024:
+                return self.enviar(pagina("Erro", "<h2>Modelo grande demais (máx. 10 MB).</h2>", "/propostas"), 413)
+            campos, arqs = ler_multipart(self, tam)
+            if not hmac.compare_digest(campos.get("csrf", ""), CSRF):
+                return self.enviar(pagina("Erro", "<h2>Formulário expirado</h2><p>Recarregue a página e tente de novo.</p>"), 403)
+            if not self.permitido(self.path.rstrip("/"), campos):
+                return
+            pid = m_pmod.group(1)
+            prop = propostas.ler(pid)
+            if not prop or prop.get("empresa", "") not in nomes_empresas():
+                return self.redirecionar("/propostas")
+            if campos.get("remover") == "1":
+                documentos.remover_modelo(prop["empresa"])
+                self.auditar("modelo de proposta removido", prop["empresa"])
+                return self.enviar(pg_proposta(pid, "Modelo removido: a proposta volta a sair no formato do sistema."))
+            arq = next((d for n, d in arqs if d), None)
+            try:
+                documentos.salvar_modelo(prop["empresa"], arq or b"")
+            except ValueError as ex:
+                return self.enviar(pg_proposta(pid, e(str(ex)), True))
+            self.auditar("modelo de proposta", prop["empresa"])
+            return self.enviar(pg_proposta(pid, "✅ Modelo salvo. “Baixar Word” e “Baixar PDF” agora saem no seu modelo."))
         m_pia = re.fullmatch(r"/propostas/([0-9a-f]{12})/ia", self.path.rstrip("/"))
         if m_pia:
             if tam > 40 * 1024 * 1024:

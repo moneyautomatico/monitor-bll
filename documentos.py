@@ -397,8 +397,8 @@ def _rodape_docx(ctx):
             f'<w:p><w:pPr><w:spacing w:after="0"/><w:jc w:val="right"/></w:pPr>{pag}</w:p></w:ftr>')
 
 
-def docx(docs, ctx, logo_img=None):
-    """logo_img = (bytes, 'png'|'jpg') opcional."""
+def _corpo_xml(docs, ctx):
+    """Parágrafos/tabelas (XML do Word) dos documentos – usado no Word do sistema e no modelo da empresa."""
     corpo = []
     for n, (_, blocos) in enumerate(docs):
         primeiro = True
@@ -423,6 +423,12 @@ def docx(docs, ctx, logo_img=None):
                 corpo.append(_par("", depois=80))
             else:
                 corpo.append(_par(txt, "both", recuo=(tipo == "p"), quebra=q))
+    return corpo
+
+
+def docx(docs, ctx, logo_img=None):
+    """logo_img = (bytes, 'png'|'jpg') opcional."""
+    corpo = _corpo_xml(docs, ctx)
     doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>'
@@ -475,3 +481,138 @@ def docx(docs, ctx, logo_img=None):
                            '<Relationship Id="rIdLogo" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
                            f'Target="media/logo.{img[1]}"/></Relationships>')
     return buf.getvalue()
+
+
+# ------------------------------------------------------------------ modelo de proposta da própria empresa (.docx)
+DIR_MODELOS = PASTA / "modelos_proposta"
+W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+CAMPOS_MODELO = ["PROPOSTA", "TABELA_ITENS", "ORGAO", "PROCESSO", "MODALIDADE", "OBJETO", "VALOR_TOTAL", "VALOR_EXTENSO",
+                 "VALIDADE", "ENTREGA", "PAGAMENTO", "GARANTIA", "RAZAO", "CNPJ", "CIDADE", "DATA"]
+
+
+def salvar_modelo(nome, dados):
+    """Guarda o modelo de proposta (Word .docx) da empresa. Confere se é mesmo um .docx sem macros."""
+    if not dados or len(dados) > 10 * 1024 * 1024:
+        raise ValueError("Envie o modelo em Word (.docx) com no máximo 10 MB.")
+    try:
+        with zipfile.ZipFile(io.BytesIO(dados)) as z:
+            nomes = set(z.namelist())
+            if "word/document.xml" not in nomes:
+                raise ValueError("Este arquivo não é um Word .docx. Abra no Word e use Salvar como → Documento do Word (.docx).")
+            if any(n.lower().endswith("vbaproject.bin") for n in nomes):
+                raise ValueError("O modelo tem macros (.docm). Salve como Documento do Word (.docx) comum.")
+            xml = z.read("word/document.xml").decode("utf-8", "ignore")
+    except zipfile.BadZipFile:
+        raise ValueError("Envie o modelo em Word (.docx). Arquivos .doc antigos: abra no Word e salve como .docx.") from None
+    if f'xmlns:w="{W_NS}"' not in xml or "<w:body>" not in xml:
+        raise ValueError("Não consegui ler este .docx. Abra no Word e salve de novo como Documento do Word (.docx).")
+    DIR_MODELOS.mkdir(exist_ok=True)
+    a = DIR_MODELOS / f"{_chave_logo(nome)}.docx"
+    a.write_bytes(dados)
+    a.chmod(0o600)
+
+
+def modelo(nome):
+    a = DIR_MODELOS / f"{_chave_logo(nome)}.docx"
+    return a.read_bytes() if a.exists() else None
+
+
+def remover_modelo(nome):
+    (DIR_MODELOS / f"{_chave_logo(nome)}.docx").unlink(missing_ok=True)
+
+
+def _texto_par(p):
+    return "".join(re.findall(r"<w:t(?:\s[^>]*)?>([^<]*)</w:t>", p))
+
+
+def _desescapar(t):
+    return t.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&")
+
+
+def campos_do_modelo(dados):
+    """Quais {{CAMPOS}} o modelo usa (para mostrar na tela)."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(dados)) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "ignore")
+    except Exception:  # noqa: BLE001
+        return []
+    txt = " ".join(_desescapar(_texto_par(p)) for p in re.findall(r"<w:p[ >].*?</w:p>", xml, re.S))
+    return sorted(set(re.findall(r"\{\{\s*([A-Z_]+)\s*\}\}", txt)) & set(CAMPOS_MODELO))
+
+
+def docx_no_modelo(dados_modelo, docs, ctx, campos):
+    """Proposta dentro do Word da empresa: mantém cabeçalho, rodapé, logo, margens e fontes do modelo.
+    - {{PROPOSTA}} sozinho num parágrafo: a proposta inteira entra ali; {{TABELA_ITENS}}: só a tabela de itens.
+    - {{ORGAO}}, {{PROCESSO}}, {{VALOR_TOTAL}}… no meio do texto: trocados pelos valores.
+    - Sem {{PROPOSTA}} nem {{TABELA_ITENS}}: o corpo do modelo é trocado pela proposta (o modelo vira o papel timbrado)."""
+    zin = zipfile.ZipFile(io.BytesIO(dados_modelo))
+    xml = zin.read("word/document.xml").decode("utf-8")
+    ini, fim = xml.index("<w:body>") + len("<w:body>"), xml.rindex("</w:body>")
+    corpo = xml[ini:fim]
+    i_sect = corpo.rfind("<w:sectPr")
+    sect = corpo[i_sect:] if i_sect >= 0 and "</w:p>" not in corpo[i_sect:] else ""
+    miolo = corpo[:len(corpo) - len(sect)] if sect else corpo
+    tudo = "".join(_corpo_xml(docs, ctx))
+    tabela = "".join(_tabela_docx(t) + _par("", depois=80) for _, bl in docs for tp, t in bl if tp == "tabela")
+    valores = {k: str(v) for k, v in campos.items()}
+
+    def trocar(m):
+        p = m.group(0)
+        txt = _desescapar(_texto_par(p))
+        if "{{" not in txt:
+            return p
+        so = re.fullmatch(r"\s*\{\{\s*([A-Z_]+)\s*\}\}\s*", txt)
+        if so and so.group(1) == "PROPOSTA":
+            return tudo
+        if so and so.group(1) == "TABELA_ITENS":
+            return tabela
+        novo = re.sub(r"\{\{\s*([A-Z_]+)\s*\}\}", lambda x: valores.get(x.group(1), x.group(0)), txt)
+        ppr = (re.search(r"<w:pPr>.*?</w:pPr>|<w:pPr/>", p, re.S) or [""])[0]
+        rpr = (re.search(r"<w:r(?:\s[^>]*)?>\s*(<w:rPr>.*?</w:rPr>)", p, re.S) or [None, ""])[1]
+        linhas = novo.split("\n")
+        runs = "".join(f'<w:r>{rpr}<w:t xml:space="preserve">{escape(ln, quote=False)}</w:t>{"<w:br/>" if j < len(linhas) - 1 else ""}</w:r>'
+                       for j, ln in enumerate(linhas))
+        abre = re.match(r"<w:p(?:\s[^>]*)?>", p).group(0)
+        return f"{abre}{ppr}{runs}</w:p>"
+
+    tem_lugar = bool(re.search(r"\{\{\s*(PROPOSTA|TABELA_ITENS)\s*\}\}", _desescapar(" ".join(_texto_par(p) for p in re.findall(r"<w:p[ >].*?</w:p>", miolo, re.S)))))
+    if tem_lugar:
+        novo_miolo = re.sub(r"<w:p(?:\s[^>]*)?>.*?</w:p>", trocar, miolo, flags=re.S)
+    else:
+        novo_miolo = tudo
+    novo_xml = xml[:ini] + novo_miolo + sect + xml[fim:]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            dado = novo_xml.encode("utf-8") if item.filename == "word/document.xml" else zin.read(item.filename)
+            if item.filename.startswith("word/header") or item.filename.startswith("word/footer"):
+                try:   # campos também valem no cabeçalho/rodapé do modelo
+                    t = dado.decode("utf-8")
+                    if "{{" in t:
+                        t = re.sub(r"<w:p(?:\s[^>]*)?>.*?</w:p>", lambda m: m.group(0) if "{{" not in _texto_par(m.group(0)) or
+                                   re.fullmatch(r"\s*\{\{\s*(PROPOSTA|TABELA_ITENS)\s*\}\}\s*", _texto_par(m.group(0))) else trocar(m), t, flags=re.S)
+                        dado = t.encode("utf-8")
+                except UnicodeDecodeError:
+                    pass
+            zout.writestr(item, dado)
+    return buf.getvalue()
+
+
+def pdf_do_docx(dados_docx, timeout=120):
+    """Word -> PDF pelo LibreOffice do servidor (mantém o layout do modelo)."""
+    import shutil
+    import subprocess
+    import tempfile
+    exe = shutil.which("soffice") or shutil.which("libreoffice")
+    if not exe:
+        raise RuntimeError("O servidor não tem o LibreOffice para converter o seu modelo em PDF. Baixe em Word e use "
+                           "Arquivo → Salvar como → PDF, ou peça ao administrador: apt install -y libreoffice-writer")
+    with tempfile.TemporaryDirectory() as tmp:
+        ent = Path(tmp) / "proposta.docx"
+        ent.write_bytes(dados_docx)
+        r = subprocess.run([exe, f"-env:UserInstallation=file://{tmp}/perfil", "--headless", "--convert-to", "pdf",
+                            "--outdir", tmp, str(ent)], capture_output=True, timeout=timeout)
+        saida = Path(tmp) / "proposta.pdf"
+        if not saida.exists():
+            raise RuntimeError("O LibreOffice não conseguiu converter o modelo: " + (r.stderr or r.stdout).decode("utf-8", "ignore")[:200])
+        return saida.read_bytes()
